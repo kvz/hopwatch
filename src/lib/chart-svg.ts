@@ -173,6 +173,21 @@ export function renderChartSvg(
   const barHalfMs = Math.max(avgGapMs / 2, options.rangeMs / 400)
   const gapThresholdMs = avgGapMs * 1.75
 
+  // Each sample's bar extends backward from its timestamp by up to
+  // `2 * barHalfMs` (≈ the median inter-sample gap). When the actual gap to
+  // the previous sample is smaller than that — e.g. cluster of retries or
+  // backfilled snapshots — the default width would overlap the neighbor's
+  // bar, drowning the chart in stacked greens and smokes. Clamp each bar's
+  // left edge at the previous sample's timestamp so adjacent bars meet
+  // cleanly regardless of local cadence.
+  const leftEdgeMsFor = new Map<number, number>()
+  for (let i = 0; i < sortedByTime.length; i += 1) {
+    const t = sortedByTime[i].timestamp
+    const defaultLeft = t - 2 * barHalfMs
+    const prevT = i > 0 ? sortedByTime[i - 1].timestamp : Number.NEGATIVE_INFINITY
+    leftEdgeMsFor.set(t, Math.max(defaultLeft, prevT))
+  }
+
   // rrdtool draws AREA+STACK as a polygon bounded above by the upper-quantile
   // curve and below by the lower-quantile curve, connecting consecutive valid
   // points with straight segments. Missing samples (NaN) break the polygon so
@@ -229,7 +244,8 @@ export function renderChartSvg(
     const rects: string[] = []
     for (const seg of runs) {
       for (const p of seg) {
-        const xLeftRaw = Math.min(plotRight, Math.max(plotLeft, xOf(p.t - 2 * barHalfMs)))
+        const leftMs = leftEdgeMsFor.get(p.t) ?? p.t - 2 * barHalfMs
+        const xLeftRaw = Math.min(plotRight, Math.max(plotLeft, xOf(leftMs)))
         const xRightRaw = Math.min(plotRight, Math.max(plotLeft, xOf(p.t)))
         const xLeft = Math.round(xLeftRaw)
         const xRight = Math.round(xRightRaw)
@@ -321,10 +337,8 @@ export function renderChartSvg(
   const plotTop = Math.round(padding.top)
   const plotBottom = Math.round(padding.top + chartHeight)
   for (const point of points) {
-    const xLeftRaw = Math.max(
-      plotLeftMarker,
-      Math.min(plotRightMarker, xOf(point.timestamp - 2 * barHalfMs)),
-    )
+    const leftMs = leftEdgeMsFor.get(point.timestamp) ?? point.timestamp - 2 * barHalfMs
+    const xLeftRaw = Math.max(plotLeftMarker, Math.min(plotRightMarker, xOf(leftMs)))
     const xRightRaw = Math.max(plotLeftMarker, Math.min(plotRightMarker, xOf(point.timestamp)))
     const xLeft = Math.round(xLeftRaw)
     const xRight = Math.round(xRightRaw)

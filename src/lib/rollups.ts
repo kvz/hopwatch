@@ -193,30 +193,6 @@ export function aggregateSnapshotsToRollupBuckets(
   )
 }
 
-function aggregateRollupBuckets(
-  buckets: MtrRollupBucket[],
-  granularity: RollupGranularity,
-): MtrRollupBucket[] {
-  return reduceToRollupBuckets(
-    buckets,
-    granularity,
-    (bucket) => new Date(bucket.bucketStart),
-    (state, bucket) => {
-      state.destinationSentCount += bucket.destinationSentCount
-      state.snapshotCount += bucket.snapshotCount
-      for (const histogramBucket of bucket.histogram) {
-        if (histogramBucket.count === 0) continue
-        const sampleValue =
-          histogramBucket.upperBoundMs ??
-          histogramUpperBoundsMs[histogramUpperBoundsMs.length - 1] + 1
-        for (let i = 0; i < histogramBucket.count; i += 1) {
-          state.rttSamplesMs.push(sampleValue)
-        }
-      }
-    },
-  )
-}
-
 function mergeRollupBuckets(
   existingBuckets: MtrRollupBucket[],
   generatedBuckets: MtrRollupBucket[],
@@ -230,7 +206,14 @@ function mergeRollupBuckets(
     merged.set(bucket.bucketStart, bucket)
   }
 
+  // A regenerated bucket only replaces the stored bucket if it reflects at least as
+  // many underlying snapshots. Otherwise the raw-retention boundary would let a
+  // partial regeneration silently erase the fuller historical rollup.
   for (const bucket of generatedBuckets) {
+    const existing = merged.get(bucket.bucketStart)
+    if (existing != null && existing.snapshotCount > bucket.snapshotCount) {
+      continue
+    }
     merged.set(bucket.bucketStart, bucket)
   }
 
@@ -327,7 +310,7 @@ export async function updateTargetRollups(
 
   const dailyRollupPath = path.join(targetDir, 'daily.rollup.json')
   const existingDaily = await readRollupFile(dailyRollupPath, 'day')
-  const generatedDaily = aggregateRollupBuckets(mergedHourly, 'day')
+  const generatedDaily = aggregateSnapshotsToRollupBuckets(snapshots, 'day')
   const mergedDaily = mergeRollupBuckets(
     existingDaily?.buckets ?? [],
     generatedDaily,

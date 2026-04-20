@@ -109,7 +109,7 @@ describe('runCollector', () => {
       return { stdout: MTR_OUTPUT, stderr: '' }
     }
 
-    await runCollector(config, logger, { runCommand })
+    const result = await runCollector(config, logger, { runCommand })
 
     const goodDir = path.join(dataDir, 'good.example')
     const goodEntries = await readdir(goodDir)
@@ -118,5 +118,18 @@ describe('runCollector', () => {
     expect(goodEntries).toContain('daily.rollup.json')
 
     expect(errorSpy).toHaveBeenCalled()
+    expect(result.failedTargetSlugs).toEqual(['bad.example'])
+  })
+
+  test('returns an empty failedTargetSlugs list when every target succeeds', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    const logger = createLogger({ level: 'error', pretty: false })
+    const runCommand = async (): Promise<{ stderr: string; stdout: string }> => ({
+      stdout: MTR_OUTPUT,
+      stderr: '',
+    })
+
+    const result = await runCollector(config, logger, { runCommand })
+    expect(result.failedTargetSlugs).toEqual([])
   })
 })

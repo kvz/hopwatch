@@ -50,7 +50,13 @@ class ProbeOnceCommand extends BaseCommand {
   async execute(): Promise<number> {
     const { config, logger } = await this.resolve()
     logger.info('probing once', { targets: config.target.length })
-    await runCollector(config, logger)
+    const result = await runCollector(config, logger)
+    if (result.failedTargetSlugs.length > 0) {
+      logger.error('probe-once completed with failures', {
+        failed: result.failedTargetSlugs,
+      })
+      return 1
+    }
     return 0
   }
 }

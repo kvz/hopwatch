@@ -1,6 +1,9 @@
-import { describe, expect, test } from 'vitest'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
-import { aggregateSnapshotsToRollupBuckets } from '../lib/rollups.ts'
+import { aggregateSnapshotsToRollupBuckets, updateTargetRollups } from '../lib/rollups.ts'
 
 function snap(collectedAt: string, rawEvents: RawMtrEvent[]): StoredRawSnapshot {
   return {
@@ -89,5 +92,114 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
     expect(overflow?.count).toBe(1)
     const totalBinned = bucket.histogram.reduce((sum, h) => sum + h.count, 0)
     expect(totalBinned).toBe(4)
+  })
+})
+
+describe('updateTargetRollups daily RTT fidelity', () => {
+  let targetDir: string
+
+  beforeEach(async () => {
+    targetDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-rollup-'))
+  })
+
+  afterEach(async () => {
+    await rm(targetDir, { recursive: true, force: true })
+  })
+
+  test('daily rttAvgMs matches the raw samples instead of being biased to histogram upper bounds', async () => {
+    // 1500us = 1.5ms. The (1ms, 2ms] histogram bucket's upperBoundMs is 2ms. When
+    // daily buckets are rebuilt by expanding hourly histograms, 1.5ms becomes 2ms.
+    const rttUs = [1500, 1500, 1500, 1500]
+    const snapshot = {
+      collectedAt: '20260420T100000Z',
+      fileName: '20260420T100000Z.json',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      rawEvents: destinationEvents(4, rttUs),
+      schemaVersion: 2,
+      target: 'example.com',
+    }
+    await writeFile(
+      path.join(targetDir, '20260420T100000Z.json'),
+      JSON.stringify(snapshot, null, 2),
+    )
+
+    await updateTargetRollups(targetDir, {
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      target: 'example.com',
+    })
+
+    const daily = JSON.parse(await readFile(path.join(targetDir, 'daily.rollup.json'), 'utf8'))
+    expect(daily.buckets).toHaveLength(1)
+    expect(daily.buckets[0].rttAvgMs).toBeCloseTo(1.5, 6)
+    expect(daily.buckets[0].rttP50Ms).toBeCloseTo(1.5, 6)
+  })
+
+  test('preserves a fuller historical hourly bucket instead of overwriting with a partial regeneration', async () => {
+    const fullBucket = {
+      bucketStart: '2026-04-20T10:00:00.000Z',
+      destinationLossPct: 0,
+      destinationReplyCount: 40,
+      destinationSentCount: 40,
+      histogram: [{ count: 40, upperBoundMs: 10 }],
+      rttAvgMs: 5,
+      rttMaxMs: 5,
+      rttMinMs: 5,
+      rttP50Ms: 5,
+      rttP90Ms: 5,
+      rttP99Ms: 5,
+      snapshotCount: 4,
+    }
+    const existingHourly = {
+      buckets: [fullBucket],
+      generatedAt: '2026-04-20T11:00:00.000Z',
+      granularity: 'hour',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      schemaVersion: 1,
+      target: 'example.com',
+    }
+    await writeFile(
+      path.join(targetDir, 'hourly.rollup.json'),
+      JSON.stringify(existingHourly, null, 2),
+    )
+
+    // Only one snapshot survives raw pruning for this hour — regenerated bucket would
+    // have snapshotCount=1, overwriting the stored snapshotCount=4 bucket.
+    const partial = {
+      collectedAt: '20260420T104500Z',
+      fileName: '20260420T104500Z.json',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      rawEvents: destinationEvents(10, [5000]),
+      schemaVersion: 2,
+      target: 'example.com',
+    }
+    await writeFile(path.join(targetDir, '20260420T104500Z.json'), JSON.stringify(partial, null, 2))
+
+    await updateTargetRollups(targetDir, {
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      target: 'example.com',
+    })
+
+    const hourly = JSON.parse(await readFile(path.join(targetDir, 'hourly.rollup.json'), 'utf8'))
+    const bucket = hourly.buckets.find(
+      (b: { bucketStart: string }) => b.bucketStart === '2026-04-20T10:00:00.000Z',
+    )
+    expect(bucket).toBeDefined()
+    expect(bucket.snapshotCount).toBe(4)
+    expect(bucket.destinationSentCount).toBe(40)
   })
 })

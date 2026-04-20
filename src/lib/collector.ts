@@ -291,11 +291,15 @@ async function updateRollupsForTargets(
   })
 }
 
+export interface RunCollectorResult {
+  failedTargetSlugs: string[]
+}
+
 export async function runCollector(
   config: LoadedConfig,
   logger: Logger,
   deps: CollectorDependencies = {},
-): Promise<void> {
+): Promise<RunCollectorResult> {
   const options = collectorOptionsFromConfig(config)
 
   await mkdir(options.logDir, { recursive: true })
@@ -304,6 +308,7 @@ export async function runCollector(
   const nowDate = (deps.getNow ?? (() => new Date()))()
   const timestamp = getTimestamp(nowDate)
   const runCommand = deps.runCommand ?? execFileAsync
+  const failedTargetSlugs: string[] = []
 
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
     try {
@@ -312,11 +317,14 @@ export async function runCollector(
       if (!(err instanceof Error)) {
         throw new Error(`Was thrown a non-error: ${err}`)
       }
+      failedTargetSlugs.push(target.slug)
       logger.error('snapshot failed', { error: err.message, target: target.slug })
     }
   })
 
   await updateRollupsForTargets(nodeLabel, options, nowDate)
+
+  return { failedTargetSlugs }
 }
 
 export async function refreshRollups(

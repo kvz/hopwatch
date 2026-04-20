@@ -100,6 +100,47 @@ bun run test:docker      # parity with CI
 CI fails if any fixture drifts more than the tolerated mismatch or RMS delta.
 On failure the rendered vs reference diff PNGs are uploaded as CI artifacts.
 
+## hopwatch vs SmokePing
+
+hopwatch does not replace SmokePing — it covers the subset most operators use
+day-to-day (MTR-based latency + loss graphs for a list of targets) in a form
+that's easier to drop onto a host. Pick whichever matches your situation.
+
+**Pick hopwatch when you want…**
+
+- **One binary, one process.** `bun build --compile` produces a
+  self-contained executable — no Perl, no rrdtool, no Apache/CGI, no FastCGI
+  slaves. `mtr` in `PATH` is the only runtime dependency.
+- **Raw trace logs you can read.** Every probe cycle writes a per-snapshot
+  JSON with the full MTR event stream (`x`/`h`/`d`/`p` lines). Network
+  engineers can open the snapshot on disk and see what actually happened on
+  each hop — something rrdtool's binary RRAs do not give you.
+- **A familiar SmokePing look.** Same plot conventions — smoke bands,
+  loss-colored median markers, pink major grid, rotated RRDTOOL signature —
+  so a busy netop can read the chart without context-switching.
+
+**Stick with SmokePing when you need…**
+
+- **Non-MTR probes.** SmokePing ships dozens of probes (HTTP, DNS, SSH, SSL
+  handshake, TCP connect, IRTT, etc.). hopwatch currently only runs MTR.
+- **Distributed master/slave topology.** SmokePing has first-class support
+  for slaves reporting back to a central master. hopwatch only links peers
+  via URL in the top-nav; each instance stores its own data.
+- **Email/paging alerts with pattern matching.** SmokePing's alert rules and
+  matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that
+  yet.
+- **Decade-plus historical rollups on a small disk.** rrdtool's pre-sized
+  round-robin archives are hard to beat for long retention on tiny storage.
+  hopwatch keeps raw snapshots on disk (pruned at `keep_days`) plus
+  JSON hourly/daily rollups — correct and human-readable, but bulkier.
+- **The ecosystem.** Plugins, recipes, Stack Overflow answers, existing
+  Puppet/Ansible modules — SmokePing has a 20-year head start.
+
+In short: if you want a familiar-looking MTR dashboard that you can `scp` to
+a box and run behind systemd in five minutes, hopwatch. If you're already
+running SmokePing and using its probes, alerts, or slave fan-out, there is
+no reason to switch.
+
 ## Attribution
 
 hopwatch is a clean-room re-implementation inspired by

@@ -14,7 +14,11 @@ const targetSchema = z.object({
   label: z.string().min(1),
   host: z.string().min(1),
   probe_mode: probeModeSchema.default('default'),
-  netns: z.string().optional(),
+  netns: z
+    .string()
+    .min(1)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'netns must be slug-safe (no "/" or "..")')
+    .optional(),
   group: z.string().optional(),
 })
 export type TargetConfig = z.infer<typeof targetSchema>

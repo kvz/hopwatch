@@ -61,6 +61,7 @@ async function serveFile(root: string, urlPath: string): Promise<Response> {
 }
 
 export interface SchedulerHandle {
+  drain: () => Promise<void>
   runNow: () => Promise<void>
   stop: () => void
 }
@@ -91,6 +92,13 @@ export function startScheduler(
       return
     }
 
+    // An explicit runNow() replaces the pending scheduled tick, so we do not get
+    // a bonus cycle from an initial-jitter timer still sitting in the queue.
+    if (timer != null) {
+      clearTimeout(timer)
+      timer = null
+    }
+
     const run = (async (): Promise<void> => {
       const started = Date.now()
       try {
@@ -113,18 +121,21 @@ export function startScheduler(
     } finally {
       activeRun = null
     }
+
+    if (!cancelled) {
+      const jitter = Math.floor(Math.random() * Math.max(jitterMs, 1))
+      schedule(intervalMs + jitter)
+    }
   }
 
   function schedule(delay: number): void {
-    if (cancelled) {
+    if (cancelled || timer != null) {
       return
     }
 
     timer = setTimeout(() => {
-      void runOnce().then(() => {
-        const jitter = Math.floor(Math.random() * Math.max(jitterMs, 1))
-        schedule(intervalMs + jitter)
-      })
+      timer = null
+      void runOnce()
     }, delay)
   }
 
@@ -132,6 +143,11 @@ export function startScheduler(
   schedule(initialJitter)
 
   return {
+    async drain(): Promise<void> {
+      if (activeRun != null) {
+        await activeRun
+      }
+    },
     runNow: runOnce,
     stop(): void {
       cancelled = true
@@ -233,6 +249,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
     stopping = true
     logger.info('shutting down', { signal })
     scheduler.stop()
+    await scheduler.drain()
     await server.stop()
     process.exit(0)
   }
@@ -249,18 +266,41 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   })
 }
 
-function parseHostname(listen: string): string | undefined {
-  const [host] = listen.split(':')
-  return host.length === 0 ? undefined : host
+export interface ParsedListenAddress {
+  hostname: string | undefined
+  port: number
 }
 
-function parsePort(listen: string): number {
-  const parts = listen.split(':')
-  const raw = parts[parts.length - 1]
-  const port = Number(raw)
+export function parseListenAddress(listen: string): ParsedListenAddress {
+  // Accept [ipv6]:port, host:port, and :port (bind-all).
+  const bracketed = /^\[([^\]]+)\]:(\d+)$/.exec(listen)
+  let hostname: string | undefined
+  let portRaw: string
+  if (bracketed != null) {
+    hostname = bracketed[1]
+    portRaw = bracketed[2]
+  } else {
+    const lastColon = listen.lastIndexOf(':')
+    if (lastColon < 0) {
+      throw new Error(`Invalid listen address "${listen}"`)
+    }
+    const hostPart = listen.slice(0, lastColon)
+    hostname = hostPart.length === 0 ? undefined : hostPart
+    portRaw = listen.slice(lastColon + 1)
+  }
+
+  const port = Number(portRaw)
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error(`Invalid listen port in "${listen}"`)
   }
 
-  return port
+  return { hostname, port }
+}
+
+function parseHostname(listen: string): string | undefined {
+  return parseListenAddress(listen).hostname
+}
+
+function parsePort(listen: string): number {
+  return parseListenAddress(listen).port
 }

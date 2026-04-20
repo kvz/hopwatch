@@ -205,11 +205,19 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         })
       }
 
+      // Reverse-proxy layer passes the client-facing hostname via X-Forwarded-Host
+      // (nginx default); fall back to Host. Used to render the active peer's
+      // dropdown subtitle as "<host>[/<mount>]" so it matches the format shown
+      // for remote peers instead of repeating the label.
+      const selfHost =
+        request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? null
+
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const html = await renderRootIndex(
           dataDir,
           config.peer,
           nodeLabel,
+          selfHost,
           config.probe.keep_days,
           Date.now(),
           signature,
@@ -234,6 +242,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           targetDir,
           config.peer,
           nodeLabel,
+          selfHost,
           targetSlug,
           Date.now(),
           signature,

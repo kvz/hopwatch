@@ -44,6 +44,7 @@ interface RootIndexPageProps {
   now: number
   peers: PeerConfig[]
   rows: TargetSummaryRow[]
+  selfHost: string | null
   selfLabel: string
   signature?: string
 }
@@ -53,12 +54,19 @@ export function RootIndexPage({
   now,
   peers,
   rows,
+  selfHost,
   selfLabel,
   signature,
 }: RootIndexPageProps): ReactNode {
   return (
     <Layout title={`hopwatch: ${selfLabel}`}>
-      <TopNav peers={peers} selfLabel={selfLabel} pathSuffix="/" title="hopwatch" />
+      <TopNav
+        peers={peers}
+        selfHost={selfHost}
+        selfLabel={selfLabel}
+        pathSuffix="/"
+        title="hopwatch"
+      />
       <h1>hopwatch</h1>
       <p className="lede">
         Node: <code>{selfLabel}</code>. Click a target to browse archived snapshots. Destination

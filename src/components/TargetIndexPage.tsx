@@ -28,6 +28,7 @@ interface TargetIndexPageProps {
   latestSnapshot: SnapshotSummary
   now: number
   peers: PeerConfig[]
+  selfHost: string | null
   selfLabel: string
   signature?: string
   snapshots: SnapshotSummary[]
@@ -42,6 +43,7 @@ export function TargetIndexPage({
   latestSnapshot,
   now,
   peers,
+  selfHost,
   selfLabel,
   signature,
   snapshots,
@@ -55,6 +57,7 @@ export function TargetIndexPage({
         backHref="../"
         backLabel="All targets"
         peers={peers}
+        selfHost={selfHost}
         selfLabel={selfLabel}
         pathSuffix={`/${encodeURIComponent(targetSlug)}/`}
         sections={[

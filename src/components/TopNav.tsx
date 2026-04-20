@@ -13,6 +13,7 @@ export interface TopNavProps {
   pathSuffix: string
   peers: PeerConfig[]
   sections?: TopNavSection[]
+  selfHost: string | null
   selfLabel: string
   title?: string
 }
@@ -23,10 +24,11 @@ export function TopNav({
   pathSuffix,
   peers,
   sections,
+  selfHost,
   selfLabel,
   title,
 }: TopNavProps): ReactNode {
-  const links = getPeerNavLinks(selfLabel, peers, pathSuffix)
+  const links = getPeerNavLinks(selfLabel, selfHost, peers, pathSuffix)
   const activeLink = links.find((link) => link.isActive) ?? links[0]
 
   return (

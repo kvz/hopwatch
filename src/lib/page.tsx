@@ -50,6 +50,7 @@ export async function renderTargetIndex(
   targetDir: string,
   peers: PeerConfig[],
   selfLabel: string,
+  selfHost: string | null,
   targetSlug: string,
   now = Date.now(),
   signature?: string,
@@ -75,6 +76,7 @@ export async function renderTargetIndex(
       latestSnapshot={latestSnapshot}
       now={now}
       peers={peers}
+      selfHost={selfHost}
       selfLabel={selfLabel}
       signature={signature}
       snapshots={snapshots}
@@ -89,6 +91,7 @@ export async function renderRootIndex(
   logDir: string,
   peers: PeerConfig[],
   selfLabel: string,
+  selfHost: string | null,
   keepDays: number,
   now = Date.now(),
   signature?: string,
@@ -154,6 +157,7 @@ export async function renderRootIndex(
       now={now}
       peers={peers}
       rows={rows}
+      selfHost={selfHost}
       selfLabel={selfLabel}
       signature={signature}
     />,

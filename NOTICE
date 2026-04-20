@@ -22,9 +22,12 @@ Algorithmic references that informed hopwatch's renderer:
   markers, and its axis/grid/dashing conventions
   (rrdtool, author: Tobi Oetiker -- https://oss.oetiker.ch/rrdtool/)
 
-The short rotated "RRDTOOL / TOBI OETIKER" signature rendered along the
-right edge of every chart is retained as attribution and homage to
-Tobi Oetiker, whose work inspired hopwatch.
+The short rotated signature rendered along the right edge of every
+chart -- by default "RRDTOOL / TOBI OETIKER" -- is retained as
+attribution and homage to Tobi Oetiker, whose work inspired hopwatch.
+The text is configurable via `[chart] signature` in hopwatch.toml (or
+the HOPWATCH_CHART_SIGNATURE environment variable); operators who
+customize it are encouraged to keep an attribution to Tobi Oetiker.
 
 hopwatch is not affiliated with, endorsed by, or sponsored by Tobi Oetiker,
 SmokePing, or rrdtool. It is an independent project.

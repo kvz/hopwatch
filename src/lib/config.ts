@@ -46,9 +46,15 @@ const probeSchema = z.object({
 })
 export type ProbeSettings = z.infer<typeof probeSchema>
 
+const chartSchema = z.object({
+  signature: z.string().default('RRDTOOL / TOBI OETIKER'),
+})
+export type ChartSettings = z.infer<typeof chartSchema>
+
 const configSchema = z.object({
   server: serverSchema.default({}),
   probe: probeSchema.default({}),
+  chart: chartSchema.default({}),
   target: z.array(targetSchema).default([]),
   peer: z.array(peerSchema).default([]),
 })
@@ -64,6 +70,7 @@ function applyEnvOverrides(raw: unknown): unknown {
   const overrides: Record<string, Record<string, string | number>> = {
     server: {},
     probe: {},
+    chart: {},
   }
 
   if (env.HOPWATCH_LISTEN) {
@@ -102,13 +109,17 @@ function applyEnvOverrides(raw: unknown): unknown {
     overrides.probe.namespace_dir = env.HOPWATCH_NAMESPACE_DIR
   }
 
+  if (env.HOPWATCH_CHART_SIGNATURE) {
+    overrides.chart = { signature: env.HOPWATCH_CHART_SIGNATURE }
+  }
+
   if (typeof raw !== 'object' || raw === null) {
     return { ...overrides }
   }
 
   const rawRecord = raw as Record<string, unknown>
   const merged: Record<string, unknown> = { ...rawRecord }
-  for (const section of ['server', 'probe'] as const) {
+  for (const section of ['server', 'probe', 'chart'] as const) {
     const current = (rawRecord[section] as Record<string, unknown> | undefined) ?? {}
     const layer = overrides[section]
     if (Object.keys(layer).length > 0) {

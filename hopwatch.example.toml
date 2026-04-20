@@ -17,6 +17,12 @@ jitter_seconds   = 30
 # Leave empty unless you run probes from Linux network namespaces.
 namespace_dir    = ""
 
+[chart]
+# Rotated signature rendered along the right edge of every chart.
+# Defaults to "RRDTOOL / TOBI OETIKER" as attribution to Tobi Oetiker,
+# whose SmokePing/rrdtool work inspired hopwatch. Set to "" to hide.
+signature = "RRDTOOL / TOBI OETIKER"
+
 [[target]]
 id    = "cloudflare"
 label = "Cloudflare public"

@@ -1133,6 +1133,7 @@ export function renderNativeChartSvg(
     height: number
     now: number
     rangeMs: number
+    signature?: string
     title: string
     upperLimitMs?: number
     width: number
@@ -1570,7 +1571,11 @@ export function renderNativeChartSvg(
   const xArrow = `<polygon points="${plotRightX + 8},${plotBottomY} ${plotRightX + 3},${plotBottomY - 3} ${plotRightX + 3},${plotBottomY + 3}" fill="#555" />`
   const yArrow = `<polygon points="${padding.left},${padding.top - 8} ${padding.left - 3},${padding.top - 3} ${padding.left + 3},${padding.top - 3}" fill="#555" />`
 
-  const rrdSig = `<text x="${width - 3}" y="${padding.top + chartHeight / 2}" font-size="8" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#999" text-anchor="middle" transform="rotate(-90 ${width - 3} ${padding.top + chartHeight / 2})">RRDTOOL / TOBI OETIKER</text>`
+  const signatureText = options.signature ?? 'RRDTOOL / TOBI OETIKER'
+  const rrdSig =
+    signatureText === ''
+      ? ''
+      : `<text x="${width - 3}" y="${padding.top + chartHeight / 2}" font-size="8" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#999" text-anchor="middle" transform="rotate(-90 ${width - 3} ${padding.top + chartHeight / 2})">${escapeHtml(signatureText)}</text>`
 
   const secondsLabel = `<text x="12" y="${padding.top + chartHeight / 2}" font-size="10" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#333" text-anchor="middle" transform="rotate(-90 12 ${padding.top + chartHeight / 2})">Seconds</text>`
 
@@ -2342,8 +2347,10 @@ function renderNativeChartCard(
   now: number,
   {
     compact = false,
+    signature,
   }: {
     compact?: boolean
+    signature?: string
   } = {},
 ): string {
   const width = compact ? 158 : 770
@@ -2361,6 +2368,7 @@ function renderNativeChartCard(
     height,
     now,
     rangeMs: rangeHours * 60 * 60 * 1000,
+    signature,
     title: `${chart.label} latency and loss`,
     width,
   })
@@ -2404,6 +2412,7 @@ async function writeTargetIndex(
   selfLabel: string,
   targetSlug: string,
   now = Date.now(),
+  signature?: string,
 ): Promise<SnapshotSummary | null> {
   const snapshots = await listTargetSnapshots(targetDir)
   if (snapshots.length === 0) {
@@ -2446,9 +2455,9 @@ async function writeTargetIndex(
   const historyPanel = `<section class="panel" id="history">
   <h2>Latency and loss history</h2>
   <div class="graph-grid">
-    ${renderNativeChartCard(mainChart, now)}
+    ${renderNativeChartCard(mainChart, now, { signature })}
     <div class="graph-grid graph-grid--mini">
-      ${secondaryCharts.map((chart) => renderNativeChartCard(chart, now)).join('\n')}
+      ${secondaryCharts.map((chart) => renderNativeChartCard(chart, now, { signature })).join('\n')}
     </div>
   </div>
 </section>`
@@ -2601,6 +2610,7 @@ async function writeRootIndex(
   selfLabel: string,
   keepDays: number,
   now = Date.now(),
+  signature?: string,
 ): Promise<void> {
   const entries = await readdir(logDir, { withFileTypes: true })
   const targetDirs = entries
@@ -2619,7 +2629,7 @@ async function writeRootIndex(
   for (const targetSlug of targetDirs) {
     const targetDir = path.join(logDir, targetSlug)
     const snapshots = await listTargetSnapshots(targetDir)
-    const summary = await writeTargetIndex(targetDir, peers, selfLabel, targetSlug, now)
+    const summary = await writeTargetIndex(targetDir, peers, selfLabel, targetSlug, now, signature)
     if (summary) {
       targetSummaries.push({
         aggregate: summarizeSnapshots(snapshots, now, 7 * 24 * 60 * 60 * 1000),
@@ -2658,7 +2668,7 @@ async function writeRootIndex(
   <td><span class="loss ${destinationLossClass}">${escapeHtml(formatLoss(aggregate.averageDestinationLossPct))}</span><br /><span>${aggregate.sampleCount} samples</span></td>
   <td><span class="loss ${getLossOccurrenceClass(diagnosisAggregate.destinationLossCount, diagnosisAggregate.sampleCount)}">${diagnosisAggregate.destinationLossCount}</span><span> / ${diagnosisAggregate.sampleCount}</span></td>
   <td>${suspectHop ? `<code>${escapeHtml(suspectHop.host)}</code><br /><span>${suspectHop.downstreamLossCount} downstream / ${suspectHop.isolatedLossCount} isolated</span>` : 'n/a'}</td>
-  <td><a class="thumb-link" href="./${encodeURIComponent(targetSlug)}/">${renderNativeChartCard(thumbnailChart, now, { compact: true })}</a></td>
+  <td><a class="thumb-link" href="./${encodeURIComponent(targetSlug)}/">${renderNativeChartCard(thumbnailChart, now, { compact: true, signature })}</a></td>
 </tr>`
     })
     .join('\n')
@@ -2927,5 +2937,12 @@ export async function runCollector(
   }
 
   await updateRollupsForTargets(nodeLabel, options, nowDate)
-  await writeRootIndex(options.logDir, config.peer, nodeLabel, options.keepDays, now)
+  await writeRootIndex(
+    options.logDir,
+    config.peer,
+    nodeLabel,
+    options.keepDays,
+    now,
+    config.chart.signature,
+  )
 }

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { z } from 'zod'
 import type { ProbeMode } from './config.ts'
 import { escapeHtml } from './layout.ts'
 import {
@@ -10,26 +11,53 @@ import {
   type StoredRawSnapshot,
 } from './raw.ts'
 
-export interface HopRecord {
-  asn: string | null
-  avgMs: number | null
-  bestMs: number | null
-  host: string
-  index: number
-  lastMs: number | null
-  lossPct: number
-  sent: number | null
-  stdevMs: number | null
-  worstMs: number | null
-}
+const nullableNumber = z
+  .number()
+  .nullish()
+  .transform((value) => value ?? null)
+const nullableString = z
+  .string()
+  .nullish()
+  .transform((value) => value ?? null)
 
-export interface SnapshotDiagnosis {
-  kind: 'healthy' | 'intermediate_only_loss' | 'destination_loss' | 'unknown'
-  label: string
-  summary: string
-  suspectHopHost: string | null
-  suspectHopIndex: number | null
-}
+const hopRecordSchema = z.object({
+  asn: nullableString,
+  avgMs: nullableNumber,
+  bestMs: nullableNumber,
+  host: z.string(),
+  index: z.number(),
+  lastMs: nullableNumber,
+  lossPct: z.number(),
+  sent: nullableNumber,
+  stdevMs: nullableNumber,
+  worstMs: nullableNumber,
+})
+
+export type HopRecord = z.infer<typeof hopRecordSchema>
+
+const snapshotDiagnosisSchema = z.object({
+  kind: z.enum(['healthy', 'intermediate_only_loss', 'destination_loss', 'unknown']),
+  label: z.string(),
+  summary: z.string(),
+  suspectHopHost: nullableString,
+  suspectHopIndex: nullableNumber,
+})
+
+export type SnapshotDiagnosis = z.infer<typeof snapshotDiagnosisSchema>
+
+const legacyStoredSnapshotSummarySchema = z.object({
+  collectedAt: z.string(),
+  destinationLossPct: nullableNumber,
+  diagnosis: snapshotDiagnosisSchema,
+  fileName: z.string(),
+  host: z.string(),
+  hopCount: z.number(),
+  hops: z.array(hopRecordSchema),
+  probeMode: z.enum(['default', 'netns'] as const satisfies readonly ProbeMode[]),
+  rawText: z.string(),
+  target: z.string(),
+  worstHopLossPct: nullableNumber,
+})
 
 export interface SnapshotSummary {
   collectedAt: string
@@ -58,23 +86,6 @@ function parseNullableNumber(value: string | undefined): number | null {
 
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
-}
-
-function isProbeMode(value: unknown): value is ProbeMode {
-  return value === 'default' || value === 'netns'
-}
-
-function isDiagnosisKind(value: unknown): value is SnapshotDiagnosis['kind'] {
-  return (
-    value === 'healthy' ||
-    value === 'intermediate_only_loss' ||
-    value === 'destination_loss' ||
-    value === 'unknown'
-  )
-}
-
-function isNullableNumber(value: unknown): value is number | null {
-  return value == null || typeof value === 'number'
 }
 
 function formatReportCollectedAt(collectedAt: string): string {
@@ -206,110 +217,27 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     }
   }
 
-  if (typeof parsed !== 'object' || parsed == null) {
-    throw new Error('Snapshot summary JSON must be an object')
-  }
-
-  const candidate = parsed as Record<string, unknown>
-  if (
-    typeof candidate.collectedAt !== 'string' ||
-    !isNullableNumber(candidate.destinationLossPct) ||
-    typeof candidate.fileName !== 'string' ||
-    typeof candidate.host !== 'string' ||
-    typeof candidate.hopCount !== 'number' ||
-    !Array.isArray(candidate.hops) ||
-    !isProbeMode(candidate.probeMode) ||
-    typeof candidate.rawText !== 'string' ||
-    typeof candidate.target !== 'string' ||
-    !isNullableNumber(candidate.worstHopLossPct)
-  ) {
-    throw new Error('Snapshot summary JSON has invalid top-level fields')
-  }
-
-  const diagnosisCandidate = candidate.diagnosis
-  if (typeof diagnosisCandidate !== 'object' || diagnosisCandidate == null) {
-    throw new Error('Snapshot summary JSON is missing diagnosis')
-  }
-
-  const diagnosis = diagnosisCandidate as Record<string, unknown>
-  if (
-    !isDiagnosisKind(diagnosis.kind) ||
-    typeof diagnosis.label !== 'string' ||
-    typeof diagnosis.summary !== 'string' ||
-    !(diagnosis.suspectHopHost == null || typeof diagnosis.suspectHopHost === 'string') ||
-    !(diagnosis.suspectHopIndex == null || typeof diagnosis.suspectHopIndex === 'number')
-  ) {
-    throw new Error('Snapshot summary JSON has invalid diagnosis')
-  }
-
-  const hops = candidate.hops.map((hop): HopRecord => {
-    if (typeof hop !== 'object' || hop == null) {
-      throw new Error('Snapshot summary JSON has invalid hop records')
-    }
-
-    const hopCandidate = hop as Record<string, unknown>
-    if (
-      !(hopCandidate.asn == null || typeof hopCandidate.asn === 'string') ||
-      !isNullableNumber(hopCandidate.avgMs) ||
-      !isNullableNumber(hopCandidate.bestMs) ||
-      typeof hopCandidate.host !== 'string' ||
-      typeof hopCandidate.index !== 'number' ||
-      !isNullableNumber(hopCandidate.lastMs) ||
-      typeof hopCandidate.lossPct !== 'number' ||
-      !isNullableNumber(hopCandidate.sent) ||
-      !isNullableNumber(hopCandidate.stdevMs) ||
-      !isNullableNumber(hopCandidate.worstMs)
-    ) {
-      throw new Error('Snapshot summary JSON has invalid hop fields')
-    }
-
-    return {
-      asn: hopCandidate.asn ?? null,
-      avgMs: hopCandidate.avgMs ?? null,
-      bestMs: hopCandidate.bestMs ?? null,
-      host: hopCandidate.host,
-      index: hopCandidate.index,
-      lastMs: hopCandidate.lastMs ?? null,
-      lossPct: hopCandidate.lossPct,
-      sent: hopCandidate.sent ?? null,
-      stdevMs: hopCandidate.stdevMs ?? null,
-      worstMs: hopCandidate.worstMs ?? null,
-    }
-  })
+  const legacy = legacyStoredSnapshotSummarySchema.parse(parsed)
+  const destinationHop = legacy.hops.at(-1) ?? null
 
   return {
-    collectedAt: candidate.collectedAt,
-    destinationAvgRttMs: (() => {
-      const destinationHop = hops.at(-1) ?? null
-      return destinationHop?.avgMs ?? null
-    })(),
-    destinationLossPct: candidate.destinationLossPct,
-    destinationRttMaxMs: (() => {
-      const destinationHop = hops.at(-1) ?? null
-      return destinationHop?.worstMs ?? null
-    })(),
-    destinationRttMinMs: (() => {
-      const destinationHop = hops.at(-1) ?? null
-      return destinationHop?.bestMs ?? null
-    })(),
+    collectedAt: legacy.collectedAt,
+    destinationAvgRttMs: destinationHop?.avgMs ?? null,
+    destinationLossPct: legacy.destinationLossPct,
+    destinationRttMaxMs: destinationHop?.worstMs ?? null,
+    destinationRttMinMs: destinationHop?.bestMs ?? null,
     destinationRttP50Ms: null,
     destinationRttP90Ms: null,
     destinationRttSamplesMs: null,
-    diagnosis: {
-      kind: diagnosis.kind,
-      label: diagnosis.label,
-      summary: diagnosis.summary,
-      suspectHopHost: diagnosis.suspectHopHost ?? null,
-      suspectHopIndex: diagnosis.suspectHopIndex ?? null,
-    },
-    fileName: candidate.fileName,
-    host: candidate.host,
-    hopCount: candidate.hopCount,
-    hops,
-    probeMode: candidate.probeMode,
-    rawText: candidate.rawText,
-    target: candidate.target,
-    worstHopLossPct: candidate.worstHopLossPct,
+    diagnosis: legacy.diagnosis,
+    fileName: legacy.fileName,
+    host: legacy.host,
+    hopCount: legacy.hopCount,
+    hops: legacy.hops,
+    probeMode: legacy.probeMode,
+    rawText: legacy.rawText,
+    target: legacy.target,
+    worstHopLossPct: legacy.worstHopLossPct,
   }
 }
 

@@ -175,8 +175,14 @@ async function updateLatestSymlink(outputFile: string, latestFile: string): Prom
     // No existing symlink to preserve.
   }
 
-  await rm(latestFile, { force: true })
-  await symlink(outputFile, latestFile)
+  // Create under a unique sibling name and rename over `latest.json` so the
+  // dashboard never sees a missing file. Before this, an `rm` followed by a
+  // `symlink` left a brief window where concurrent readers got 404. rename()
+  // replaces the old inode atomically on the same filesystem.
+  const stagingFile = `${latestFile}.new.${process.pid}.${Date.now()}`
+  await rm(stagingFile, { force: true })
+  await symlink(outputFile, stagingFile)
+  await rename(stagingFile, latestFile)
 }
 
 async function pathExists(pathname: string): Promise<boolean> {
@@ -258,6 +264,24 @@ export interface CollectSnapshotDeps {
   runNativeProbeFn?: RunNativeProbeFn
 }
 
+// Promise.race-based timeout wrapper. Node's DNS resolver and Bun's reverse
+// DNS calls ignore AbortSignal, so a stuck resolver cannot be aborted — we can
+// at least release the caller on schedule and let the underlying request
+// finish in the background.
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms)
+      }),
+    ])
+  } finally {
+    if (timer != null) clearTimeout(timer)
+  }
+}
+
 export async function collectSnapshot(
   nodeLabel: string,
   timestamp: string,
@@ -282,7 +306,15 @@ export async function collectSnapshot(
       )
     }
 
-    const resolved = await lookup(target.host, 4)
+    // A broken or glacial resolver would otherwise pin a collector slot forever
+    // (node's DNS lookups have no default timeout); cap at ~10% of the probe
+    // budget so a bad nameserver can't starve later targets in the same cycle.
+    const dnsDeadlineMs = Math.max(5_000, Math.floor(options.probeTimeoutMs / 10))
+    const resolved = await withTimeout(
+      lookup(target.host, 4),
+      dnsDeadlineMs,
+      `DNS lookup for '${target.host}' timed out after ${dnsDeadlineMs}ms`,
+    )
     rawEvents = await runNativeProbeFn({
       hostIp: resolved.address,
       maxHops: 30,
@@ -352,6 +384,7 @@ async function updateRollupsForTargets(
   nodeLabel: string,
   options: CollectorOptions,
   nowDate: Date,
+  fullRebuild = false,
 ): Promise<void> {
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
     const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
@@ -365,6 +398,8 @@ async function updateRollupsForTargets(
         target: target.host,
       },
       nowDate,
+      undefined,
+      { fullRebuild },
     )
   })
 }
@@ -378,6 +413,23 @@ export async function runCollector(
   logger: Logger,
   deps: CollectorDependencies = {},
 ): Promise<RunCollectorResult> {
+  // The native prober uses bun:ffi to dlopen('libc.so.6') + AF_INET raw
+  // sockets — that only exists on Linux. Catch the mismatch here (shared by
+  // both the daemon's scheduler and `hopwatch probe-once`) instead of failing
+  // mid-probe; config-check still passes on any platform so operators can
+  // validate linux-targeted configs from a dev machine. Tests that inject a
+  // mock `runNativeProbeFn` bypass the FFI load entirely and therefore also
+  // bypass this guard — the check is about protecting the real code path.
+  if (process.platform !== 'linux' && deps.runNativeProbeFn == null) {
+    for (const target of config.target) {
+      if (target.engine === 'native') {
+        throw new Error(
+          `target '${target.id}' uses engine='native' but collector is running on ${process.platform}; engine='native' requires Linux`,
+        )
+      }
+    }
+  }
+
   const options = collectorOptionsFromConfig(config)
 
   await mkdir(options.logDir, { recursive: true })
@@ -416,5 +468,6 @@ export async function refreshRollups(
   await mkdir(options.logDir, { recursive: true })
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
-  await updateRollupsForTargets(nodeLabel, options, nowDate)
+  // `hopwatch rollup` is the recovery escape hatch — always do a full rebuild.
+  await updateRollupsForTargets(nodeLabel, options, nowDate, true)
 }

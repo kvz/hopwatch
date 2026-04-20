@@ -213,9 +213,19 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
         }
       }
     }
+    // Bound the rDNS phase so a slow resolver cannot keep a collector slot busy
+    // past the caller's `timeoutMs` deadline — Node's reverse() does not honor
+    // AbortSignal, so we wall-clock it with Promise.race. 2s per IP is
+    // generous (typical PTR lookups are <100ms) and caps the whole phase at
+    // 2s even if every hop's IP is sunk into /dev/null.
+    const rdnsPerHostMs = 2_000
     const resolved = await Promise.all(
       Array.from(uniqueHosts).map(async (ip) => {
-        const names = await reverse(ip).catch(() => [] as string[])
+        const lookup = reverse(ip).catch(() => [] as string[])
+        const timeout = new Promise<string[]>((resolve) =>
+          setTimeout(() => resolve([]), rdnsPerHostMs).unref(),
+        )
+        const names = await Promise.race([lookup, timeout])
         return { ip, name: names[0] ?? null }
       }),
     )

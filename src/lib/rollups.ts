@@ -265,13 +265,28 @@ export async function readRollupFile(
   }
 }
 
-async function listStoredRawSnapshots(targetDir: string): Promise<StoredRawSnapshot[]> {
+interface ListStoredRawSnapshotsOptions {
+  // Only include snapshot files whose name is >= this prefix (the filename
+  // format is lexicographically sortable — `YYYYMMDDTHHmmssZ.json`). Used by
+  // updateTargetRollups for incremental re-aggregation so long histories do
+  // not reparse every retained file on every cycle.
+  sinceFileName?: string
+  onReadSnapshot?: (fileName: string) => void
+}
+
+async function listStoredRawSnapshots(
+  targetDir: string,
+  options: ListStoredRawSnapshotsOptions = {},
+): Promise<StoredRawSnapshot[]> {
+  const { sinceFileName, onReadSnapshot } = options
   const snapshotFiles = await listSnapshotFileNames(targetDir)
   const snapshots: StoredRawSnapshot[] = []
   for (const fileName of snapshotFiles) {
+    if (sinceFileName != null && fileName < sinceFileName) continue
     const filePath = path.join(targetDir, fileName)
     try {
       const contents = await readFile(filePath, 'utf8')
+      onReadSnapshot?.(fileName)
       snapshots.push(parseStoredRawSnapshot(contents))
     } catch (err) {
       // A single unparseable snapshot must not abort the rollup rebuild for an
@@ -284,6 +299,16 @@ async function listStoredRawSnapshots(targetDir: string): Promise<StoredRawSnaps
   }
 
   return snapshots
+}
+
+// Convert an ISO bucketStart (e.g. "2026-04-20T09:00:00.000Z") to the on-disk
+// filename prefix format ("20260420T090000Z.json") used by raw snapshots, so
+// we can filter by lexicographic comparison.
+function isoBucketStartToFileName(iso: string): string | null {
+  const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/)
+  if (!match) return null
+  const [, y, mo, d, h, mi, s] = match
+  return `${y}${mo}${d}T${h}${mi}${s}Z.json`
 }
 
 async function writeRollupFile(filePath: string, rollupFile: MtrRollupFile): Promise<void> {
@@ -311,6 +336,14 @@ function buildRollupFile(
   }
 }
 
+interface UpdateTargetRollupsHooks {
+  // Force a full re-aggregation that ignores the incremental cutoff. The
+  // `hopwatch rollup` CLI uses this to recover from a situation where the
+  // on-disk rollup is stale or incomplete; scheduled probes stay incremental.
+  fullRebuild?: boolean
+  onReadSnapshot?: (fileName: string) => void
+}
+
 export async function updateTargetRollups(
   targetDir: string,
   metadata: TargetRollupMetadata,
@@ -319,14 +352,42 @@ export async function updateTargetRollups(
     dailyKeepDays: 365,
     hourlyKeepDays: 90,
   },
+  hooks: UpdateTargetRollupsHooks = {},
 ): Promise<void> {
-  const snapshots = await listStoredRawSnapshots(targetDir)
-  if (snapshots.length === 0) {
+  const hourlyRollupPath = path.join(targetDir, 'hourly.rollup.json')
+  const dailyRollupPath = path.join(targetDir, 'daily.rollup.json')
+
+  // Read existing rollups first so we can derive an incremental re-aggregation
+  // cutoff. Before this, every probe cycle reparsed and Zod-validated every
+  // retained snapshot (keep_days * 96 files per target), which scales work
+  // with total history instead of the ~1 new snapshot per cycle. Using the
+  // latest hourly bucket start as the floor means only the currently-forming
+  // hour bucket gets regenerated; older buckets survive via
+  // mergeRollupBuckets' snapshotCount guard. The daily rollup also re-forms
+  // its current (partial) bucket without reading yesterday's files again.
+  const existingHourly = await readRollupFile(hourlyRollupPath, 'hour')
+  const existingDaily = await readRollupFile(dailyRollupPath, 'day')
+
+  let sinceFileName: string | undefined
+  if (!hooks.fullRebuild && existingHourly != null && existingHourly.buckets.length > 0) {
+    const latestBucketStart = existingHourly.buckets
+      .map((bucket) => bucket.bucketStart)
+      .sort()
+      .at(-1)
+    if (latestBucketStart != null) {
+      const converted = isoBucketStartToFileName(latestBucketStart)
+      if (converted != null) sinceFileName = converted
+    }
+  }
+
+  const snapshots = await listStoredRawSnapshots(targetDir, {
+    sinceFileName,
+    onReadSnapshot: hooks.onReadSnapshot,
+  })
+  if (snapshots.length === 0 && existingHourly == null && existingDaily == null) {
     return
   }
 
-  const hourlyRollupPath = path.join(targetDir, 'hourly.rollup.json')
-  const existingHourly = await readRollupFile(hourlyRollupPath, 'hour')
   const generatedHourly = aggregateSnapshotsToRollupBuckets(snapshots, 'hour')
   const mergedHourly = mergeRollupBuckets(
     existingHourly?.buckets ?? [],
@@ -336,8 +397,6 @@ export async function updateTargetRollups(
   )
   await writeRollupFile(hourlyRollupPath, buildRollupFile('hour', metadata, mergedHourly, now))
 
-  const dailyRollupPath = path.join(targetDir, 'daily.rollup.json')
-  const existingDaily = await readRollupFile(dailyRollupPath, 'day')
   const generatedDaily = aggregateSnapshotsToRollupBuckets(snapshots, 'day')
   const mergedDaily = mergeRollupBuckets(
     existingDaily?.buckets ?? [],

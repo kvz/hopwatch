@@ -1,7 +1,9 @@
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { LoadedConfig } from '../lib/config.ts'
-import { startScheduler } from '../lib/daemon.ts'
+import { resolveServeFilePath, startScheduler } from '../lib/daemon.ts'
 import { parseListenAddress } from '../lib/listen.ts'
 import { createLogger } from '../lib/logger.ts'
 
@@ -132,5 +134,54 @@ describe('parseListenAddress', () => {
 
   test('rejects out-of-range ports', () => {
     expect(() => parseListenAddress(':70000')).toThrow(/Invalid listen port/)
+  })
+})
+
+describe('resolveServeFilePath', () => {
+  let rootDir: string
+  let outsideDir: string
+
+  beforeEach(async () => {
+    rootDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-serve-root-'))
+    outsideDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-serve-outside-'))
+  })
+
+  afterEach(async () => {
+    await rm(rootDir, { recursive: true, force: true })
+    await rm(outsideDir, { recursive: true, force: true })
+  })
+
+  test('serves files inside the root via their realpath', async () => {
+    await mkdir(path.join(rootDir, 'sub'), { recursive: true })
+    await writeFile(path.join(rootDir, 'sub', 'ok.txt'), 'inside')
+
+    const resolved = await resolveServeFilePath(rootDir, '/sub/ok.txt')
+    expect(resolved).not.toBeNull()
+    expect(resolved).toMatch(/sub.*ok\.txt$/)
+  })
+
+  test('refuses to follow a symlink that escapes the root', async () => {
+    // Without the realpath check, safeResolve would allow the request
+    // (lexically the path stays under rootDir), and stat()/Bun.file() would
+    // transparently follow the symlink to /outside-dir/secret.txt and serve
+    // its contents. This is the exact vector the P2 finding called out.
+    await writeFile(path.join(outsideDir, 'secret.txt'), 'sensitive')
+    await symlink(path.join(outsideDir, 'secret.txt'), path.join(rootDir, 'escape.txt'))
+
+    const resolved = await resolveServeFilePath(rootDir, '/escape.txt')
+    expect(resolved).toBeNull()
+  })
+
+  test('allows a symlink that stays inside the root', async () => {
+    await mkdir(path.join(rootDir, 'real'), { recursive: true })
+    await writeFile(path.join(rootDir, 'real', 'ok.txt'), 'inside')
+    await symlink(path.join(rootDir, 'real', 'ok.txt'), path.join(rootDir, 'alias.txt'))
+
+    const resolved = await resolveServeFilePath(rootDir, '/alias.txt')
+    expect(resolved).not.toBeNull()
+  })
+
+  test('returns null for a missing path', async () => {
+    expect(await resolveServeFilePath(rootDir, '/nope.txt')).toBeNull()
   })
 })

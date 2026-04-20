@@ -202,4 +202,91 @@ describe('updateTargetRollups daily RTT fidelity', () => {
     expect(bucket.snapshotCount).toBe(4)
     expect(bucket.destinationSentCount).toBe(40)
   })
+
+  test('only reads snapshots newer than the latest hourly bucket on incremental runs', async () => {
+    // Seed with an established hourly rollup through 09:00. The next
+    // updateTargetRollups call should only re-aggregate snapshots from 09:00
+    // onward (latest hourly bucketStart), not reparse the entire retention
+    // window. We assert by counting how many raw snapshot files are opened.
+    const existingHourly = {
+      buckets: [
+        {
+          bucketStart: '2026-04-20T08:00:00.000Z',
+          destinationLossPct: 0,
+          destinationReplyCount: 4,
+          destinationSentCount: 4,
+          histogram: [{ count: 4, upperBoundMs: 10 }],
+          rttAvgMs: 5,
+          rttMaxMs: 5,
+          rttMinMs: 5,
+          rttP50Ms: 5,
+          rttP90Ms: 5,
+          rttP99Ms: 5,
+          snapshotCount: 4,
+        },
+        {
+          bucketStart: '2026-04-20T09:00:00.000Z',
+          destinationLossPct: 0,
+          destinationReplyCount: 4,
+          destinationSentCount: 4,
+          histogram: [{ count: 4, upperBoundMs: 10 }],
+          rttAvgMs: 5,
+          rttMaxMs: 5,
+          rttMinMs: 5,
+          rttP50Ms: 5,
+          rttP90Ms: 5,
+          rttP99Ms: 5,
+          snapshotCount: 4,
+        },
+      ],
+      generatedAt: '2026-04-20T09:45:00.000Z',
+      granularity: 'hour',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      schemaVersion: 1,
+      target: 'example.com',
+    }
+    await writeFile(
+      path.join(targetDir, 'hourly.rollup.json'),
+      JSON.stringify(existingHourly, null, 2),
+    )
+
+    for (const stamp of ['20260420T080000Z', '20260420T081500Z', '20260420T090000Z']) {
+      await writeFile(
+        path.join(targetDir, `${stamp}.json`),
+        JSON.stringify({
+          collectedAt: stamp,
+          fileName: `${stamp}.json`,
+          host: 'example.com',
+          label: 'example',
+          observer: 'test-observer',
+          probeMode: 'default',
+          rawEvents: destinationEvents(1, [5000]),
+          schemaVersion: 2,
+          target: 'example.com',
+        }),
+      )
+    }
+
+    const filesRead: string[] = []
+    await updateTargetRollups(
+      targetDir,
+      {
+        host: 'example.com',
+        label: 'example',
+        observer: 'test-observer',
+        probeMode: 'default',
+        target: 'example.com',
+      },
+      new Date('2026-04-20T09:30:00Z'),
+      { dailyKeepDays: 365, hourlyKeepDays: 90 },
+      { onReadSnapshot: (fileName) => filesRead.push(fileName) },
+    )
+
+    // Only the 09:00 snapshot is newer than the latest-bucket cutoff (inclusive).
+    // The 08:00 and 08:15 snapshots must NOT be reparsed on this incremental run.
+    expect(filesRead).toEqual(['20260420T090000Z.json'])
+  })
 })

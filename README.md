@@ -199,7 +199,9 @@ rotated `RRDTOOL / TOBI OETIKER` signature on the right edge (kept as
 - **Stateless rendering.** Every page render reads from the on-disk JSON
   snapshots and rollups. Hot-reload the binary and the UI picks up immediately.
 - **One binary.** `bun build --compile` produces a self-contained executable
-  per platform. Linux needs `mtr` in `PATH`; that's it.
+  per platform. Linux needs `mtr` in `PATH`; that's it. `engine='native'` also
+  requires a glibc Linux (the built-in prober `dlopen`s `libc.so.6` via
+  `bun:ffi`) — on musl distros (Alpine) stay on the default `engine='mtr'`.
 
 ## Building from source
 

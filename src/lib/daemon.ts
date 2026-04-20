@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
@@ -60,23 +60,54 @@ function safeResolve(root: string, urlPath: string): string | null {
   return resolved
 }
 
-async function serveFile(root: string, urlPath: string): Promise<Response> {
-  const resolved = safeResolve(root, urlPath)
-  if (resolved == null) {
-    return new Response('forbidden', { status: 403 })
-  }
+// Resolves a URL path to a file on disk while guarding against symlink escape.
+// `safeResolve()` only checks the lexical path, but `stat()` and `Bun.file()`
+// both follow symlinks — so a symlink under data_dir pointing at /etc/passwd
+// would otherwise be happily served. We realpath both the root and the
+// resolved target and require the target stay within the root's realpath.
+// Returns the realpath of the file to serve, or null if blocked / missing.
+export async function resolveServeFilePath(root: string, urlPath: string): Promise<string | null> {
+  const lexical = safeResolve(root, urlPath)
+  if (lexical == null) return null
 
-  let filePath = resolved
+  let filePath = lexical
   try {
     const info = await stat(filePath)
     if (info.isDirectory()) {
       filePath = path.join(filePath, 'index.html')
     }
   } catch {
+    return null
+  }
+
+  let realRoot: string
+  let realFile: string
+  try {
+    realRoot = await realpath(root)
+    realFile = await realpath(filePath)
+  } catch {
+    return null
+  }
+
+  if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${path.sep}`)) {
+    return null
+  }
+
+  return realFile
+}
+
+async function serveFile(root: string, urlPath: string): Promise<Response> {
+  const resolved = safeResolve(root, urlPath)
+  if (resolved == null) {
+    return new Response('forbidden', { status: 403 })
+  }
+
+  const realFile = await resolveServeFilePath(root, urlPath)
+  if (realFile == null) {
     return new Response('not found', { status: 404 })
   }
 
-  const file = Bun.file(filePath)
+  const file = Bun.file(realFile)
   if (!(await file.exists())) {
     return new Response('not found', { status: 404 })
   }
@@ -84,7 +115,7 @@ async function serveFile(root: string, urlPath: string): Promise<Response> {
   return new Response(file, {
     headers: {
       'cache-control': 'no-cache',
-      'content-type': contentTypeFor(filePath),
+      'content-type': contentTypeFor(realFile),
     },
   })
 }
@@ -189,21 +220,6 @@ export function startScheduler(
 }
 
 export async function startDaemon(config: LoadedConfig, logger: Logger): Promise<void> {
-  // The native prober uses bun:ffi to dlopen('libc.so.6') + AF_INET raw
-  // sockets — that only exists on Linux. Darwin/Windows builds are published
-  // (binaries.yml), so catch the mismatch at startup rather than failing
-  // mid-probe on the first cycle. config-check still passes on any platform
-  // so operators can validate linux-targeted configs from a dev machine.
-  if (process.platform !== 'linux') {
-    for (const target of config.target) {
-      if (target.engine === 'native') {
-        throw new Error(
-          `target '${target.id}' uses engine='native' but this daemon is running on ${process.platform}; engine='native' requires Linux`,
-        )
-      }
-    }
-  }
-
   const scheduler = startScheduler(config, logger)
 
   const nodeLabel = config.server.node_label ?? 'hopwatch'

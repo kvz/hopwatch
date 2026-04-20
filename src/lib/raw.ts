@@ -253,3 +253,82 @@ export function deriveHopRecordsFromRawEvents(rawEvents: RawMtrEvent[]): RawHopR
       }
     })
 }
+
+// MTR sometimes emits a phantom trailing hop past the true destination (same
+// host, TTL bumped by one) with far fewer replies than the real destination.
+// Walking back from the max hop while consecutive hops share a host and have
+// strictly more replies surfaces the true destination. Shared across raw
+// summaries, rollup aggregation, and chart sample extraction so all three
+// agree on which hop is "the destination".
+export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | null {
+  if (rawEvents.length === 0) {
+    return null
+  }
+
+  const replyCountByHop = new Map<number, number>()
+  const hostsByHop = new Map<number, Set<string>>()
+  let maxHopIndex = -1
+  for (const event of rawEvents) {
+    if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
+    if (event.kind === 'reply') {
+      replyCountByHop.set(event.hopIndex, (replyCountByHop.get(event.hopIndex) ?? 0) + 1)
+    } else if (event.kind === 'host') {
+      let hosts = hostsByHop.get(event.hopIndex)
+      if (hosts == null) {
+        hosts = new Set<string>()
+        hostsByHop.set(event.hopIndex, hosts)
+      }
+      hosts.add(event.host)
+    }
+  }
+
+  if (maxHopIndex < 0) {
+    return null
+  }
+
+  const finalHosts = hostsByHop.get(maxHopIndex) ?? new Set<string>()
+  let destinationHopIndex = maxHopIndex
+  for (let hopIndex = maxHopIndex - 1; hopIndex >= 0; hopIndex -= 1) {
+    const hosts = hostsByHop.get(hopIndex)
+    if (hosts == null) break
+    let sharesHost = false
+    for (const host of hosts) {
+      if (finalHosts.has(host)) {
+        sharesHost = true
+        break
+      }
+    }
+    if (!sharesHost) break
+    const prevReplyCount = replyCountByHop.get(hopIndex) ?? 0
+    const currentReplyCount = replyCountByHop.get(destinationHopIndex) ?? 0
+    if (prevReplyCount <= currentReplyCount) break
+    destinationHopIndex = hopIndex
+  }
+
+  return destinationHopIndex
+}
+
+// Linear-interpolation quantile (NIST / numpy default). Used everywhere we
+// compute percentiles from RTT samples so the smoke-band, summary stats, and
+// rollup aggregates all agree on the same math.
+export function quantile(sortedValues: number[], percentile: number): number | null {
+  if (sortedValues.length === 0) {
+    return null
+  }
+
+  const pos = (sortedValues.length - 1) * percentile
+  const lo = Math.floor(pos)
+  const hi = Math.ceil(pos)
+  const lower = sortedValues[lo]
+  if (lower == null) {
+    return null
+  }
+  if (lo === hi) {
+    return lower
+  }
+  const upper = sortedValues[hi]
+  if (upper == null) {
+    return lower
+  }
+  return lower + (upper - lower) * (pos - lo)
+}

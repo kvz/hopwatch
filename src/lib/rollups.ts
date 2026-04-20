@@ -4,7 +4,12 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import type { ProbeMode } from './config.ts'
-import { parseStoredRawSnapshot, type StoredRawSnapshot } from './raw.ts'
+import {
+  parseStoredRawSnapshot,
+  quantile,
+  resolveDestinationHopIndex,
+  type StoredRawSnapshot,
+} from './raw.ts'
 
 export type RollupGranularity = 'hour' | 'day'
 
@@ -59,8 +64,7 @@ interface DestinationSampleSummary {
 const histogramUpperBoundsMs = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000] as const
 
 function getDestinationSampleSummary(snapshot: StoredRawSnapshot): DestinationSampleSummary {
-  const hopIndexes = snapshot.rawEvents.map((event) => event.hopIndex)
-  const destinationHopIndex = hopIndexes.length === 0 ? null : Math.max(...hopIndexes)
+  const destinationHopIndex = resolveDestinationHopIndex(snapshot.rawEvents)
   if (destinationHopIndex == null) {
     return {
       rttSamplesMs: [],
@@ -98,19 +102,6 @@ function average(values: number[]): number | null {
   }
 
   return values.reduce((sum, value) => sum + value, 0) / values.length
-}
-
-function quantile(values: number[], percentile: number): number | null {
-  if (values.length === 0) {
-    return null
-  }
-
-  const sortedValues = [...values].sort((left, right) => left - right)
-  const index = Math.min(
-    sortedValues.length - 1,
-    Math.max(0, Math.ceil(sortedValues.length * percentile) - 1),
-  )
-  return sortedValues[index] ?? null
 }
 
 function getCollectedAtDate(collectedAt: string): Date {
@@ -168,6 +159,7 @@ function buildRollupBucket(
     destinationSentCount === 0
       ? 0
       : ((destinationSentCount - destinationReplyCount) / destinationSentCount) * 100
+  const sorted = [...rttSamplesMs].sort((left, right) => left - right)
 
   return {
     bucketStart,
@@ -176,11 +168,11 @@ function buildRollupBucket(
     destinationSentCount,
     histogram: buildHistogram(rttSamplesMs),
     rttAvgMs: average(rttSamplesMs),
-    rttMaxMs: rttSamplesMs.length === 0 ? null : Math.max(...rttSamplesMs),
-    rttMinMs: rttSamplesMs.length === 0 ? null : Math.min(...rttSamplesMs),
-    rttP50Ms: quantile(rttSamplesMs, 0.5),
-    rttP90Ms: quantile(rttSamplesMs, 0.9),
-    rttP99Ms: quantile(rttSamplesMs, 0.99),
+    rttMaxMs: sorted.length === 0 ? null : sorted[sorted.length - 1],
+    rttMinMs: sorted.length === 0 ? null : sorted[0],
+    rttP50Ms: quantile(sorted, 0.5),
+    rttP90Ms: quantile(sorted, 0.9),
+    rttP99Ms: quantile(sorted, 0.99),
     snapshotCount,
   }
 }

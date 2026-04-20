@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
 import type { NativeChartPoint } from '../src/lib/core.ts'
+import { quantile as sharedQuantile } from '../src/lib/raw.ts'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
 const FIXTURE_DIR = path.join(REPO_ROOT, 'src', 'test', 'fixtures', 'mtr-fixtures', 'real-ap')
@@ -22,14 +23,11 @@ interface ExtractedFixture {
 }
 
 function quantile(sorted: number[], q: number): number {
-  const pos = (sorted.length - 1) * q
-  const lo = Math.floor(pos)
-  const hi = Math.ceil(pos)
-  if (lo === hi) {
-    return sorted[lo]
+  const value = sharedQuantile(sorted, q)
+  if (value == null) {
+    throw new Error('quantile called with empty sample set')
   }
-
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
+  return value
 }
 
 async function restoreRrd(xmlGzPath: string, rrdPath: string): Promise<void> {

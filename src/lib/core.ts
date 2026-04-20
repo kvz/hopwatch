@@ -18,6 +18,8 @@ import {
   deriveHopRecordsFromRawEvents,
   parseRawMtrOutput,
   parseStoredRawSnapshot,
+  quantile,
+  resolveDestinationHopIndex,
   type StoredRawSnapshot,
 } from './raw.ts'
 import { type MtrRollupBucket, readRollupFile, updateTargetRollups } from './rollups.ts'
@@ -284,55 +286,12 @@ function renderSnapshotRawText(
   ].join('\n')
 }
 
-function getDestinationRttSamplesMs(rawSnapshot: StoredRawSnapshot): number[] {
-  if (rawSnapshot.rawEvents.length === 0) {
+function getDestinationRttSamplesMs(
+  rawSnapshot: StoredRawSnapshot,
+  destinationHopIndex: number | null,
+): number[] {
+  if (destinationHopIndex == null) {
     return []
-  }
-
-  const replyCountByHop = new Map<number, number>()
-  const hostsByHop = new Map<number, Set<string>>()
-  for (const event of rawSnapshot.rawEvents) {
-    if (event.kind === 'reply') {
-      replyCountByHop.set(event.hopIndex, (replyCountByHop.get(event.hopIndex) ?? 0) + 1)
-    } else if (event.kind === 'host') {
-      let hosts = hostsByHop.get(event.hopIndex)
-      if (hosts == null) {
-        hosts = new Set<string>()
-        hostsByHop.set(event.hopIndex, hosts)
-      }
-      hosts.add(event.host)
-    }
-  }
-
-  let maxHopIndex = -1
-  for (const event of rawSnapshot.rawEvents) {
-    if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
-  }
-  if (maxHopIndex < 0) return []
-
-  // MTR sometimes emits a phantom trailing hop past the true destination
-  // (same host, TTL bumped by one) with far fewer replies than the real
-  // destination — if we blindly picked the highest hopIndex we'd end up
-  // with a single sample and the smoke bands would collapse to a flat line.
-  // Walk back from the max hop while consecutive hops share a host and have
-  // strictly more replies; that surfaces the true destination.
-  const finalHosts = hostsByHop.get(maxHopIndex) ?? new Set<string>()
-  let destinationHopIndex = maxHopIndex
-  for (let hopIndex = maxHopIndex - 1; hopIndex >= 0; hopIndex -= 1) {
-    const hosts = hostsByHop.get(hopIndex)
-    if (hosts == null) break
-    let sharesHost = false
-    for (const host of hosts) {
-      if (finalHosts.has(host)) {
-        sharesHost = true
-        break
-      }
-    }
-    if (!sharesHost) break
-    const prevReplyCount = replyCountByHop.get(hopIndex) ?? 0
-    const currentReplyCount = replyCountByHop.get(destinationHopIndex) ?? 0
-    if (prevReplyCount <= currentReplyCount) break
-    destinationHopIndex = hopIndex
   }
 
   const samples: number[] = []
@@ -347,18 +306,6 @@ function getDestinationRttSamplesMs(rawSnapshot: StoredRawSnapshot): number[] {
   return samples
 }
 
-function quantileOf(sortedValues: number[], percentile: number): number | null {
-  if (sortedValues.length === 0) {
-    return null
-  }
-
-  const index = Math.min(
-    sortedValues.length - 1,
-    Math.max(0, Math.ceil(sortedValues.length * percentile) - 1),
-  )
-  return sortedValues[index] ?? null
-}
-
 function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
   const parsed = JSON.parse(contents) as unknown
   if (
@@ -369,21 +316,26 @@ function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
   ) {
     const rawSnapshot = parseStoredRawSnapshot(contents)
     const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
-    const destinationHop = hops.at(-1) ?? null
+    const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
+    const destinationHop =
+      destinationHopIndex == null
+        ? null
+        : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
     const destinationAvgRttMs = destinationHop?.avgMs ?? null
     const destinationLossPct = destinationHop?.lossPct ?? null
     const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
-    const destinationRttSamplesMs = getDestinationRttSamplesMs(rawSnapshot).sort(
-      (left, right) => left - right,
-    )
+    const destinationRttSamplesMs = getDestinationRttSamplesMs(
+      rawSnapshot,
+      destinationHopIndex,
+    ).sort((left, right) => left - right)
     const destinationRttMinMs =
       destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
     const destinationRttMaxMs =
       destinationRttSamplesMs.length === 0
         ? null
         : destinationRttSamplesMs[destinationRttSamplesMs.length - 1]
-    const destinationRttP50Ms = quantileOf(destinationRttSamplesMs, 0.5)
-    const destinationRttP90Ms = quantileOf(destinationRttSamplesMs, 0.9)
+    const destinationRttP50Ms = quantile(destinationRttSamplesMs, 0.5)
+    const destinationRttP90Ms = quantile(destinationRttSamplesMs, 0.9)
 
     return {
       collectedAt: rawSnapshot.collectedAt,
@@ -927,9 +879,9 @@ function getPointsFromSnapshots(
         rttAvgMs: snapshot.destinationAvgRttMs,
         rttMaxMs: snapshot.destinationRttMaxMs,
         rttMinMs: snapshot.destinationRttMinMs,
-        rttP25Ms: sortedSamples == null ? null : quantileOf(sortedSamples, 0.25),
+        rttP25Ms: sortedSamples == null ? null : quantile(sortedSamples, 0.25),
         rttP50Ms: snapshot.destinationRttP50Ms,
-        rttP75Ms: sortedSamples == null ? null : quantileOf(sortedSamples, 0.75),
+        rttP75Ms: sortedSamples == null ? null : quantile(sortedSamples, 0.75),
         rttP90Ms: snapshot.destinationRttP90Ms,
         rttSamplesMs: sortedSamples,
         timestamp,
@@ -1219,14 +1171,8 @@ export function renderNativeChartSvg(
         const sorted = point.rttSamplesMs.slice().sort((a, b) => a - b)
         const qLo = (ibot - 1) / (pingSlots - 1)
         const qHi = (itop - 1) / (pingSlots - 1)
-        const pick = (q: number): number => {
-          const pos = (sorted.length - 1) * q
-          const lo = Math.floor(pos)
-          const hi = Math.ceil(pos)
-          return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
-        }
-        lower = pick(qLo)
-        upper = pick(qHi)
+        lower = quantile(sorted, qLo)
+        upper = quantile(sorted, qHi)
       } else {
         lower = point[fallbackLowerKey]
         upper = point[fallbackUpperKey]

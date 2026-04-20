@@ -42,6 +42,7 @@ const probeSchema = z.object({
   concurrency: z.number().int().positive().default(3),
   keep_days: z.number().int().positive().default(14),
   jitter_seconds: z.number().int().nonnegative().default(30),
+  namespace_dir: z.string().default(''),
 })
 export type ProbeSettings = z.infer<typeof probeSchema>
 
@@ -95,6 +96,10 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   if (env.HOPWATCH_KEEP_DAYS) {
     overrides.probe.keep_days = Number(env.HOPWATCH_KEEP_DAYS)
+  }
+
+  if (env.HOPWATCH_NAMESPACE_DIR) {
+    overrides.probe.namespace_dir = env.HOPWATCH_NAMESPACE_DIR
   }
 
   if (typeof raw !== 'object' || raw === null) {

@@ -149,7 +149,7 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
     keepDays: config.probe.keep_days,
     logDir: config.resolvedDataDir,
     mtrBin: config.probe.mtr_bin,
-    namespaceDir: process.env.NAMESPACE_DIR ?? '',
+    namespaceDir: config.probe.namespace_dir,
     packets: config.probe.packets,
     renderOnly: false,
     targets: config.target.map(targetFromConfig),
@@ -2832,7 +2832,15 @@ export async function collectSnapshot(
 
   const mtrArgs = ['-b', `-${options.ipVersion}`, '-l', '-c', String(options.packets), target.host]
   if (target.probeMode === 'netns' && options.namespaceDir.trim() === '') {
-    throw new Error(`MTR namespace target requires NAMESPACE_DIR for ${target.host}`)
+    throw new Error(
+      `target '${target.slug}' uses probe_mode='netns' but the probe [namespace_dir] is empty`,
+    )
+  }
+
+  if (target.probeMode === 'netns' && (target.netns == null || target.netns.trim() === '')) {
+    throw new Error(
+      `target '${target.slug}' uses probe_mode='netns' but has no 'netns' name configured`,
+    )
   }
 
   const [command, commandArgs] =
@@ -2840,8 +2848,8 @@ export async function collectSnapshot(
       ? [
           'nsenter',
           [
-            `--mount=${options.namespaceDir}/tl-allow-external/mnt/ns`,
-            `--net=${options.namespaceDir}/tl-allow-external/net/ns`,
+            `--mount=${options.namespaceDir}/${target.netns}/mnt/ns`,
+            `--net=${options.namespaceDir}/${target.netns}/net/ns`,
             options.mtrBin,
             ...mtrArgs,
           ],

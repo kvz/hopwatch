@@ -43,6 +43,7 @@ const probeSchema = z.object({
   keep_days: z.number().int().positive().default(14),
   jitter_seconds: z.number().int().nonnegative().default(30),
   namespace_dir: z.string().default(''),
+  netns_mount: z.boolean().default(true),
 })
 export type ProbeSettings = z.infer<typeof probeSchema>
 

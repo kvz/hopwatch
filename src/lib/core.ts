@@ -61,6 +61,7 @@ interface CollectorOptions {
   logDir: string
   mtrBin: string
   namespaceDir: string
+  netnsMount: boolean
   packets: number
   renderOnly: boolean
   targets: MtrHistoryTarget[]
@@ -150,6 +151,7 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
     logDir: config.resolvedDataDir,
     mtrBin: config.probe.mtr_bin,
     namespaceDir: config.probe.namespace_dir,
+    netnsMount: config.probe.netns_mount,
     packets: config.probe.packets,
     renderOnly: false,
     targets: config.target.map(targetFromConfig),
@@ -2853,17 +2855,14 @@ export async function collectSnapshot(
     )
   }
 
+  const nsenterArgs: string[] = []
+  if (options.netnsMount) {
+    nsenterArgs.push(`--mount=${options.namespaceDir}/${target.netns}/mnt/ns`)
+  }
+  nsenterArgs.push(`--net=${options.namespaceDir}/${target.netns}/net/ns`)
   const [command, commandArgs] =
     target.probeMode === 'netns'
-      ? [
-          'nsenter',
-          [
-            `--mount=${options.namespaceDir}/${target.netns}/mnt/ns`,
-            `--net=${options.namespaceDir}/${target.netns}/net/ns`,
-            options.mtrBin,
-            ...mtrArgs,
-          ],
-        ]
+      ? ['nsenter', [...nsenterArgs, options.mtrBin, ...mtrArgs]]
       : [options.mtrBin, mtrArgs]
 
   const { stdout } = await runCommand(command, commandArgs)

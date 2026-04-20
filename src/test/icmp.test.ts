@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest'
 import {
   buildEchoRequest,
   buildSockaddrIn,
+  decodeSeq,
+  encodeSeq,
   ICMP_DEST_UNREACH,
   ICMP_ECHO_REPLY,
   ICMP_ECHO_REQUEST,
@@ -223,5 +225,36 @@ describe('parseReply', () => {
     expect(parsed?.kind).toBe('echo_reply')
     expect(parsed?.id).toBe(0x9876)
     expect(parsed?.seq).toBe(0x1111)
+  })
+})
+
+describe('encodeSeq / decodeSeq', () => {
+  test('roundtrips across cycles and TTLs', () => {
+    const maxHops = 30
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      for (let ttl = 1; ttl <= maxHops; ttl += 1) {
+        const seq = encodeSeq(cycle, ttl, maxHops)
+        expect(decodeSeq(seq, maxHops)).toEqual({ cycle, ttl })
+      }
+    }
+  })
+
+  test('adjacent cycles never collide on seq', () => {
+    // If a cycle-N reply arrives late, in the middle of cycle N+1, decodeSeq
+    // must still attribute it to cycle N — the stride ensures no overlap.
+    const maxHops = 30
+    const seqsCycle0 = new Set<number>()
+    for (let ttl = 1; ttl <= maxHops; ttl += 1) seqsCycle0.add(encodeSeq(0, ttl, maxHops))
+    for (let ttl = 1; ttl <= maxHops; ttl += 1) {
+      expect(seqsCycle0.has(encodeSeq(1, ttl, maxHops))).toBe(false)
+    }
+  })
+
+  test('stays within 16 bits for typical parameters', () => {
+    // ICMP seq is a 16-bit field. packets=10, maxHops=30 gives max seq
+    // 9 * 60 + 30 = 570 — well under 65535.
+    const maxHops = 30
+    const maxSeq = encodeSeq(9, maxHops, maxHops)
+    expect(maxSeq).toBeLessThan(0x10000)
   })
 })

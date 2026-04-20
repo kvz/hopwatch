@@ -85,6 +85,18 @@ export function ipv4FromBytes(b: Uint8Array): string {
   return `${b[0]}.${b[1]}.${b[2]}.${b[3]}`
 }
 
+// Sequence-number encoding we use for traceroute probes. Each cycle sweeps
+// all TTLs once; we stride by `maxHops * 2` so two adjacent cycles can't
+// collide on seq even if a late reply arrives after the next cycle started.
+export function encodeSeq(cycle: number, ttl: number, maxHops: number): number {
+  return cycle * maxHops * 2 + ttl
+}
+
+export function decodeSeq(seq: number, maxHops: number): { cycle: number; ttl: number } {
+  const stride = maxHops * 2
+  return { cycle: Math.floor(seq / stride), ttl: seq % stride }
+}
+
 // Parse the ICMP payload delivered by a raw-socket recvfrom. `buf` starts at
 // the outer IP header. `srcIpBytes` is the peer address populated in the
 // recvfrom sockaddr (4 bytes, network order). Returns null if the packet is

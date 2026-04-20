@@ -1,0 +1,204 @@
+import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
+
+export interface SnapshotAggregate {
+  averageDestinationLossPct: number | null
+  averageWorstHopLossPct: number | null
+  sampleCount: number
+}
+
+export interface DiagnosisAggregate {
+  destinationLossCount: number
+  healthyCount: number
+  intermediateOnlyCount: number
+  sampleCount: number
+  unknownCount: number
+}
+
+export interface SeverityBadge {
+  className: 'good' | 'warn' | 'bad' | 'unknown'
+  label: string
+  summary: string
+}
+
+export interface HopAggregate {
+  averageLossPct: number | null
+  downstreamLossCount: number
+  host: string
+  isolatedLossCount: number
+  latestHopIndex: number | null
+  sampleCount: number
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) {
+    return null
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+export function summarizeSnapshots(
+  snapshots: SnapshotSummary[],
+  now: number,
+  windowMs: number,
+): SnapshotAggregate {
+  const cutoff = now - windowMs
+  const inWindow = snapshots.filter((snapshot) => {
+    const timestamp = parseCollectedAt(snapshot.collectedAt)
+    return timestamp != null && timestamp >= cutoff
+  })
+
+  return {
+    averageDestinationLossPct: average(
+      inWindow.flatMap((snapshot) =>
+        snapshot.destinationLossPct == null ? [] : [snapshot.destinationLossPct],
+      ),
+    ),
+    averageWorstHopLossPct: average(
+      inWindow.flatMap((snapshot) =>
+        snapshot.worstHopLossPct == null ? [] : [snapshot.worstHopLossPct],
+      ),
+    ),
+    sampleCount: inWindow.length,
+  }
+}
+
+export function summarizeDiagnoses(
+  snapshots: SnapshotSummary[],
+  now: number,
+  windowMs: number,
+): DiagnosisAggregate {
+  const cutoff = now - windowMs
+  const aggregate: DiagnosisAggregate = {
+    destinationLossCount: 0,
+    healthyCount: 0,
+    intermediateOnlyCount: 0,
+    sampleCount: 0,
+    unknownCount: 0,
+  }
+
+  for (const snapshot of snapshots) {
+    const timestamp = parseCollectedAt(snapshot.collectedAt)
+    if (timestamp == null || timestamp < cutoff) {
+      continue
+    }
+
+    aggregate.sampleCount += 1
+    if (snapshot.diagnosis.kind === 'destination_loss') {
+      aggregate.destinationLossCount += 1
+    } else if (snapshot.diagnosis.kind === 'healthy') {
+      aggregate.healthyCount += 1
+    } else if (snapshot.diagnosis.kind === 'intermediate_only_loss') {
+      aggregate.intermediateOnlyCount += 1
+    } else {
+      aggregate.unknownCount += 1
+    }
+  }
+
+  return aggregate
+}
+
+export function getHistoricalSeverityBadge(
+  aggregate: SnapshotAggregate,
+  diagnosisAggregate: DiagnosisAggregate,
+): SeverityBadge {
+  if (diagnosisAggregate.sampleCount === 0) {
+    return {
+      className: 'unknown',
+      label: 'Unknown',
+      summary: 'No snapshots were collected in this window.',
+    }
+  }
+
+  if (diagnosisAggregate.destinationLossCount === 0) {
+    return {
+      className: 'good',
+      label: 'Stable',
+      summary: 'No destination loss was observed in the last 7 days.',
+    }
+  }
+
+  const destinationLossRate =
+    diagnosisAggregate.destinationLossCount / diagnosisAggregate.sampleCount
+  if (destinationLossRate >= 0.2 || (aggregate.averageDestinationLossPct ?? 0) >= 10) {
+    return {
+      className: 'bad',
+      label: 'Degraded',
+      summary:
+        'Destination loss is frequent enough in the last 7 days to treat this path as degraded.',
+    }
+  }
+
+  return {
+    className: 'warn',
+    label: 'Flaky',
+    summary:
+      'Destination loss is intermittent in the last 7 days, but not frequent enough to call the path degraded.',
+  }
+}
+
+export function summarizeHopIssues(
+  snapshots: SnapshotSummary[],
+  now: number,
+  windowMs: number,
+): HopAggregate[] {
+  const cutoff = now - windowMs
+  const hopMap = new Map<string, HopAggregate>()
+
+  for (const snapshot of snapshots) {
+    const timestamp = parseCollectedAt(snapshot.collectedAt)
+    if (timestamp == null || timestamp < cutoff) {
+      continue
+    }
+
+    const destinationLossPct = snapshot.destinationLossPct ?? 0
+    for (const hop of snapshot.hops.slice(0, -1)) {
+      if (hop.lossPct <= 0) {
+        continue
+      }
+
+      const existing = hopMap.get(hop.host) ?? {
+        averageLossPct: null,
+        downstreamLossCount: 0,
+        host: hop.host,
+        isolatedLossCount: 0,
+        latestHopIndex: null,
+        sampleCount: 0,
+      }
+
+      const totalLoss = (existing.averageLossPct ?? 0) * existing.sampleCount + hop.lossPct
+      existing.sampleCount += 1
+      existing.averageLossPct = totalLoss / existing.sampleCount
+      existing.latestHopIndex = hop.index
+      if (destinationLossPct > 0) {
+        existing.downstreamLossCount += 1
+      } else {
+        existing.isolatedLossCount += 1
+      }
+
+      hopMap.set(hop.host, existing)
+    }
+  }
+
+  return [...hopMap.values()].sort((left, right) => {
+    return (
+      right.downstreamLossCount - left.downstreamLossCount ||
+      (right.averageLossPct ?? 0) - (left.averageLossPct ?? 0) ||
+      right.sampleCount - left.sampleCount
+    )
+  })
+}
+
+export function shouldSurfaceHopIssueForRoot(hopIssue: HopAggregate): boolean {
+  if (hopIssue.host.trim() === '' || hopIssue.host === '???') {
+    return false
+  }
+
+  return (
+    hopIssue.downstreamLossCount >= 2 && hopIssue.downstreamLossCount >= hopIssue.isolatedLossCount
+  )
+}
+
+export function getRootSuspectHop(hopIssues: HopAggregate[]): HopAggregate | null {
+  return hopIssues.find(shouldSurfaceHopIssueForRoot) ?? null
+}

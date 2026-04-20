@@ -1,0 +1,628 @@
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import type { ProbeMode } from './config.ts'
+import { escapeHtml } from './layout.ts'
+import {
+  deriveHopRecordsFromRawEvents,
+  parseStoredRawSnapshot,
+  quantile,
+  resolveDestinationHopIndex,
+  type StoredRawSnapshot,
+} from './raw.ts'
+
+export interface HopRecord {
+  asn: string | null
+  avgMs: number | null
+  bestMs: number | null
+  host: string
+  index: number
+  lastMs: number | null
+  lossPct: number
+  sent: number | null
+  stdevMs: number | null
+  worstMs: number | null
+}
+
+export interface SnapshotDiagnosis {
+  kind: 'healthy' | 'intermediate_only_loss' | 'destination_loss' | 'unknown'
+  label: string
+  summary: string
+  suspectHopHost: string | null
+  suspectHopIndex: number | null
+}
+
+export interface SnapshotSummary {
+  collectedAt: string
+  destinationAvgRttMs: number | null
+  destinationLossPct: number | null
+  destinationRttMaxMs: number | null
+  destinationRttMinMs: number | null
+  destinationRttP50Ms: number | null
+  destinationRttP90Ms: number | null
+  destinationRttSamplesMs: number[] | null
+  diagnosis: SnapshotDiagnosis
+  fileName: string
+  host: string
+  hopCount: number
+  hops: HopRecord[]
+  probeMode: ProbeMode
+  rawText: string
+  target: string
+  worstHopLossPct: number | null
+}
+
+function parseNullableNumber(value: string | undefined): number | null {
+  if (value == null) {
+    return null
+  }
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function isProbeMode(value: unknown): value is ProbeMode {
+  return value === 'default' || value === 'netns'
+}
+
+function isDiagnosisKind(value: unknown): value is SnapshotDiagnosis['kind'] {
+  return (
+    value === 'healthy' ||
+    value === 'intermediate_only_loss' ||
+    value === 'destination_loss' ||
+    value === 'unknown'
+  )
+}
+
+function isNullableNumber(value: unknown): value is number | null {
+  return value == null || typeof value === 'number'
+}
+
+function formatReportCollectedAt(collectedAt: string): string {
+  const match = collectedAt.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
+  if (!match) {
+    return collectedAt
+  }
+
+  const [, year, month, day, hour, minute, second] = match
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}Z`
+}
+
+function padReportCell(value: string, width: number): string {
+  return value.padStart(width, ' ')
+}
+
+function formatReportNumber(value: number | null, precision = 1): string {
+  return value == null ? '--' : value.toFixed(precision)
+}
+
+export function renderSnapshotRawText(
+  snapshot: Pick<
+    StoredRawSnapshot,
+    'collectedAt' | 'host' | 'label' | 'observer' | 'probeMode' | 'target' | 'rawEvents'
+  >,
+  hops: HopRecord[],
+): string {
+  const startLine = `Start: ${formatReportCollectedAt(snapshot.collectedAt)}`
+  const hostColumn = `HOST: ${snapshot.observer}`.padEnd(42, ' ')
+  const headerLine = `${hostColumn}  Loss%   Snt   Last    Avg   Best   Wrst  StDev`
+  const hopLines = hops.map((hop) => {
+    const index = `${String(hop.index).padStart(3, ' ')}.|--`
+    const hostLabel = hop.host.length > 36 ? `${hop.host.slice(0, 35)}…` : hop.host
+    const hostCell = hostLabel.padEnd(36, ' ')
+    const lossCell = padReportCell(`${hop.lossPct.toFixed(1)}%`, 6)
+    const sentCell = padReportCell(hop.sent == null ? '--' : String(hop.sent), 5)
+    const lastCell = padReportCell(formatReportNumber(hop.lastMs), 6)
+    const avgCell = padReportCell(formatReportNumber(hop.avgMs), 6)
+    const bestCell = padReportCell(formatReportNumber(hop.bestMs), 6)
+    const worstCell = padReportCell(formatReportNumber(hop.worstMs), 6)
+    const stdevCell = padReportCell(formatReportNumber(hop.stdevMs, 1), 6)
+    return `${index} ${hostCell}  ${lossCell}  ${sentCell}  ${lastCell}  ${avgCell}  ${bestCell}  ${worstCell}  ${stdevCell}`
+  })
+  return [
+    `# observer=${snapshot.observer}`,
+    `# target=${snapshot.target}`,
+    `# host=${snapshot.host}`,
+    `# label=${snapshot.label}`,
+    `# probe_mode=${snapshot.probeMode}`,
+    `# collected_at=${snapshot.collectedAt}`,
+    '',
+    startLine,
+    headerLine,
+    ...hopLines,
+    '',
+  ].join('\n')
+}
+
+function getDestinationRttSamplesMs(
+  rawSnapshot: StoredRawSnapshot,
+  destinationHopIndex: number | null,
+): number[] {
+  if (destinationHopIndex == null) {
+    return []
+  }
+
+  const samples: number[] = []
+  for (const event of rawSnapshot.rawEvents) {
+    if (event.kind !== 'reply' || event.hopIndex !== destinationHopIndex) {
+      continue
+    }
+
+    samples.push(event.rttUs / 1000)
+  }
+
+  return samples
+}
+
+export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
+  const parsed = JSON.parse(contents) as unknown
+  if (
+    typeof parsed === 'object' &&
+    parsed != null &&
+    'schemaVersion' in parsed &&
+    parsed.schemaVersion === 2
+  ) {
+    const rawSnapshot = parseStoredRawSnapshot(contents)
+    const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
+    const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
+    const destinationHop =
+      destinationHopIndex == null
+        ? null
+        : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
+    const destinationAvgRttMs = destinationHop?.avgMs ?? null
+    const destinationLossPct = destinationHop?.lossPct ?? null
+    const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
+    const destinationRttSamplesMs = getDestinationRttSamplesMs(
+      rawSnapshot,
+      destinationHopIndex,
+    ).sort((left, right) => left - right)
+    const destinationRttMinMs =
+      destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
+    const destinationRttMaxMs =
+      destinationRttSamplesMs.length === 0
+        ? null
+        : destinationRttSamplesMs[destinationRttSamplesMs.length - 1]
+    const destinationRttP50Ms = quantile(destinationRttSamplesMs, 0.5)
+    const destinationRttP90Ms = quantile(destinationRttSamplesMs, 0.9)
+
+    return {
+      collectedAt: rawSnapshot.collectedAt,
+      destinationAvgRttMs,
+      destinationLossPct,
+      destinationRttMaxMs,
+      destinationRttMinMs,
+      destinationRttP50Ms,
+      destinationRttP90Ms,
+      destinationRttSamplesMs:
+        destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
+      diagnosis: diagnoseSnapshot(hops, destinationLossPct),
+      fileName: rawSnapshot.fileName,
+      host: rawSnapshot.host,
+      hopCount: hops.length,
+      hops,
+      probeMode: rawSnapshot.probeMode,
+      rawText: renderSnapshotRawText(rawSnapshot, hops),
+      target: rawSnapshot.label,
+      worstHopLossPct,
+    }
+  }
+
+  if (typeof parsed !== 'object' || parsed == null) {
+    throw new Error('Snapshot summary JSON must be an object')
+  }
+
+  const candidate = parsed as Record<string, unknown>
+  if (
+    typeof candidate.collectedAt !== 'string' ||
+    !isNullableNumber(candidate.destinationLossPct) ||
+    typeof candidate.fileName !== 'string' ||
+    typeof candidate.host !== 'string' ||
+    typeof candidate.hopCount !== 'number' ||
+    !Array.isArray(candidate.hops) ||
+    !isProbeMode(candidate.probeMode) ||
+    typeof candidate.rawText !== 'string' ||
+    typeof candidate.target !== 'string' ||
+    !isNullableNumber(candidate.worstHopLossPct)
+  ) {
+    throw new Error('Snapshot summary JSON has invalid top-level fields')
+  }
+
+  const diagnosisCandidate = candidate.diagnosis
+  if (typeof diagnosisCandidate !== 'object' || diagnosisCandidate == null) {
+    throw new Error('Snapshot summary JSON is missing diagnosis')
+  }
+
+  const diagnosis = diagnosisCandidate as Record<string, unknown>
+  if (
+    !isDiagnosisKind(diagnosis.kind) ||
+    typeof diagnosis.label !== 'string' ||
+    typeof diagnosis.summary !== 'string' ||
+    !(diagnosis.suspectHopHost == null || typeof diagnosis.suspectHopHost === 'string') ||
+    !(diagnosis.suspectHopIndex == null || typeof diagnosis.suspectHopIndex === 'number')
+  ) {
+    throw new Error('Snapshot summary JSON has invalid diagnosis')
+  }
+
+  const hops = candidate.hops.map((hop): HopRecord => {
+    if (typeof hop !== 'object' || hop == null) {
+      throw new Error('Snapshot summary JSON has invalid hop records')
+    }
+
+    const hopCandidate = hop as Record<string, unknown>
+    if (
+      !(hopCandidate.asn == null || typeof hopCandidate.asn === 'string') ||
+      !isNullableNumber(hopCandidate.avgMs) ||
+      !isNullableNumber(hopCandidate.bestMs) ||
+      typeof hopCandidate.host !== 'string' ||
+      typeof hopCandidate.index !== 'number' ||
+      !isNullableNumber(hopCandidate.lastMs) ||
+      typeof hopCandidate.lossPct !== 'number' ||
+      !isNullableNumber(hopCandidate.sent) ||
+      !isNullableNumber(hopCandidate.stdevMs) ||
+      !isNullableNumber(hopCandidate.worstMs)
+    ) {
+      throw new Error('Snapshot summary JSON has invalid hop fields')
+    }
+
+    return {
+      asn: hopCandidate.asn ?? null,
+      avgMs: hopCandidate.avgMs ?? null,
+      bestMs: hopCandidate.bestMs ?? null,
+      host: hopCandidate.host,
+      index: hopCandidate.index,
+      lastMs: hopCandidate.lastMs ?? null,
+      lossPct: hopCandidate.lossPct,
+      sent: hopCandidate.sent ?? null,
+      stdevMs: hopCandidate.stdevMs ?? null,
+      worstMs: hopCandidate.worstMs ?? null,
+    }
+  })
+
+  return {
+    collectedAt: candidate.collectedAt,
+    destinationAvgRttMs: (() => {
+      const destinationHop = hops.at(-1) ?? null
+      return destinationHop?.avgMs ?? null
+    })(),
+    destinationLossPct: candidate.destinationLossPct,
+    destinationRttMaxMs: (() => {
+      const destinationHop = hops.at(-1) ?? null
+      return destinationHop?.worstMs ?? null
+    })(),
+    destinationRttMinMs: (() => {
+      const destinationHop = hops.at(-1) ?? null
+      return destinationHop?.bestMs ?? null
+    })(),
+    destinationRttP50Ms: null,
+    destinationRttP90Ms: null,
+    destinationRttSamplesMs: null,
+    diagnosis: {
+      kind: diagnosis.kind,
+      label: diagnosis.label,
+      summary: diagnosis.summary,
+      suspectHopHost: diagnosis.suspectHopHost ?? null,
+      suspectHopIndex: diagnosis.suspectHopIndex ?? null,
+    },
+    fileName: candidate.fileName,
+    host: candidate.host,
+    hopCount: candidate.hopCount,
+    hops,
+    probeMode: candidate.probeMode,
+    rawText: candidate.rawText,
+    target: candidate.target,
+    worstHopLossPct: candidate.worstHopLossPct,
+  }
+}
+
+export function parseHopLine(line: string): HopRecord | null {
+  const hopPrefixMatch = line.match(/^\s*(\d+)\.(?:\|--)?\s+/)
+  if (!hopPrefixMatch) {
+    return null
+  }
+
+  const hopIndex = Number(hopPrefixMatch[1])
+  const remaining = line.slice(hopPrefixMatch[0].length).trim()
+  const tokens = remaining.split(/\s+/).filter(Boolean)
+  const lossIndex = tokens.findIndex((token) => /^\d+(?:\.\d+)?%$/.test(token))
+  if (lossIndex <= 0) {
+    return null
+  }
+
+  const hostTokens = tokens.slice(0, lossIndex)
+  const asn = hostTokens[0]?.startsWith('AS') ? (hostTokens.shift() ?? null) : null
+  const host = hostTokens.join(' ').trim()
+  if (host === '') {
+    return null
+  }
+
+  return {
+    asn,
+    avgMs: parseNullableNumber(tokens[lossIndex + 3]),
+    bestMs: parseNullableNumber(tokens[lossIndex + 4]),
+    host,
+    index: hopIndex,
+    lastMs: parseNullableNumber(tokens[lossIndex + 2]),
+    lossPct: Number(tokens[lossIndex].replace('%', '')),
+    sent: parseNullableNumber(tokens[lossIndex + 1]),
+    stdevMs: parseNullableNumber(tokens[lossIndex + 6]),
+    worstMs: parseNullableNumber(tokens[lossIndex + 5]),
+  }
+}
+
+export function diagnoseSnapshot(
+  hops: HopRecord[],
+  destinationLossPct: number | null,
+): SnapshotDiagnosis {
+  if (hops.length === 0 || destinationLossPct == null) {
+    return {
+      kind: 'unknown',
+      label: 'Unknown',
+      summary: 'No hop data was parsed from this snapshot.',
+      suspectHopHost: null,
+      suspectHopIndex: null,
+    }
+  }
+
+  const intermediateHops = hops.slice(0, -1)
+  const lossyIntermediateHops = intermediateHops.filter((hop) => hop.lossPct > 0)
+  if (destinationLossPct === 0) {
+    if (lossyIntermediateHops.length === 0) {
+      return {
+        kind: 'healthy',
+        label: 'Healthy',
+        summary: 'No packet loss reached any hop in this snapshot.',
+        suspectHopHost: null,
+        suspectHopIndex: null,
+      }
+    }
+
+    const topHop = [...lossyIntermediateHops].sort((left, right) => right.lossPct - left.lossPct)[0]
+    return {
+      kind: 'intermediate_only_loss',
+      label: 'Intermediate-Only Loss',
+      summary: `Intermediate loss appears at hop ${topHop.index} (${topHop.host}) but does not reach the destination, which usually points to router reply rate limiting rather than forwarding loss.`,
+      suspectHopHost: topHop.host,
+      suspectHopIndex: topHop.index,
+    }
+  }
+
+  const suspectHop =
+    intermediateHops.find((hop, hopIndex) => {
+      if (hop.lossPct <= 0) {
+        return false
+      }
+
+      return hops.slice(hopIndex + 1).every((nextHop) => nextHop.lossPct > 0)
+    }) ??
+    lossyIntermediateHops[0] ??
+    null
+
+  if (suspectHop) {
+    return {
+      kind: 'destination_loss',
+      label: 'Destination Loss',
+      summary: `Destination loss is ${destinationLossPct.toFixed(1)}%. Loss begins around hop ${suspectHop.index} (${suspectHop.host}) and continues to the final hop.`,
+      suspectHopHost: suspectHop.host,
+      suspectHopIndex: suspectHop.index,
+    }
+  }
+
+  return {
+    kind: 'destination_loss',
+    label: 'Destination Loss',
+    summary: `Destination loss is ${destinationLossPct.toFixed(1)}%. No single intermediate hop stood out as a clear starting point in this snapshot.`,
+    suspectHopHost: null,
+    suspectHopIndex: null,
+  }
+}
+
+export function parseSnapshotSummary(fileName: string, rawText: string): SnapshotSummary {
+  const targetMatch = rawText.match(/^# target=(.+)$/m)
+  const hostMatch = rawText.match(/^# host=(.+)$/m)
+  const labelMatch = rawText.match(/^# label=(.+)$/m)
+  const probeModeMatch = rawText.match(/^# probe_mode=(.+)$/m)
+  const collectedAtMatch = rawText.match(/^# collected_at=(.+)$/m)
+  const hops = rawText.split('\n').flatMap((line) => {
+    const hop = parseHopLine(line)
+    if (!hop) {
+      return []
+    }
+
+    return [hop]
+  })
+  const destinationHop = hops.at(-1) ?? null
+  const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
+  const destinationLossPct = destinationHop?.lossPct ?? null
+
+  return {
+    collectedAt: collectedAtMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
+    destinationAvgRttMs: destinationHop?.avgMs ?? null,
+    destinationLossPct,
+    destinationRttMaxMs: destinationHop?.worstMs ?? null,
+    destinationRttMinMs: destinationHop?.bestMs ?? null,
+    destinationRttP50Ms: null,
+    destinationRttP90Ms: null,
+    destinationRttSamplesMs: null,
+    diagnosis: diagnoseSnapshot(hops, destinationLossPct),
+    fileName,
+    host: hostMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
+    hopCount: hops.length,
+    hops,
+    probeMode: probeModeMatch?.[1] === 'netns' ? 'netns' : 'default',
+    rawText,
+    target: labelMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
+    worstHopLossPct,
+  }
+}
+
+export async function readSnapshotSummary(
+  targetDir: string,
+  fileName: string,
+): Promise<SnapshotSummary> {
+  const jsonFile = path.join(targetDir, fileName)
+  try {
+    const jsonContents = await readFile(jsonFile, 'utf8')
+    return parseStoredSnapshotSummary(jsonContents)
+  } catch {
+    const rawText = await readFile(path.join(targetDir, fileName), 'utf8')
+    return parseSnapshotSummary(fileName, rawText)
+  }
+}
+
+export function formatLoss(lossPct: number | null): string {
+  if (lossPct == null) {
+    return 'n/a'
+  }
+
+  return `${lossPct.toFixed(1)}%`
+}
+
+const UNKNOWN_HOST_TITLE =
+  "Unknown hop identity. The router at this TTL did not send an ICMP Time Exceeded reply that named itself (commonly because it drops or rate-limits ICMP, because reverse DNS has no PTR record, or because it's an anonymizing middlebox), so neither a hostname nor an IP could be recovered."
+
+export function renderUnknownHopHost(): string {
+  return `<dfn title="${UNKNOWN_HOST_TITLE}">???</dfn>`
+}
+
+export function renderHopHostHtml(host: string): string {
+  if (host === '???') {
+    return renderUnknownHopHost()
+  }
+
+  return `<code>${escapeHtml(host)}</code>`
+}
+
+export function renderDiagnosisSummary(summary: string, hops: HopRecord[]): string {
+  let rendered = escapeHtml(summary)
+  const uniqueHosts = [
+    ...new Set(hops.map((hop) => hop.host).filter((host) => host.trim() !== '' && host !== '???')),
+  ].sort((left, right) => right.length - left.length)
+
+  for (const host of uniqueHosts) {
+    const escapedHost = escapeHtml(host)
+    rendered = rendered.replaceAll(escapedHost, `<code>${escapedHost}</code>`)
+  }
+
+  rendered = rendered.replaceAll('???', renderUnknownHopHost())
+
+  return rendered
+}
+
+function getSeverityScaleClass(
+  value: number | null,
+  {
+    redAt = 50,
+  }: {
+    redAt?: number
+  } = {},
+): string {
+  if (value == null) {
+    return 'unknown'
+  }
+
+  const normalized = Math.max(0, Math.min(value / redAt, 1))
+  if (normalized === 0) {
+    return 'scale-0'
+  }
+
+  if (normalized < 0.1) {
+    return 'scale-1'
+  }
+
+  if (normalized < 0.2) {
+    return 'scale-2'
+  }
+
+  if (normalized < 0.4) {
+    return 'scale-3'
+  }
+
+  if (normalized < 0.7) {
+    return 'scale-4'
+  }
+
+  return 'scale-5'
+}
+
+export function getLossClass(lossPct: number | null): string {
+  return getSeverityScaleClass(lossPct, {
+    redAt: 50,
+  })
+}
+
+export function getLossOccurrenceClass(lossCount: number, sampleCount: number): string {
+  if (sampleCount <= 0) {
+    return 'unknown'
+  }
+
+  return getSeverityScaleClass((lossCount / sampleCount) * 100, {
+    redAt: 50,
+  })
+}
+
+export function getDiagnosisClass(diagnosis: SnapshotDiagnosis): string {
+  if (diagnosis.kind === 'destination_loss') {
+    return 'bad'
+  }
+
+  if (diagnosis.kind === 'intermediate_only_loss') {
+    return 'warn'
+  }
+
+  if (diagnosis.kind === 'healthy') {
+    return 'good'
+  }
+
+  return 'unknown'
+}
+
+export function parseCollectedAt(value: string): number | null {
+  const match = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
+  if (!match) {
+    return null
+  }
+
+  const [, year, month, day, hours, minutes, seconds] = match
+  return Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hours),
+    Number(minutes),
+    Number(seconds),
+  )
+}
+
+export function formatAbsoluteCollectedAt(value: string): string {
+  const timestamp = parseCollectedAt(value)
+  if (timestamp == null) {
+    return value
+  }
+
+  return new Date(timestamp).toISOString().replace('.000Z', ' UTC').replace('T', ' ')
+}
+
+export function formatRelativeCollectedAt(value: string, now: number): string {
+  const timestamp = parseCollectedAt(value)
+  if (timestamp == null) {
+    return value
+  }
+
+  const diffMs = Math.max(0, now - timestamp)
+  const diffSeconds = Math.max(1, Math.round(diffMs / 1000))
+  if (diffSeconds < 60) {
+    return `${diffSeconds}s ago`
+  }
+
+  const diffMinutes = Math.round(diffSeconds / 60)
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`
+  }
+
+  const diffHours = Math.round(diffMinutes / 60)
+  if (diffHours < 24) {
+    return `${diffHours}h ago`
+  }
+
+  const diffDays = Math.round(diffHours / 24)
+  return `${diffDays}d ago`
+}

@@ -243,6 +243,17 @@ th {
   padding-top: 0;
   white-space: nowrap;
 }
+th.is-sortable { cursor: pointer; user-select: none; }
+th.is-sortable:hover { color: var(--text); }
+th.is-sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+th.is-sortable::after {
+  content: '↕';
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.35;
+}
+th.is-sortable[aria-sort="ascending"]::after { content: '▲'; opacity: 1; color: var(--accent); }
+th.is-sortable[aria-sort="descending"]::after { content: '▼'; opacity: 1; color: var(--accent); }
 
 code, pre { font-family: ui-monospace, SFMono-Regular, monospace; }
 pre {

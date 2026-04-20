@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
 import type { ChartDefinition } from '../lib/chart.ts'
-import { renderChartMiniSvg } from '../lib/chart.ts'
 import { renderChartSvg } from '../lib/chart-svg.ts'
 
 interface ChartCardProps {
@@ -24,7 +23,7 @@ export function ChartCard({ chart, now, compact = false, signature }: ChartCardP
   const title = `${chart.label} latency and loss`
 
   if (compact) {
-    const svg = renderChartMiniSvg(chart.points, { height, now, rangeMs, title, width })
+    const svg = renderChartSvg(chart.points, { height, mini: true, now, rangeMs, title, width })
     // biome-ignore lint/security/noDangerouslySetInnerHtml: server-rendered SVG from trusted chart data
     return <span dangerouslySetInnerHTML={{ __html: svg }} />
   }

@@ -17,6 +17,10 @@ export function renderChartSvg(
   points: ChartPoint[],
   options: {
     height: number
+    // Thumbnail mode: strips axes, grid, legend, stats, signature, arrows, and
+    // tick labels. Same smoke bands + loss-colored median markers as the full
+    // chart, just at a smaller scale suitable for target-list thumbnails.
+    mini?: boolean
     now: number
     rangeMs: number
     signature?: string
@@ -27,7 +31,10 @@ export function renderChartSvg(
 ): string {
   const width = options.width
   const height = options.height
-  const padding = { bottom: 82, left: 66, right: 31, top: 13 }
+  const mini = options.mini === true
+  const padding = mini
+    ? { bottom: 1, left: 1, right: 1, top: 1 }
+    : { bottom: 82, left: 66, right: 31, top: 13 }
   const chartWidth = width - padding.left - padding.right
   const chartHeight = height - padding.top - padding.bottom
   // SmokePing's findmax uses the `median` DS across time windows; match that.
@@ -194,7 +201,6 @@ export function renderChartSvg(
   const medianMarkers: string[] = []
   const plotLeftMarker = padding.left
   const plotRightMarker = width - padding.right
-  const plotTop = Math.round(padding.top)
   const plotBottom = Math.round(padding.top + chartHeight)
   for (const point of points) {
     const leftMs = leftEdgeMsFor.get(point.timestamp) ?? point.timestamp - 2 * barHalfMs
@@ -230,6 +236,19 @@ export function renderChartSvg(
     }
   }
   const medianMarkersSvg = medianMarkers.join('')
+
+  if (mini) {
+    // No axes, grid, ticks, legend, stats, signature or arrows — just the
+    // white rect, smoke bands, loss-colored medians, and a thin outline so
+    // the thumbnail can read "is this target healthy" at a glance.
+    const miniBorder = `<rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" fill="none" stroke="#d9ddcf" stroke-width="1" shape-rendering="crispEdges" />`
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.title)}" class="chart-svg chart-svg--mini">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />
+  ${smokeBandsSvg}
+  ${medianMarkersSvg}
+  ${miniBorder}
+</svg>`
+  }
 
   const yTicks: number[] = []
   for (let value = yMinMs; value <= yMaxMs + 1e-9; value += yStep) {

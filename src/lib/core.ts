@@ -10,7 +10,6 @@ export {
   getPointsFromRollupBuckets,
   getPointsFromSnapshots,
   loadChartDefinitions,
-  renderChartMiniSvg,
 } from './chart.ts'
 export { renderChartSvg } from './chart-svg.ts'
 export {

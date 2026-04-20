@@ -1,8 +1,26 @@
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
+// @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
+// TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
+// value is always a string and Bun.Transpiler handles the rest.
+import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
 import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import type { Logger } from './logger.ts'
+
+// Lazily transpile the sortable-tables client to browser JS on first request.
+// Kept lazy so vitest (running under Node without globalThis.Bun) can import
+// this module for the scheduler tests without blowing up at load time.
+let sortableTablesJsCache: string | null = null
+function getSortableTablesJs(): string {
+  if (sortableTablesJsCache == null) {
+    sortableTablesJsCache = new Bun.Transpiler({
+      loader: 'ts',
+      target: 'browser',
+    }).transformSync(sortableTablesSource)
+  }
+  return sortableTablesJsCache
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -171,6 +189,15 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       const url = new URL(request.url)
       if (url.pathname === '/healthz') {
         return new Response('ok', { status: 200 })
+      }
+
+      if (url.pathname === '/assets/sortable-tables.js') {
+        return new Response(getSortableTablesJs(), {
+          headers: {
+            'cache-control': 'public, max-age=3600',
+            'content-type': 'application/javascript; charset=utf-8',
+          },
+        })
       }
 
       if (url.pathname === '/' || url.pathname === '/index.html') {

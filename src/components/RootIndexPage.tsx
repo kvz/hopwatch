@@ -20,6 +20,13 @@ import { ChartCard } from './ChartCard.tsx'
 import { Layout } from './Layout.tsx'
 import { TopNav } from './TopNav.tsx'
 
+const SEVERITY_SORT_RANK: Record<SeverityBadge['className'], number> = {
+  bad: 3,
+  warn: 2,
+  unknown: 1,
+  good: 0,
+}
+
 export interface TargetSummaryRow {
   aggregate: SnapshotAggregate
   charts: ChartDefinition[]
@@ -61,16 +68,16 @@ export function RootIndexPage({
       <section className="panel">
         <h2>Targets</h2>
         <div className="table-wrap">
-          <table>
+          <table data-sortable>
             <thead>
               <tr>
-                <th>Target</th>
-                <th>Status now</th>
-                <th>Hops now</th>
-                <th>Severity (7d)</th>
-                <th>Destination loss (7d avg)</th>
-                <th>Destination-loss snapshots (7d)</th>
-                <th>Most suspicious hop (7d)</th>
+                <th data-sort="text">Target</th>
+                <th data-sort="text">Status now</th>
+                <th data-sort="number">Hops now</th>
+                <th data-sort="number">Severity (7d)</th>
+                <th data-sort="loss">Destination loss (7d avg)</th>
+                <th data-sort="number">Destination-loss snapshots (7d)</th>
+                <th data-sort="text">Most suspicious hop (7d)</th>
                 <th>
                   Latency/Loss
                   <br />
@@ -94,12 +101,12 @@ export function RootIndexPage({
                   const absoluteCollectedAt = formatAbsoluteCollectedAt(summary.collectedAt)
                   return (
                     <tr key={targetSlug}>
-                      <td>
+                      <td data-sort-value={summary.target}>
                         <a href={`./${encodeURIComponent(targetSlug)}/`}>{summary.target}</a>
                         <br />
                         <code>{summary.host}</code>
                       </td>
-                      <td>
+                      <td data-sort-value={summary.diagnosis.label}>
                         <span className={`loss ${getDiagnosisClass(summary.diagnosis)}`}>
                           {summary.diagnosis.label}
                         </span>{' '}
@@ -108,19 +115,19 @@ export function RootIndexPage({
                         </span>
                       </td>
                       <td>{summary.hopCount}</td>
-                      <td>
+                      <td data-sort-value={SEVERITY_SORT_RANK[historicalSeverity.className]}>
                         <span className={`loss ${historicalSeverity.className}`}>
                           {historicalSeverity.label}
                         </span>
                       </td>
-                      <td>
+                      <td data-sort-value={aggregate.averageDestinationLossPct ?? ''}>
                         <span className={`loss ${destinationLossClass}`}>
                           {formatLoss(aggregate.averageDestinationLossPct)}
                         </span>
                         <br />
                         <span>{aggregate.sampleCount} samples</span>
                       </td>
-                      <td>
+                      <td data-sort-value={diagnosisAggregate.destinationLossCount}>
                         <span
                           className={`loss ${getLossOccurrenceClass(diagnosisAggregate.destinationLossCount, diagnosisAggregate.sampleCount)}`}
                         >
@@ -128,7 +135,7 @@ export function RootIndexPage({
                         </span>
                         <span> / {diagnosisAggregate.sampleCount}</span>
                       </td>
-                      <td>
+                      <td data-sort-value={suspectHop?.host ?? ''}>
                         {suspectHop != null ? (
                           <>
                             <code>{suspectHop.host}</code>

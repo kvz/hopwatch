@@ -149,14 +149,14 @@ export function TargetIndexPage({
       <section className="panel" id="problematic-hops">
         <h2>Recurring problematic hops (7d)</h2>
         <div className="table-wrap">
-          <table>
+          <table data-sortable>
             <thead>
               <tr>
-                <th>Hop</th>
-                <th>Latest index</th>
-                <th>Average loss when seen</th>
-                <th>Snapshots with downstream loss</th>
-                <th>Snapshots with isolated loss</th>
+                <th data-sort="text">Hop</th>
+                <th data-sort="number">Latest index</th>
+                <th data-sort="loss">Average loss when seen</th>
+                <th data-sort="number">Snapshots with downstream loss</th>
+                <th data-sort="number">Snapshots with isolated loss</th>
               </tr>
             </thead>
             <tbody>
@@ -189,16 +189,16 @@ export function TargetIndexPage({
       <section className="panel" id="hop-path">
         <h2>Latest hop path</h2>
         <div className="table-wrap">
-          <table>
+          <table data-sortable>
             <thead>
               <tr>
-                <th>Hop</th>
-                <th>Host</th>
-                <th>Loss</th>
-                <th>Sent</th>
-                <th>Average RTT</th>
-                <th>Best RTT</th>
-                <th>Worst RTT</th>
+                <th data-sort="number">Hop</th>
+                <th data-sort="text">Host</th>
+                <th data-sort="loss">Loss</th>
+                <th data-sort="number">Sent</th>
+                <th data-sort="number">Average RTT</th>
+                <th data-sort="number">Best RTT</th>
+                <th data-sort="number">Worst RTT</th>
               </tr>
             </thead>
             <tbody>
@@ -233,14 +233,14 @@ export function TargetIndexPage({
       <section className="panel" id="snapshots">
         <h2>Recent snapshots</h2>
         <div className="table-wrap">
-          <table>
+          <table data-sortable>
             <thead>
               <tr>
-                <th>Collected at</th>
-                <th>Destination loss</th>
-                <th>Worst hop loss</th>
-                <th>Diagnosis</th>
-                <th>Hops</th>
+                <th data-sort="text">Collected at</th>
+                <th data-sort="loss">Destination loss</th>
+                <th data-sort="loss">Worst hop loss</th>
+                <th data-sort="text">Diagnosis</th>
+                <th data-sort="number">Hops</th>
                 <th>Artifacts</th>
               </tr>
             </thead>
@@ -249,7 +249,7 @@ export function TargetIndexPage({
                 const absoluteCollectedAt = formatAbsoluteCollectedAt(snapshot.collectedAt)
                 return (
                   <tr key={snapshot.collectedAt}>
-                    <td>
+                    <td data-sort-value={snapshot.collectedAt}>
                       <time dateTime={snapshot.collectedAt} title={snapshot.collectedAt}>
                         {formatRelativeCollectedAt(snapshot.collectedAt, now)}
                       </time>

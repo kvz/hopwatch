@@ -1,0 +1,19 @@
+FROM oven/bun:1.3-debian
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    fonts-dejavu-core \
+    mtr-tiny \
+    rrdtool \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile || bun install
+
+COPY . .
+
+ENV HOPWATCH_LOG_LEVEL=info
+CMD ["bun", "run", "check"]

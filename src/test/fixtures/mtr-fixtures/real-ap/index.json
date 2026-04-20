@@ -1,0 +1,54 @@
+{
+  "rangeHours": 3,
+  "fixtures": [
+    {
+      "anchorTs": 1776511583,
+      "name": "AWS__AP-Southeast-1",
+      "pointsPath": "points/AWS__AP-Southeast-1.points.json",
+      "referencePngPath": "images/AWS/AP-Southeast-1_last_10800.png",
+      "upperLimitMs": 2.112
+    },
+    {
+      "anchorTs": 1776511583,
+      "name": "AWS__EU-West-1",
+      "pointsPath": "points/AWS__EU-West-1.points.json",
+      "referencePngPath": "images/AWS/EU-West-1_last_10800.png",
+      "upperLimitMs": 239.568
+    },
+    {
+      "anchorTs": 1776511583,
+      "name": "AWS__US-East-1",
+      "pointsPath": "points/AWS__US-East-1.points.json",
+      "referencePngPath": "images/AWS/US-East-1_last_10800.png",
+      "upperLimitMs": 316.8
+    },
+    {
+      "anchorTs": 1776511583,
+      "name": "Cloudflare__r2-EU",
+      "pointsPath": "points/Cloudflare__r2-EU.points.json",
+      "referencePngPath": "images/Cloudflare/r2-EU_last_10800.png",
+      "upperLimitMs": 1.5340799999999999
+    },
+    {
+      "anchorTs": 1776511583,
+      "name": "General__Cloudflare",
+      "pointsPath": "points/General__Cloudflare.points.json",
+      "referencePngPath": "images/General/Cloudflare_last_10800.png",
+      "upperLimitMs": 1.5992004
+    },
+    {
+      "anchorTs": 1776511583,
+      "name": "General__Google",
+      "pointsPath": "points/General__Google.points.json",
+      "referencePngPath": "images/General/Google_last_10800.png",
+      "upperLimitMs": 2.28
+    },
+    {
+      "anchorTs": 1776511583,
+      "name": "Hetzner__S3-fsn1",
+      "pointsPath": "points/Hetzner__S3-fsn1.points.json",
+      "referencePngPath": "images/Hetzner/S3-fsn1_last_10800.png",
+      "upperLimitMs": 192
+    }
+  ]
+}

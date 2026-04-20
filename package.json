@@ -39,7 +39,7 @@
     "test:watch": "vitest",
     "test:docker": "./scripts/docker-test.sh",
     "typecheck": "tsc --noEmit",
-    "build": "bun run scripts/build-binary.ts"
+    "build": "mkdir -p bin-build && bun build ./src/bin/hopwatch.ts --compile --outfile ./bin-build/hopwatch-local"
   },
   "dependencies": {
     "clipanion": "4.0.0-rc.4",

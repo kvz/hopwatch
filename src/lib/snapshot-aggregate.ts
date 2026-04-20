@@ -135,9 +135,14 @@ export function getHistoricalSeverityBadge(
 
 export function summarizeHopIssues(snapshotsInWindow: SnapshotSummary[]): HopAggregate[] {
   const hopMap = new Map<string, HopAggregate>()
+  // Track the most-recent snapshot that observed each host so `latestHopIndex`
+  // reflects the newest routing, independent of whether the caller hands us
+  // snapshots oldest- or newest-first.
+  const latestTsByHost = new Map<string, number>()
 
   for (const snapshot of snapshotsInWindow) {
     const destinationLossPct = snapshot.destinationLossPct ?? 0
+    const snapshotTs = parseCollectedAt(snapshot.collectedAt) ?? 0
     for (const hop of snapshot.hops.slice(0, -1)) {
       if (hop.lossPct <= 0) {
         continue
@@ -155,7 +160,11 @@ export function summarizeHopIssues(snapshotsInWindow: SnapshotSummary[]): HopAgg
       const totalLoss = (existing.averageLossPct ?? 0) * existing.sampleCount + hop.lossPct
       existing.sampleCount += 1
       existing.averageLossPct = totalLoss / existing.sampleCount
-      existing.latestHopIndex = hop.index
+      const previousLatestTs = latestTsByHost.get(hop.host) ?? Number.NEGATIVE_INFINITY
+      if (snapshotTs >= previousLatestTs) {
+        existing.latestHopIndex = hop.index
+        latestTsByHost.set(hop.host, snapshotTs)
+      }
       if (destinationLossPct > 0) {
         existing.downstreamLossCount += 1
       } else {

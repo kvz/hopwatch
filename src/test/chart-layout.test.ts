@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { ChartPoint } from '../lib/chart.ts'
 import {
+  buildLossLegendLabels,
   computeChartStats,
   computeLeftEdgeMsByTimestamp,
   formatYLabel,
@@ -53,8 +54,25 @@ describe('lossColorFor', () => {
   })
 
   test('picks mid bucket for intermediate loss', () => {
-    const bucket = SMOKEPING_LOSS_BUCKETS.find((b) => b.legendLabel === '4-5')
-    expect(lossColorFor(20)).toBe(bucket?.color)
+    // Bucket covering (15%, 25%] — the SmokePing "4-5" band at pings=20.
+    const bucket = SMOKEPING_LOSS_BUCKETS[4]
+    expect(lossColorFor(20)).toBe(bucket.color)
+  })
+})
+
+describe('buildLossLegendLabels', () => {
+  test('reproduces the canonical SmokePing labels at pings=20', () => {
+    const labels = buildLossLegendLabels(20).map((e) => e.label)
+    expect(labels).toEqual(['0', '1', '2', '3', '4-5', '6-10', '11-19', '20/20'])
+  })
+
+  test('drops empty buckets at small pings counts', () => {
+    // At pings=10, a single lost packet is already 10% — buckets whose
+    // integer threshold does not advance past the previous one are skipped.
+    const labels = buildLossLegendLabels(10).map((e) => e.label)
+    expect(labels[0]).toBe('0')
+    expect(labels[labels.length - 1]).toBe('10/10')
+    expect(labels).not.toContain('0-0')
   })
 })
 

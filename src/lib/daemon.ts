@@ -39,7 +39,17 @@ function contentTypeFor(filePath: string): string {
 }
 
 function safeResolve(root: string, urlPath: string): string | null {
-  const decoded = decodeURIComponent(urlPath)
+  // decodeURIComponent throws URIError on malformed percent-encoding (e.g.
+  // `/%E0%A4`). A probe or attacker hitting such a URL must not bubble up to
+  // the fetch handler and produce a generic 500 — return null so the caller
+  // can respond with a 4xx.
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(urlPath)
+  } catch {
+    return null
+  }
+
   const trimmed = decoded.replace(/^\/+/, '')
   const resolved = path.resolve(root, trimmed)
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
@@ -232,7 +242,12 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       // the static file server below.
       const targetMatch = /^\/([^/]+)\/(?:(?:index\.html)?$)/.exec(url.pathname)
       if (targetMatch != null) {
-        const targetSlug = decodeURIComponent(targetMatch[1])
+        let targetSlug: string
+        try {
+          targetSlug = decodeURIComponent(targetMatch[1])
+        } catch {
+          return new Response('bad request', { status: 400 })
+        }
         const targetDir = safeResolve(dataDir, targetSlug)
         if (targetDir == null || targetDir === dataDir) {
           return new Response('forbidden', { status: 403 })

@@ -97,7 +97,15 @@ export async function renderRootIndex(
   now = Date.now(),
   signature?: string,
 ): Promise<string> {
-  const entries = await readdir(logDir, { withFileTypes: true })
+  // A freshly-provisioned daemon serves `/` before the first probe cycle has
+  // had a chance to create its data directory. Treat a missing logDir as "no
+  // targets yet" so the root page renders an empty table instead of 500ing.
+  const entries = await readdir(logDir, { withFileTypes: true }).catch(
+    (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return []
+      throw err
+    },
+  )
   const targetDirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)

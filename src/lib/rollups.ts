@@ -269,10 +269,18 @@ async function listStoredRawSnapshots(targetDir: string): Promise<StoredRawSnaps
   const snapshotFiles = await listSnapshotFileNames(targetDir)
   const snapshots: StoredRawSnapshot[] = []
   for (const fileName of snapshotFiles) {
+    const filePath = path.join(targetDir, fileName)
     try {
-      const contents = await readFile(path.join(targetDir, fileName), 'utf8')
+      const contents = await readFile(filePath, 'utf8')
       snapshots.push(parseStoredRawSnapshot(contents))
-    } catch {}
+    } catch (err) {
+      // A single unparseable snapshot must not abort the rollup rebuild for an
+      // entire target. Surface the failure on stderr so operators can find and
+      // triage the bad file — silently skipping would hide real bugs (schema
+      // drift, partial writes) while also papering over on-disk corruption.
+      const reason = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`hopwatch: skipping unreadable snapshot ${filePath}: ${reason}\n`)
+    }
   }
 
   return snapshots

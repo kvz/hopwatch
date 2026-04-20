@@ -1,5 +1,6 @@
 import type { ChartPoint } from './chart.ts'
 import {
+  buildLossLegendLabels,
   computeChartStats,
   computeLeftEdgeMsByTimestamp,
   formatSmokeDate,
@@ -8,7 +9,6 @@ import {
   lossColorFor,
   pickXGridStepMs,
   pickYScale,
-  SMOKEPING_LOSS_BUCKETS,
 } from './chart-layout.ts'
 import { escapeHtml } from './layout.ts'
 import { quantile } from './raw.ts'
@@ -152,8 +152,16 @@ export function renderChartSvg(
   // SmokePing's smokecol() from Smokeping.pm: for pings=20, half=10, the loop
   // runs ibot=1..10 (itop=20..11) drawing a band from sorted ping[ibot] up to
   // ping[itop] with grayscale int(190/half*(half-ibot))+50. Innermost (ibot=10)
-  // = #323232, outermost (ibot=1) = #DDDDDD.
-  const smokePings = 20
+  // = #323232, outermost (ibot=1) = #DDDDDD. We derive `smokePings` from the
+  // actual sample count instead of hardcoding 20 so a config with
+  // `probe.packets != 20` still renders coherent bands and a coherent legend.
+  // Round down to an even number (half must be an integer); default to 20 for
+  // point-less mini charts so the fallback shape is recognizable.
+  const maxProbes = Math.max(
+    0,
+    ...points.map((p) => (p.rttSamplesMs == null ? 0 : p.rttSamplesMs.length)),
+  )
+  const smokePings = maxProbes >= 2 ? maxProbes - (maxProbes % 2) : 20
   const smokeHalf = smokePings / 2
   const smokeBands: {
     ibot: number
@@ -321,16 +329,9 @@ export function renderChartSvg(
 
   const statsFontSize = 10
   const statsFontFamily = 'DejaVu Sans Mono,Menlo,Consolas,monospace'
-  const lossSwatches = SMOKEPING_LOSS_BUCKETS.map((bucket) => ({
-    color: bucket.color,
-    label: bucket.legendLabel,
-  }))
+  const lossSwatches = buildLossLegendLabels(maxProbes >= 1 ? maxProbes : 20)
   const legendY = padding.top + chartHeight + 58
   const legendStartX = padding.left + 84
-  const maxProbes = Math.max(
-    0,
-    ...points.map((p) => (p.rttSamplesMs == null ? 0 : p.rttSamplesMs.length)),
-  )
   const probeCountLabel =
     maxProbes === 0
       ? ''

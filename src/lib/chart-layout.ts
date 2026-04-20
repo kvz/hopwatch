@@ -1,23 +1,55 @@
 import type { ChartPoint } from './chart.ts'
 
-// SmokePing's default loss_colors for pings=20 (from Smokeping.pm:1300).
-// Buckets are 0, 1, 2, 3, 4-5, 6-10, 11-19, 20/20 — used to paint per-sample
-// median markers (matched by `maxLossPct`) and the legend swatches below the
-// chart (rendered from `legendLabel`).
+// SmokePing's default loss_colors thresholds (from Smokeping.pm:1300).
+// Encoded as percentages so lossColorFor can match any pings count without
+// needing to know the probe cadence; legend labels are generated per-render
+// from the actual probes/point via buildLossLegendLabels so a config with
+// probe.packets != 20 still produces a coherent legend.
 export const SMOKEPING_LOSS_BUCKETS: {
   color: string
-  legendLabel: string
   maxLossPct: number
 }[] = [
-  { color: '#26ff00', legendLabel: '0', maxLossPct: 0 },
-  { color: '#00b8ff', legendLabel: '1', maxLossPct: 5 },
-  { color: '#0059ff', legendLabel: '2', maxLossPct: 10 },
-  { color: '#7e00ff', legendLabel: '3', maxLossPct: 15 },
-  { color: '#ff00ff', legendLabel: '4-5', maxLossPct: 25 },
-  { color: '#ff5500', legendLabel: '6-10', maxLossPct: 50 },
-  { color: '#ff0000', legendLabel: '11-19', maxLossPct: 99.99 },
-  { color: '#a00000', legendLabel: '20/20', maxLossPct: 100 },
+  { color: '#26ff00', maxLossPct: 0 },
+  { color: '#00b8ff', maxLossPct: 5 },
+  { color: '#0059ff', maxLossPct: 10 },
+  { color: '#7e00ff', maxLossPct: 15 },
+  { color: '#ff00ff', maxLossPct: 25 },
+  { color: '#ff5500', maxLossPct: 50 },
+  { color: '#ff0000', maxLossPct: 99.99 },
+  { color: '#a00000', maxLossPct: 100 },
 ]
+
+export interface LossLegendEntry {
+  color: string
+  label: string
+}
+
+// Convert the percent-based buckets into integer "lost N of pings" labels
+// for a given probes-per-sample count. For pings=20 this reproduces the
+// canonical SmokePing labels (0, 1, 2, 3, 4-5, 6-10, 11-19, 20/20) so
+// fixture parity is preserved. For smaller pings counts, empty buckets
+// (e.g. pings=10 where a single lost packet is already 10%) are dropped
+// so the legend stays coherent.
+export function buildLossLegendLabels(pings: number): LossLegendEntry[] {
+  const entries: LossLegendEntry[] = []
+  let prev = -1
+  for (const bucket of SMOKEPING_LOSS_BUCKETS) {
+    const threshold =
+      bucket.maxLossPct >= 100 ? pings : Math.floor((bucket.maxLossPct / 100) * pings)
+    if (threshold <= prev) continue
+    let label: string
+    if (threshold === pings && bucket.maxLossPct >= 100) {
+      label = `${pings}/${pings}`
+    } else if (threshold === prev + 1) {
+      label = `${threshold}`
+    } else {
+      label = `${prev + 1}-${threshold}`
+    }
+    entries.push({ color: bucket.color, label })
+    prev = threshold
+  }
+  return entries
+}
 
 export function lossColorFor(pct: number | null): string {
   const v = pct == null || !Number.isFinite(pct) ? 0 : pct

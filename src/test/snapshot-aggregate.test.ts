@@ -219,6 +219,79 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
     expect(shouldSurfaceHopIssueForRoot(hop)).toBe(false)
   })
 
+  test('latestHopIndex tracks the most recent snapshot regardless of input order', () => {
+    // Same hop host reported at different indices across snapshots — the UI
+    // should surface the most recently observed index, so a routing change
+    // (hop 2 → hop 5) is reflected in the "latest index" column even when
+    // callers pass snapshots newest-first (as renderRootIndex does).
+    const newest = snapshot({
+      collectedAt: '20260420T115000Z',
+      destinationLossPct: 5,
+      hops: [
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'router.example',
+          index: 5,
+          lastMs: null,
+          lossPct: 20,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'destination',
+          index: 6,
+          lastMs: null,
+          lossPct: 5,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+      ],
+    })
+    const oldest = snapshot({
+      collectedAt: '20260420T100000Z',
+      destinationLossPct: 5,
+      hops: [
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'router.example',
+          index: 2,
+          lastMs: null,
+          lossPct: 20,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'destination',
+          index: 3,
+          lastMs: null,
+          lossPct: 5,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+      ],
+    })
+    // Production order: page.tsx reverses listSnapshotFileNames to pass snapshots
+    // newest-first. If summarizeHopIssues picked latestHopIndex by iteration
+    // order, the oldest (index 2) would win. It must use collectedAt instead.
+    const issues = summarizeHopIssues(selectSnapshotsInWindow([newest, oldest], now, 4 * HOUR))
+    const router = issues.find((hop) => hop.host === 'router.example')
+    expect(router?.latestHopIndex).toBe(5)
+  })
+
   test('placeholder ??? hops are filtered from root suspect', () => {
     const hop: HopAggregate = {
       averageLossPct: 100,

@@ -287,7 +287,10 @@ export async function collectSnapshot(
       hostIp: resolved.address,
       maxHops: 30,
       packets: options.packets,
-      timeoutMs: 5000,
+      // Honor the same probe deadline the mtr path uses. Previously this was
+      // hardcoded to 5s, which truncated late replies on slow paths and
+      // diverged the two engines' behavior from the scheduler's budget.
+      timeoutMs: options.probeTimeoutMs,
     })
   } else {
     const mtrArgs = [

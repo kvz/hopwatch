@@ -143,4 +143,5 @@ vite.config.ts.timestamp-*
 bin-build/
 test-artifacts/
 .hopwatch-data/
+hopwatch-data/
 src/test/fixtures/mtr-fixtures/real-ap/diff-snapshots/

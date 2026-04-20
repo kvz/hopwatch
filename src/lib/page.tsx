@@ -29,18 +29,25 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
 // Parsed snapshot summaries are cached by absolute path. Snapshot files are
 // immutable once written (timestamped filenames, never updated in place), so
-// a never-invalidated cache is safe. Without this, every `/` render reparses
-// the entire retention window (keep_days * 96 files per target) — at the
-// default 15-minute cadence and 14-day retention that is ~1,344 parses per
-// target per request, which makes the open HTTP server trivial to exhaust
+// a never-invalidated cache is safe _per file_. Without this, every `/` render
+// reparses the entire retention window (keep_days * 96 files per target) — at
+// the default 15-minute cadence and 14-day retention that is ~1,344 parses
+// per target per request, which makes the open HTTP server trivial to exhaust
 // with repeat GETs.
+//
+// To keep the cache bounded under retention rotation, listTargetSnapshots
+// drops entries for files in this target's directory that are no longer on
+// disk. Without that pruning, a long-lived daemon's cache would grow by one
+// entry per probe cycle forever.
 const snapshotCache = new Map<string, SnapshotSummary>()
 
 export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSummary[]> {
   const snapshotFiles = (await listSnapshotFileNames(targetDir)).reverse()
+  const liveKeys = new Set<string>()
   const snapshots: SnapshotSummary[] = []
   for (const fileName of snapshotFiles) {
     const cacheKey = path.join(targetDir, fileName)
+    liveKeys.add(cacheKey)
     const cached = snapshotCache.get(cacheKey)
     if (cached != null) {
       snapshots.push(cached)
@@ -57,6 +64,13 @@ export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSu
       // does the same with listStoredRawSnapshots.
       const reason = err instanceof Error ? err.message : String(err)
       process.stderr.write(`hopwatch: skipping unreadable snapshot ${cacheKey}: ${reason}\n`)
+    }
+  }
+
+  const targetPrefix = `${targetDir}${path.sep}`
+  for (const key of snapshotCache.keys()) {
+    if (key.startsWith(targetPrefix) && !liveKeys.has(key)) {
+      snapshotCache.delete(key)
     }
   }
 

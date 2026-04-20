@@ -261,6 +261,22 @@ describe('encodeSeq / decodeSeq', () => {
     expect(maxSeq).toBeLessThan(0x10000)
   })
 
+  test('decodes ttl correctly even once the 16-bit sequence wraps', () => {
+    // Long-running probes (packets=2000+ or continuous-mode cycles) wrap the
+    // 16-bit sequence space. Before the fix, decodeSeq used modulo stride
+    // against the wrapped value and returned a different ttl than was encoded,
+    // so replies were attributed to the wrong hop. We only require the ttl to
+    // round-trip — the cycle can alias on wrap, which is fine: cycles across
+    // a wrap can't both have outstanding replies at once.
+    const maxHops = 30
+    for (let cycle = 0; cycle < 4096; cycle += 17) {
+      for (let ttl = 1; ttl <= maxHops; ttl += 1) {
+        const seq = encodeSeq(cycle, ttl, maxHops)
+        expect(decodeSeq(seq, maxHops).ttl).toBe(ttl)
+      }
+    }
+  })
+
   test('masks to 16 bits so the encoded seq always fits the ICMP wire field', () => {
     // Without the mask, encodeSeq(2000, 1, 30) = 120001 — the wire
     // truncates to (120001 & 0xffff) = 54465, so replies come back with a

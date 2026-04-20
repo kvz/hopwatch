@@ -91,7 +91,14 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     throw new Error(`socket(AF_INET, SOCK_RAW, IPPROTO_ICMP) failed, errno=${errno()}`)
   }
 
-  const id = process.pid & 0xffff
+  // A random 16-bit identifier per call — not `process.pid & 0xffff`. Two
+  // concurrent probes on the same host share the raw socket's incoming queue
+  // (the kernel delivers every ICMP reply to every open raw ICMP socket); if
+  // both calls used the same identifier, probe A could drain probe B's
+  // matching replies and attribute them to the wrong target/hop. Random
+  // collisions between concurrent calls are possible but negligible at the
+  // concurrency we run (default 3).
+  const id = Math.floor(Math.random() * 0x10000) & 0xffff
   const sendTimeNs = new Map<number, number>()
   const events: RawMtrEvent[] = []
   // Hop indices (0-based = ttl-1) where we've observed any reply, so we can

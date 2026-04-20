@@ -94,6 +94,33 @@ describe('resolveDestinationHopIndex', () => {
     ]
     expect(resolveDestinationHopIndex(events)).toBe(5)
   })
+
+  test('returns null when only sent events exist (black-holed destination)', () => {
+    // Native prober emits one `sent` per TTL even when the path is black-holed
+    // and no replies ever come back. Before the fix, maxHopIndex was computed
+    // from sent events too, so an unreachable destination looked like hop 29
+    // (or whatever maxHops-1 happens to be), which corrupts destination loss
+    // and RTT rollups.
+    const events: RawMtrEvent[] = []
+    for (let ttl = 1; ttl <= 30; ttl += 1) {
+      events.push({ kind: 'sent', hopIndex: ttl - 1, probeId: ttl })
+    }
+    expect(resolveDestinationHopIndex(events)).toBeNull()
+  })
+
+  test('picks the deepest replying hop when deeper hops only emit sent events', () => {
+    // Replies stop at hop 7 but the prober keeps sending through hop 29; the
+    // destination is hop 7, not hop 29.
+    const events: RawMtrEvent[] = [
+      { kind: 'host', hopIndex: 7, host: 'final.example' },
+      { kind: 'reply', hopIndex: 7, probeId: 1, rttUs: 100 },
+      { kind: 'reply', hopIndex: 7, probeId: 2, rttUs: 110 },
+    ]
+    for (let ttl = 8; ttl <= 30; ttl += 1) {
+      events.push({ kind: 'sent', hopIndex: ttl - 1, probeId: ttl })
+    }
+    expect(resolveDestinationHopIndex(events)).toBe(7)
+  })
 })
 
 describe('summarizeDestinationSamples', () => {

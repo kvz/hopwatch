@@ -267,11 +267,16 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
 
   const replyCountByHop = new Map<number, number>()
   const hostsByHop = new Map<number, Set<string>>()
+  // The deepest hop with any `reply` or `host` event — not the deepest `sent`.
+  // Black-holed traces emit a `sent` per TTL up to maxHops with no replies; if
+  // maxHopIndex followed those, an unreachable path would look like the
+  // destination is at hop `maxHops - 1` and corrupt every downstream aggregate
+  // (destination loss %, summary RTT, diagnosis).
   let maxHopIndex = -1
   for (const event of rawEvents) {
-    if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
     if (event.kind === 'reply') {
       replyCountByHop.set(event.hopIndex, (replyCountByHop.get(event.hopIndex) ?? 0) + 1)
+      if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
     } else if (event.kind === 'host') {
       let hosts = hostsByHop.get(event.hopIndex)
       if (hosts == null) {
@@ -279,6 +284,7 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
         hostsByHop.set(event.hopIndex, hosts)
       }
       hosts.add(event.host)
+      if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
     }
   }
 

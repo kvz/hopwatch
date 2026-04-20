@@ -85,21 +85,26 @@ export function ipv4FromBytes(b: Uint8Array): string {
   return `${b[0]}.${b[1]}.${b[2]}.${b[3]}`
 }
 
-// Sequence-number encoding we use for traceroute probes. Each cycle sweeps
-// all TTLs once; we stride by `maxHops * 2` so two adjacent cycles can't
-// collide on seq even if a late reply arrives after the next cycle started.
-// The wire field is 16 bits, so we mask here: long runs (packets=2000,
-// maxHops=30 → raw 120030) would otherwise overflow and replies would come
-// back with a truncated seq that no longer keyed the sendTimeNs map. On
-// wrap, older cycles reuse seqs — fine as long as each cycle's replies
-// arrive within the wrap window (in practice, within the probe timeout).
+// Sequence-number encoding we use for traceroute probes. We pack ttl into
+// the low 5 bits (supports maxHops up to 31) and the cycle into the high 11
+// bits. Keeping the ttl in a fixed bit range means that when the 16-bit wire
+// field wraps (2048 cycles in), the ttl bits continue to decode correctly —
+// the older cycle-index encoding masked the composite value, so after wrap a
+// reply with wire seq 64 decoded to ttl=4 instead of the ttl that was sent,
+// silently misattributing replies to the wrong hop.
+const TTL_BITS = 5
+const TTL_MASK = (1 << TTL_BITS) - 1
+const MAX_HOPS_SUPPORTED = TTL_MASK
+
 export function encodeSeq(cycle: number, ttl: number, maxHops: number): number {
-  return (cycle * maxHops * 2 + ttl) & 0xffff
+  if (maxHops > MAX_HOPS_SUPPORTED) {
+    throw new Error(`encodeSeq: maxHops=${maxHops} exceeds the ${MAX_HOPS_SUPPORTED}-hop limit`)
+  }
+  return ((cycle << TTL_BITS) | (ttl & TTL_MASK)) & 0xffff
 }
 
-export function decodeSeq(seq: number, maxHops: number): { cycle: number; ttl: number } {
-  const stride = maxHops * 2
-  return { cycle: Math.floor(seq / stride), ttl: seq % stride }
+export function decodeSeq(seq: number, _maxHops: number): { cycle: number; ttl: number } {
+  return { cycle: (seq >>> TTL_BITS) & 0x7ff, ttl: seq & TTL_MASK }
 }
 
 // Parse the ICMP payload delivered by a raw-socket recvfrom. `buf` starts at

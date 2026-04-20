@@ -1,4 +1,4 @@
-import { readdir, rm, writeFile } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { type ChartDefinition, loadChartDefinitions, renderChartMiniSvg } from './chart.ts'
 import { renderChartSvg } from './chart-svg.ts'
@@ -98,14 +98,19 @@ export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSu
   return snapshots
 }
 
-export async function writeTargetIndex(
+export interface RenderedTarget {
+  html: string
+  latestSnapshot: SnapshotSummary
+}
+
+export async function renderTargetIndex(
   targetDir: string,
   peers: PeerConfig[],
   selfLabel: string,
   targetSlug: string,
   now = Date.now(),
   signature?: string,
-): Promise<SnapshotSummary | null> {
+): Promise<RenderedTarget | null> {
   const snapshots = await listTargetSnapshots(targetDir)
   if (snapshots.length === 0) {
     return null
@@ -272,7 +277,7 @@ ${historyPanel}
           const worstHopLossClass = getLossClass(snapshot.worstHopLossPct)
           const absoluteCollectedAt = formatAbsoluteCollectedAt(snapshot.collectedAt)
           return `<tr>
-  <td><time datetime="${escapeHtml(snapshot.collectedAt)}" data-collected-at="${escapeHtml(snapshot.collectedAt)}" title="${escapeHtml(absoluteCollectedAt)}">${escapeHtml(formatRelativeCollectedAt(snapshot.collectedAt, now))}</time><br /><code>${escapeHtml(snapshot.collectedAt)}</code></td>
+  <td><time datetime="${escapeHtml(snapshot.collectedAt)}" title="${escapeHtml(absoluteCollectedAt)}">${escapeHtml(formatRelativeCollectedAt(snapshot.collectedAt, now))}</time><br /><code>${escapeHtml(snapshot.collectedAt)}</code></td>
   <td><span class="loss ${destinationLossClass}">${escapeHtml(formatLoss(snapshot.destinationLossPct))}</span></td>
   <td><span class="loss ${worstHopLossClass}">${escapeHtml(formatLoss(snapshot.worstHopLossPct))}</span></td>
   <td><span class="loss ${getDiagnosisClass(snapshot.diagnosis)}">${escapeHtml(snapshot.diagnosis.label)}</span><br /><span>${renderDiagnosisSummary(snapshot.diagnosis.summary, snapshot.hops)}</span></td>
@@ -288,22 +293,17 @@ ${historyPanel}
 `,
   )
 
-  await writeFile(path.join(targetDir, 'index.html'), html)
-  await writeFile(path.join(targetDir, 'latest.html'), html)
-  const latestJsonPath = path.join(targetDir, 'latest.json')
-  await rm(latestJsonPath, { force: true })
-  await writeFile(latestJsonPath, `${JSON.stringify(latestSnapshot, null, 2)}\n`)
-  return latestSnapshot
+  return { html, latestSnapshot }
 }
 
-export async function writeRootIndex(
+export async function renderRootIndex(
   logDir: string,
   peers: PeerConfig[],
   selfLabel: string,
   keepDays: number,
   now = Date.now(),
   signature?: string,
-): Promise<void> {
+): Promise<string> {
   const entries = await readdir(logDir, { withFileTypes: true })
   const targetDirs = entries
     .filter((entry) => entry.isDirectory())
@@ -321,17 +321,18 @@ export async function writeRootIndex(
   for (const targetSlug of targetDirs) {
     const targetDir = path.join(logDir, targetSlug)
     const snapshots = await listTargetSnapshots(targetDir)
-    const summary = await writeTargetIndex(targetDir, peers, selfLabel, targetSlug, now, signature)
-    if (summary) {
-      targetSummaries.push({
-        aggregate: summarizeSnapshots(snapshots, now, 7 * 24 * 60 * 60 * 1000),
-        charts: await loadChartDefinitions(targetDir, snapshots, now),
-        diagnosisAggregate: summarizeDiagnoses(snapshots, now, 7 * 24 * 60 * 60 * 1000),
-        hopIssues: summarizeHopIssues(snapshots, now, 7 * 24 * 60 * 60 * 1000),
-        targetSlug,
-        summary,
-      })
+    if (snapshots.length === 0) {
+      continue
     }
+
+    targetSummaries.push({
+      aggregate: summarizeSnapshots(snapshots, now, 7 * 24 * 60 * 60 * 1000),
+      charts: await loadChartDefinitions(targetDir, snapshots, now),
+      diagnosisAggregate: summarizeDiagnoses(snapshots, now, 7 * 24 * 60 * 60 * 1000),
+      hopIssues: summarizeHopIssues(snapshots, now, 7 * 24 * 60 * 60 * 1000),
+      targetSlug,
+      summary: snapshots[0],
+    })
   }
 
   const rows = targetSummaries
@@ -354,7 +355,7 @@ export async function writeRootIndex(
       const thumbnailChart = charts.find((chart) => chart.rangeLabel === '30h') ?? charts[0]
       return `<tr>
   <td><a href="./${encodeURIComponent(targetSlug)}/">${escapeHtml(summary.target)}</a><br /><code>${escapeHtml(summary.host)}</code></td>
-  <td><span class="loss ${getDiagnosisClass(summary.diagnosis)}">${escapeHtml(summary.diagnosis.label)}</span> <span class="status-age" data-collected-at="${escapeHtml(summary.collectedAt)}" data-relative-wrap="parens" title="${escapeHtml(absoluteCollectedAt)}">(${escapeHtml(relativeCollectedAt)})</span></td>
+  <td><span class="loss ${getDiagnosisClass(summary.diagnosis)}">${escapeHtml(summary.diagnosis.label)}</span> <span class="status-age" title="${escapeHtml(absoluteCollectedAt)}">(${escapeHtml(relativeCollectedAt)})</span></td>
   <td>${summary.hopCount}</td>
   <td><span class="loss ${historicalSeverity.className}">${escapeHtml(historicalSeverity.label)}</span></td>
   <td><span class="loss ${destinationLossClass}">${escapeHtml(formatLoss(aggregate.averageDestinationLossPct))}</span><br /><span>${aggregate.sampleCount} samples</span></td>
@@ -404,5 +405,5 @@ ${renderTopNav({
 `,
   )
 
-  await writeFile(path.join(logDir, 'index.html'), html)
+  return html
 }

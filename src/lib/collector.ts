@@ -13,7 +13,6 @@ import path from 'node:path'
 import { execa } from 'execa'
 import type { LoadedConfig, ProbeMode, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
-import { writeRootIndex } from './page.ts'
 import { parseRawMtrOutput, parseStoredRawSnapshot } from './raw.ts'
 import { updateTargetRollups } from './rollups.ts'
 
@@ -56,7 +55,6 @@ export interface CollectorOptions {
   namespaceDir: string
   netnsMount: boolean
   packets: number
-  renderOnly: boolean
   targets: MtrHistoryTarget[]
 }
 
@@ -85,7 +83,6 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
     namespaceDir: config.probe.namespace_dir,
     netnsMount: config.probe.netns_mount,
     packets: config.probe.packets,
-    renderOnly: false,
     targets: config.target.map(targetFromConfig),
   }
 }
@@ -289,40 +286,34 @@ async function updateRollupsForTargets(
   })
 }
 
-export interface RunCollectorOptions {
-  renderOnly?: boolean
-}
-
 export async function runCollector(
   config: LoadedConfig,
   logger: Logger,
-  runOptions: RunCollectorOptions = {},
   deps: CollectorDependencies = {},
 ): Promise<void> {
   const options = collectorOptionsFromConfig(config)
-  options.renderOnly = runOptions.renderOnly ?? false
 
   await mkdir(options.logDir, { recursive: true })
 
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
-  const now = nowDate.getTime()
   const timestamp = getTimestamp(nowDate)
   const runCommand = deps.runCommand ?? execFileAsync
 
-  if (!options.renderOnly) {
-    await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
-      await collectSnapshot(nodeLabel, timestamp, options, target, runCommand, logger)
-    })
-  }
+  await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
+    await collectSnapshot(nodeLabel, timestamp, options, target, runCommand, logger)
+  })
 
   await updateRollupsForTargets(nodeLabel, options, nowDate)
-  await writeRootIndex(
-    options.logDir,
-    config.peer,
-    nodeLabel,
-    options.keepDays,
-    now,
-    config.chart.signature,
-  )
+}
+
+export async function refreshRollups(
+  config: LoadedConfig,
+  deps: CollectorDependencies = {},
+): Promise<void> {
+  const options = collectorOptionsFromConfig(config)
+  await mkdir(options.logDir, { recursive: true })
+  const nodeLabel = config.server.node_label ?? 'hopwatch'
+  const nowDate = (deps.getNow ?? (() => new Date()))()
+  await updateRollupsForTargets(nodeLabel, options, nowDate)
 }

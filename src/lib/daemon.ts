@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { LoadedConfig } from './config.ts'
-import { runCollector } from './core.ts'
+import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import type { Logger } from './logger.ts'
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -128,15 +128,11 @@ function startScheduler(config: LoadedConfig, logger: Logger): SchedulerHandle {
 }
 
 export async function startDaemon(config: LoadedConfig, logger: Logger): Promise<void> {
-  await runCollector(config, logger).catch((err: unknown) => {
-    if (!(err instanceof Error)) {
-      throw new Error(`Was thrown a non-error: ${err}`)
-    }
-
-    logger.error('initial render failed', { message: err.message })
-  })
-
   const scheduler = startScheduler(config, logger)
+
+  const nodeLabel = config.server.node_label ?? 'hopwatch'
+  const signature = config.chart.signature
+  const dataDir = config.resolvedDataDir
 
   const server = Bun.serve({
     fetch: async (request): Promise<Response> => {
@@ -145,16 +141,71 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         return new Response('ok', { status: 200 })
       }
 
-      return serveFile(config.resolvedDataDir, url.pathname)
+      if (url.pathname === '/' || url.pathname === '/index.html') {
+        const html = await renderRootIndex(
+          dataDir,
+          config.peer,
+          nodeLabel,
+          config.probe.keep_days,
+          Date.now(),
+          signature,
+        )
+        return new Response(html, {
+          headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
+        })
+      }
+
+      // Target dashboards live at `/<slug>/` or `/<slug>/index.html`. Everything else
+      // (snapshot JSONs, latest.json, favicon, nested assets) still falls through to
+      // the static file server below.
+      const targetMatch = /^\/([^/]+)\/(?:(?:index\.html)?$)/.exec(url.pathname)
+      if (targetMatch != null) {
+        const targetSlug = decodeURIComponent(targetMatch[1])
+        const targetDir = safeResolve(dataDir, targetSlug)
+        if (targetDir == null || targetDir === dataDir) {
+          return new Response('forbidden', { status: 403 })
+        }
+
+        const rendered = await renderTargetIndex(
+          targetDir,
+          config.peer,
+          nodeLabel,
+          targetSlug,
+          Date.now(),
+          signature,
+        ).catch((err: unknown) => {
+          if (!(err instanceof Error)) {
+            throw new Error(`Was thrown a non-error: ${err}`)
+          }
+          logger.error('render target failed', { message: err.message, target: targetSlug })
+          return null
+        })
+        if (rendered == null) {
+          return new Response('not found', { status: 404 })
+        }
+
+        return new Response(rendered.html, {
+          headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
+        })
+      }
+
+      return serveFile(dataDir, url.pathname)
     },
     hostname: parseHostname(config.server.listen),
     port: parsePort(config.server.listen),
   })
 
   logger.info('http server ready', {
-    dataDir: config.resolvedDataDir,
+    dataDir,
     hostname: server.hostname,
     port: server.port,
+  })
+
+  void runCollector(config, logger).catch((err: unknown) => {
+    if (!(err instanceof Error)) {
+      throw new Error(`Was thrown a non-error: ${err}`)
+    }
+    logger.error('initial probe failed', { message: err.message })
   })
 
   let stopping = false

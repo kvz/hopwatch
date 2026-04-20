@@ -459,7 +459,7 @@ export function renderLayout(title: string, body: string): string {
       margin-bottom: 18px;
     }
 
-    time[data-collected-at] {
+    time[datetime] {
       white-space: nowrap;
     }
 
@@ -617,45 +617,6 @@ export function renderLayout(title: string, body: string): string {
   <main>
     ${body}
   </main>
-  <script>
-    (() => {
-      const formatRelative = (value) => {
-        const match = value.match(/^(\\d{4})(\\d{2})(\\d{2})T(\\d{2})(\\d{2})(\\d{2})Z$/)
-        if (!match) return value
-        const [, year, month, day, hours, minutes, seconds] = match
-        const timestamp = Date.UTC(
-          Number(year),
-          Number(month) - 1,
-          Number(day),
-          Number(hours),
-          Number(minutes),
-          Number(seconds),
-        )
-        const diffSeconds = Math.max(1, Math.round((Date.now() - timestamp) / 1000))
-        if (diffSeconds < 60) return \`\${diffSeconds}s ago\`
-        const diffMinutes = Math.round(diffSeconds / 60)
-        if (diffMinutes < 60) return \`\${diffMinutes}m ago\`
-        const diffHours = Math.round(diffMinutes / 60)
-        if (diffHours < 24) return \`\${diffHours}h ago\`
-        const diffDays = Math.round(diffHours / 24)
-        return \`\${diffDays}d ago\`
-      }
-
-      const updateTimes = () => {
-        for (const element of document.querySelectorAll('[data-collected-at]')) {
-          const collectedAt = element.getAttribute('data-collected-at')
-          if (!collectedAt) continue
-          const relative = formatRelative(collectedAt)
-          element.textContent = element.getAttribute('data-relative-wrap') === 'parens'
-            ? \`(\${relative})\`
-            : relative
-        }
-      }
-
-      updateTimes()
-      window.setInterval(updateTimes, 30000)
-    })()
-  </script>
 </body>
 </html>
 `

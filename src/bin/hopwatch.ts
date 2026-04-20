@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Builtins, Cli, Command, Option } from 'clipanion'
 import { formatConfigSummary, type LoadedConfig, loadConfig } from '../lib/config.ts'
-import { runCollector } from '../lib/core.ts'
+import { refreshRollups, runCollector } from '../lib/core.ts'
 import { startDaemon } from '../lib/daemon.ts'
 import { createLogger, type Logger } from '../lib/logger.ts'
 
@@ -55,16 +55,17 @@ class ProbeOnceCommand extends BaseCommand {
   }
 }
 
-class RenderCommand extends BaseCommand {
-  static paths = [['render']]
+class RollupCommand extends BaseCommand {
+  static paths = [['rollup']]
 
   static usage = Command.Usage({
-    description: 'Re-render HTML and rollups from existing snapshots, without probing.',
+    description: 'Rebuild hourly and daily rollups from existing snapshots, without probing.',
   })
 
   async execute(): Promise<number> {
     const { config, logger } = await this.resolve()
-    await runCollector(config, logger, { renderOnly: true })
+    await refreshRollups(config)
+    logger.info('rollups refreshed')
     return 0
   }
 }
@@ -93,7 +94,7 @@ cli.register(Builtins.HelpCommand)
 cli.register(Builtins.VersionCommand)
 cli.register(DaemonCommand)
 cli.register(ProbeOnceCommand)
-cli.register(RenderCommand)
+cli.register(RollupCommand)
 cli.register(ConfigCheckCommand)
 
 cli

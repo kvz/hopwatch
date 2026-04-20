@@ -20,7 +20,7 @@ export {
   getTargetSlug,
   getTimestamp,
   type MtrHistoryTarget,
-  type RunCollectorOptions,
+  refreshRollups,
   removeOldSnapshots,
   runCollector,
   targetFromConfig,
@@ -29,9 +29,10 @@ export type { ProbeMode } from './config.ts'
 export { escapeHtml, getPeerNavLinks, renderLayout, renderTopNav } from './layout.ts'
 export {
   listTargetSnapshots,
+  type RenderedTarget,
   renderChartCard,
-  writeRootIndex,
-  writeTargetIndex,
+  renderRootIndex,
+  renderTargetIndex,
 } from './page.ts'
 export {
   diagnoseSnapshot,

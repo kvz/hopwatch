@@ -1,10 +1,11 @@
-import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { removeOldSnapshots, runCollector } from '../lib/collector.ts'
 import type { LoadedConfig } from '../lib/config.ts'
 import { createLogger } from '../lib/logger.ts'
+import type { RawMtrEvent } from '../lib/raw.ts'
 
 describe('removeOldSnapshots', () => {
   let dir: string
@@ -72,6 +73,7 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
     },
     sourcePath: path.join(dataDir, 'config.toml'),
     target: targetHosts.map((host) => ({
+      engine: 'mtr',
       group: 'default',
       host,
       id: host,
@@ -131,5 +133,41 @@ describe('runCollector', () => {
 
     const result = await runCollector(config, logger, { runCommand })
     expect(result.failedTargetSlugs).toEqual([])
+  })
+
+  test('engine="native" skips runCommand and writes the injected RawMtrEvent stream', async () => {
+    const config = buildConfig(dataDir, ['native.example'])
+    config.target[0].engine = 'native'
+    config.target[0].host = '127.0.0.1' // bypass DNS resolution in the collector
+    const logger = createLogger({ level: 'error', pretty: false })
+
+    const nativeEvents: RawMtrEvent[] = [
+      { kind: 'sent', hopIndex: 0, probeId: 1 },
+      { kind: 'host', hopIndex: 0, host: '10.0.0.1' },
+      { kind: 'dns', hopIndex: 0, host: 'gw.example' },
+      { kind: 'reply', hopIndex: 0, probeId: 1, rttUs: 1234 },
+    ]
+    const runNativeProbeFn = vi.fn(async () => nativeEvents)
+    const runCommand = vi.fn(async (): Promise<{ stderr: string; stdout: string }> => {
+      throw new Error('mtr path must not be called for engine=native')
+    })
+
+    const result = await runCollector(config, logger, { runCommand, runNativeProbeFn })
+
+    expect(result.failedTargetSlugs).toEqual([])
+    expect(runCommand).not.toHaveBeenCalled()
+    expect(runNativeProbeFn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostIp: '127.0.0.1', packets: 20, maxHops: 30 }),
+    )
+
+    const entries = await readdir(path.join(dataDir, 'native.example'))
+    const snapshotFile = entries.find((name) => /^\d{8}T\d{6}Z\.json$/.test(name))
+    expect(snapshotFile).toBeDefined()
+    if (snapshotFile == null) throw new Error('no snapshot file found')
+
+    const contents = JSON.parse(
+      await readFile(path.join(dataDir, 'native.example', snapshotFile), 'utf8'),
+    )
+    expect(contents.rawEvents).toEqual(nativeEvents)
   })
 })

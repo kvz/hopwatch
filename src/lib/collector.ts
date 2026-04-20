@@ -1,3 +1,4 @@
+import { lookup } from 'node:dns/promises'
 import {
   lstat,
   mkdir,
@@ -11,9 +12,9 @@ import {
 } from 'node:fs/promises'
 import path from 'node:path'
 import { execa } from 'execa'
-import type { LoadedConfig, ProbeMode, TargetConfig } from './config.ts'
+import type { LoadedConfig, ProbeEngine, ProbeMode, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
-import { parseRawMtrOutput, parseStoredRawSnapshot } from './raw.ts'
+import { parseRawMtrOutput, parseStoredRawSnapshot, type RawMtrEvent } from './raw.ts'
 import { updateTargetRollups } from './rollups.ts'
 import { RESERVED_TARGET_FILES } from './snapshot.ts'
 
@@ -22,6 +23,7 @@ export interface MtrHistoryTarget {
   label: string
   host: string
   probeMode: ProbeMode
+  engine: ProbeEngine
   netns: string | null
   group: string
 }
@@ -32,9 +34,32 @@ export function targetFromConfig(config: TargetConfig): MtrHistoryTarget {
     label: config.label,
     host: config.host,
     probeMode: config.probe_mode,
+    engine: config.engine,
     netns: config.netns ?? null,
     group: config.group ?? 'default',
   }
+}
+
+export interface NativeProbeRequest {
+  hostIp: string
+  packets: number
+  maxHops: number
+  timeoutMs: number
+}
+
+export type RunNativeProbeFn = (request: NativeProbeRequest) => Promise<RawMtrEvent[]>
+
+// Load the Bun-only FFI prober lazily so this module can still be imported
+// under vitest/Node (which lacks `bun:ffi`). Tests that exercise engine=native
+// must inject a `runNativeProbeFn` dependency.
+async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMtrEvent[]> {
+  const { probeTargetNative } = await import('./prober-native.ts')
+  return probeTargetNative({
+    hostIp: request.hostIp,
+    maxHops: request.maxHops,
+    packets: request.packets,
+    timeoutMs: request.timeoutMs,
+  })
 }
 
 type RunCommand = (
@@ -62,6 +87,7 @@ export interface CollectorOptions {
 export interface CollectorDependencies {
   getNow?: () => Date
   runCommand?: RunCommand
+  runNativeProbeFn?: RunNativeProbeFn
 }
 
 export function getTimestamp(now: Date = new Date()): string {
@@ -212,44 +238,76 @@ async function mapWithConcurrency<T>(
   await Promise.all(workers)
 }
 
+export interface CollectSnapshotDeps {
+  runCommand?: RunCommand
+  runNativeProbeFn?: RunNativeProbeFn
+}
+
 export async function collectSnapshot(
   nodeLabel: string,
   timestamp: string,
   options: CollectorOptions,
   target: MtrHistoryTarget,
-  runCommand: RunCommand = execFileAsync,
+  deps: CollectSnapshotDeps = {},
   logger?: Logger,
 ): Promise<void> {
+  const runCommand = deps.runCommand ?? execFileAsync
+  const runNativeProbeFn = deps.runNativeProbeFn ?? defaultRunNativeProbe
+
   const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
   const jsonFile = path.join(targetDir, `${timestamp}.json`)
   const tmpJsonFile = `${jsonFile}.tmp`
   const latestJsonFile = path.join(targetDir, 'latest.json')
 
-  const mtrArgs = ['-b', `-${options.ipVersion}`, '-l', '-c', String(options.packets), target.host]
-  if (target.probeMode === 'netns' && options.namespaceDir.trim() === '') {
-    throw new Error(
-      `target '${target.slug}' uses probe_mode='netns' but the probe [namespace_dir] is empty`,
-    )
-  }
+  let rawEvents: RawMtrEvent[]
+  if (target.engine === 'native') {
+    if (options.ipVersion !== '4') {
+      throw new Error(
+        `target '${target.slug}' uses engine='native' but ip_version=${options.ipVersion}; IPv6 is not yet supported`,
+      )
+    }
 
-  if (target.probeMode === 'netns' && (target.netns == null || target.netns.trim() === '')) {
-    throw new Error(
-      `target '${target.slug}' uses probe_mode='netns' but has no 'netns' name configured`,
-    )
-  }
+    const resolved = await lookup(target.host, 4)
+    rawEvents = await runNativeProbeFn({
+      hostIp: resolved.address,
+      maxHops: 30,
+      packets: options.packets,
+      timeoutMs: 5000,
+    })
+  } else {
+    const mtrArgs = [
+      '-b',
+      `-${options.ipVersion}`,
+      '-l',
+      '-c',
+      String(options.packets),
+      target.host,
+    ]
+    if (target.probeMode === 'netns' && options.namespaceDir.trim() === '') {
+      throw new Error(
+        `target '${target.slug}' uses probe_mode='netns' but the probe [namespace_dir] is empty`,
+      )
+    }
 
-  const nsenterArgs: string[] = []
-  if (options.netnsMount) {
-    nsenterArgs.push(`--mount=${options.namespaceDir}/${target.netns}/mnt/ns`)
-  }
-  nsenterArgs.push(`--net=${options.namespaceDir}/${target.netns}/net/ns`)
-  const [command, commandArgs] =
-    target.probeMode === 'netns'
-      ? ['nsenter', [...nsenterArgs, options.mtrBin, ...mtrArgs]]
-      : [options.mtrBin, mtrArgs]
+    if (target.probeMode === 'netns' && (target.netns == null || target.netns.trim() === '')) {
+      throw new Error(
+        `target '${target.slug}' uses probe_mode='netns' but has no 'netns' name configured`,
+      )
+    }
 
-  const { stdout } = await runCommand(command, commandArgs)
-  const rawEvents = parseRawMtrOutput(stdout)
+    const nsenterArgs: string[] = []
+    if (options.netnsMount) {
+      nsenterArgs.push(`--mount=${options.namespaceDir}/${target.netns}/mnt/ns`)
+    }
+    nsenterArgs.push(`--net=${options.namespaceDir}/${target.netns}/net/ns`)
+    const [command, commandArgs] =
+      target.probeMode === 'netns'
+        ? ['nsenter', [...nsenterArgs, options.mtrBin, ...mtrArgs]]
+        : [options.mtrBin, mtrArgs]
+
+    const { stdout } = await runCommand(command, commandArgs)
+    rawEvents = parseRawMtrOutput(stdout)
+  }
 
   const storedSnapshot = {
     schemaVersion: 2 as const,
@@ -307,12 +365,15 @@ export async function runCollector(
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
   const timestamp = getTimestamp(nowDate)
-  const runCommand = deps.runCommand ?? execFileAsync
+  const snapshotDeps: CollectSnapshotDeps = {
+    runCommand: deps.runCommand,
+    runNativeProbeFn: deps.runNativeProbeFn,
+  }
   const failedTargetSlugs: string[] = []
 
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
     try {
-      await collectSnapshot(nodeLabel, timestamp, options, target, runCommand, logger)
+      await collectSnapshot(nodeLabel, timestamp, options, target, snapshotDeps, logger)
     } catch (err) {
       if (!(err instanceof Error)) {
         throw new Error(`Was thrown a non-error: ${err}`)

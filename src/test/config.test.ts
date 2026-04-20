@@ -69,4 +69,52 @@ netns = "ns-uk-1"
     const config = await loadConfig(configPath)
     expect(config.target[0].netns).toBe('ns-uk-1')
   })
+
+  test('defaults engine to "mtr" when not specified', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.target[0].engine).toBe('mtr')
+  })
+
+  test('accepts engine="native" with the default probe mode', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "native"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.target[0].engine).toBe('native')
+  })
+
+  test('rejects engine="native" combined with probe_mode="netns"', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "native"
+probe_mode = "netns"
+netns = "ns-uk-1"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/not yet supported/)
+  })
 })

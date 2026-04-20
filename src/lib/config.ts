@@ -6,6 +6,9 @@ import { z } from 'zod'
 export const probeModeSchema = z.enum(['default', 'netns'])
 export type ProbeMode = z.infer<typeof probeModeSchema>
 
+export const probeEngineSchema = z.enum(['mtr', 'native'])
+export type ProbeEngine = z.infer<typeof probeEngineSchema>
+
 const targetSchema = z.object({
   id: z
     .string()
@@ -14,6 +17,10 @@ const targetSchema = z.object({
   label: z.string().min(1),
   host: z.string().min(1),
   probe_mode: probeModeSchema.default('default'),
+  // `mtr` shells out to the external mtr binary (default, battle-tested).
+  // `native` uses the built-in Linux raw-ICMP prober (no external mtr
+  // needed, but the process needs CAP_NET_RAW).
+  engine: probeEngineSchema.default('mtr'),
   netns: z
     .string()
     .min(1)
@@ -158,6 +165,15 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
     ids.add(target.id)
     if (target.probe_mode === 'netns' && !target.netns) {
       throw new Error(`target '${target.id}' uses probe_mode='netns' but has no 'netns' field`)
+    }
+
+    if (target.engine === 'native' && target.probe_mode === 'netns') {
+      // Running the native prober inside a network namespace needs setns(),
+      // which the FFI prober doesn't do yet. Flip back to engine='mtr' (which
+      // uses nsenter) or move this target out of netns.
+      throw new Error(
+        `target '${target.id}' uses engine='native' with probe_mode='netns', which is not yet supported`,
+      )
     }
   }
 

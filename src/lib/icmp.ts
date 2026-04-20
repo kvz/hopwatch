@@ -133,3 +133,28 @@ export function parseReply(buf: Uint8Array, srcIpBytes: Uint8Array): Parsed | nu
   }
   return null
 }
+
+// Linux x86_64 socket control message constants. See <asm-generic/socket.h>.
+export const SOL_SOCKET = 1
+export const SCM_TIMESTAMPNS = 35
+
+// Walk a `struct cmsghdr` chain (the layout the kernel writes into msg_control
+// on recvmsg) and return the first SCM_TIMESTAMPNS value as nanoseconds since
+// the epoch. Each cmsghdr on x86_64 is: { u64 cmsg_len; i32 cmsg_level; i32
+// cmsg_type; … data … }, then padded up to the next 8-byte boundary.
+export function readScmTimestampNs(ctrlBuf: Uint8Array, controllenBytes: number): bigint | null {
+  let off = 0
+  while (off + 16 <= controllenBytes) {
+    const view = new DataView(ctrlBuf.buffer, ctrlBuf.byteOffset + off)
+    const cmsgLen = Number(view.getBigUint64(0, true))
+    if (cmsgLen < 16 || off + cmsgLen > controllenBytes) return null
+    const level = view.getInt32(8, true)
+    const type = view.getInt32(12, true)
+    if (level === SOL_SOCKET && type === SCM_TIMESTAMPNS && cmsgLen >= 32) {
+      const ts = new DataView(ctrlBuf.buffer, ctrlBuf.byteOffset + off + 16)
+      return ts.getBigInt64(0, true) * 1_000_000_000n + ts.getBigInt64(8, true)
+    }
+    off += (cmsgLen + 7) & ~7
+  }
+  return null
+}

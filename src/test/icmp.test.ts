@@ -12,6 +12,9 @@ import {
   ipv4FromBytes,
   parseIpv4,
   parseReply,
+  readScmTimestampNs,
+  SCM_TIMESTAMPNS,
+  SOL_SOCKET,
 } from '../lib/icmp.ts'
 
 // Builds a minimal IPv4 header (20 bytes, IHL=5, no options). Checksum left
@@ -256,5 +259,69 @@ describe('encodeSeq / decodeSeq', () => {
     const maxHops = 30
     const maxSeq = encodeSeq(9, maxHops, maxHops)
     expect(maxSeq).toBeLessThan(0x10000)
+  })
+})
+
+function buildCmsg(level: number, type: number, data: Uint8Array): Uint8Array {
+  // CMSG_LEN = header (16 bytes) + data length. No tail padding on the
+  // encoded message itself — readScmTimestampNs handles alignment to the
+  // next cmsghdr, but for a single cmsg the un-padded length is enough.
+  const header = 16
+  const buf = new Uint8Array(header + data.length)
+  const view = new DataView(buf.buffer)
+  view.setBigUint64(0, BigInt(header + data.length), true)
+  view.setInt32(8, level, true)
+  view.setInt32(12, type, true)
+  buf.set(data, header)
+  return buf
+}
+
+function buildTimespec(secs: bigint, nsec: bigint): Uint8Array {
+  const buf = new Uint8Array(16)
+  const view = new DataView(buf.buffer)
+  view.setBigInt64(0, secs, true)
+  view.setBigInt64(8, nsec, true)
+  return buf
+}
+
+describe('readScmTimestampNs', () => {
+  test('returns nanoseconds for a single SCM_TIMESTAMPNS cmsg', () => {
+    const ts = buildTimespec(1_700_000_000n, 123_456_789n)
+    const cmsg = buildCmsg(SOL_SOCKET, SCM_TIMESTAMPNS, ts)
+    const ctrl = new Uint8Array(256)
+    ctrl.set(cmsg, 0)
+    expect(readScmTimestampNs(ctrl, cmsg.length)).toBe(
+      1_700_000_000_000_000_000n + 123_456_789n,
+    )
+  })
+
+  test('returns null when no timestamp cmsg is present', () => {
+    const ctrl = new Uint8Array(256)
+    // A foreign cmsg (different level/type) shouldn't match.
+    const other = buildCmsg(999, 999, new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]))
+    ctrl.set(other, 0)
+    expect(readScmTimestampNs(ctrl, other.length)).toBeNull()
+  })
+
+  test('skips foreign cmsg and finds timestamp on next iteration with 8-byte alignment', () => {
+    // First cmsg is 20 bytes (16-byte header + 4 bytes data) — not aligned.
+    // Next cmsghdr must start at 24 (next 8-byte boundary).
+    const first = buildCmsg(999, 999, new Uint8Array([1, 2, 3, 4]))
+    const ts = buildTimespec(42n, 7n)
+    const second = buildCmsg(SOL_SOCKET, SCM_TIMESTAMPNS, ts)
+    const ctrl = new Uint8Array(256)
+    ctrl.set(first, 0)
+    ctrl.set(second, 24) // 20 rounded up to 24
+    expect(readScmTimestampNs(ctrl, 24 + second.length)).toBe(42_000_000_007n)
+  })
+
+  test('returns null when cmsg_len is absurd (truncated/corrupt control data)', () => {
+    const ctrl = new Uint8Array(256)
+    const view = new DataView(ctrl.buffer)
+    view.setBigUint64(0, 8n, true) // cmsg_len too small to contain level+type
+    view.setInt32(8, SOL_SOCKET, true)
+    view.setInt32(12, SCM_TIMESTAMPNS, true)
+    // cmsgLen < 16 guards against infinite loops on corrupt data.
+    expect(readScmTimestampNs(ctrl, 256)).toBeNull()
   })
 })

@@ -152,6 +152,7 @@ dfn { font-style: normal; cursor: help; border-bottom: 1px dotted var(--muted); 
 
 .lede { color: var(--muted); margin-bottom: 24px; }
 .status-age { color: var(--muted); font-weight: 500; white-space: nowrap; }
+.cell-subtle { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; }
 
 .panel {
   background: var(--panel);

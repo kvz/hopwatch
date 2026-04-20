@@ -53,6 +53,129 @@ EOF
 # → http://localhost:8080
 ```
 
+## Production install on Ubuntu
+
+An A-to-Z recipe for the latest Ubuntu LTS. Assumes you are root (use `sudo -i`
+or prefix each command with `sudo`). After this the daemon runs under its own
+unprivileged user, probes with the system `mtr`, logs to the journal, and
+restarts on failure.
+
+```bash
+# 1. Runtime deps. mtr-tiny ships a setuid helper (mtr-packet) so unprivileged
+# users can run traceroutes without granting CAP_NET_RAW to hopwatch itself.
+apt-get update
+apt-get install -y mtr-tiny curl tar ca-certificates
+
+# 2. Dedicated system user. No shell, no home dir, owns the state dir.
+adduser --system --group --no-create-home --home /var/lib/hopwatch hopwatch
+
+# 3. Binary. Replace the URL with the asset for your architecture.
+curl -fsSL https://github.com/kvz/hopwatch/releases/latest/download/hopwatch-linux-x64.tar.gz \
+  | tar -xz -C /usr/local/bin
+chmod 0755 /usr/local/bin/hopwatch
+
+# 4. Directories. /etc/hopwatch holds the config; /var/lib/hopwatch holds
+# snapshots and rollups.
+install -d -o root -g root -m 0755 /etc/hopwatch
+install -d -o hopwatch -g hopwatch -m 0750 /var/lib/hopwatch
+
+# 5. Config.
+cat > /etc/hopwatch/hopwatch.toml <<'EOF'
+[server]
+listen   = ":8080"
+data_dir = "/var/lib/hopwatch"
+node_label = "observer-1"
+
+[probe]
+interval_seconds = 900
+packets          = 20
+keep_days        = 14
+mtr_bin          = "mtr"
+
+[[target]]
+id    = "cloudflare"
+label = "Cloudflare public"
+host  = "cloudflare.com"
+
+[[target]]
+id    = "google-dns"
+label = "Google DNS"
+host  = "8.8.8.8"
+EOF
+
+# 6. systemd unit. stdout goes to the journal; sandboxing flags are opinionated
+# but safe for the default MTR probe mode (netns probe mode needs additional
+# capabilities and is outside the scope of this recipe).
+cat > /etc/systemd/system/hopwatch.service <<'EOF'
+[Unit]
+Description=hopwatch — SmokePing-style MTR monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hopwatch
+Group=hopwatch
+ExecStart=/usr/local/bin/hopwatch daemon --config /etc/hopwatch/hopwatch.toml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+# Sandboxing. Relax these (or drop them) if you use probe_mode = "netns".
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/hopwatch
+LockPersonality=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 7. Validate the config before enabling, then start.
+sudo -u hopwatch /usr/local/bin/hopwatch config-check \
+  --config /etc/hopwatch/hopwatch.toml
+
+systemctl daemon-reload
+systemctl enable --now hopwatch.service
+
+# 8. Tail logs and confirm it's up.
+journalctl -u hopwatch -f
+# → http://<host>:8080
+```
+
+To upgrade later: drop the new binary into `/usr/local/bin/hopwatch`, then
+`systemctl restart hopwatch`. State in `/var/lib/hopwatch` is preserved.
+
+### Putting it behind nginx (optional)
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name hopwatch.example.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+Bind hopwatch to loopback only (`listen = "127.0.0.1:8080"`) when fronting it
+with nginx.
+
 ## How it looks
 
 Same plot conventions as SmokePing: smoke bands (interquartile range),
@@ -127,8 +250,9 @@ that's easier to drop onto a host. Pick whichever matches your situation.
   for slaves reporting back to a central master. hopwatch only links peers
   via URL in the top-nav; each instance stores its own data.
 - **Email/paging alerts with pattern matching.** SmokePing's alert rules and
-  matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that
-  yet.
+  matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that,
+  and probably never will — alerting belongs in the alerting system you
+  already run.
 - **Decade-plus historical rollups on a small disk.** rrdtool's pre-sized
   round-robin archives are hard to beat for long retention on tiny storage.
   hopwatch keeps raw snapshots on disk (pruned at `keep_days`) plus
@@ -137,9 +261,9 @@ that's easier to drop onto a host. Pick whichever matches your situation.
   Puppet/Ansible modules — SmokePing has a 20-year head start.
 
 In short: if you want a familiar-looking MTR dashboard that you can `scp` to
-a box and run behind systemd in five minutes, hopwatch. If you're already
-running SmokePing and using its probes, alerts, or slave fan-out, there is
-no reason to switch.
+a box and run behind systemd in five minutes, and lets you observe the
+traceroutes themselves, hopwatch. If you're already running SmokePing and
+using its probes, alerts, or slave fan-out, there is no reason to switch.
 
 ## Attribution
 

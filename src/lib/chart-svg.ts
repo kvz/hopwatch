@@ -216,14 +216,16 @@ export function renderChartSvg(
     }
 
     // No median to position a horizontal marker on (e.g. 100 % loss → no
-    // replies → no sample array). Without a fallback these bins render
-    // completely empty on the raw-snapshot charts while showing up on the
-    // rollup-backed charts (where other snapshots in the bucket still have a
-    // median). Paint a full-height colored strip so loss spikes are visible.
+    // replies → no sample array). SmokePing paints a thin bottom-anchored
+    // loss bar in this case; mimic that with a short solid rect whose height
+    // scales with the loss fraction, so operators see a spike at the baseline
+    // instead of a full-height translucent wash.
     if (point.destinationLossPct != null && point.destinationLossPct > 0) {
       const color = lossColorFor(point.destinationLossPct)
+      const lossBarMaxPx = 12
+      const lossBarHeight = Math.max(1, Math.round((point.destinationLossPct / 100) * lossBarMaxPx))
       medianMarkers.push(
-        `<rect x="${xLeft}" y="${plotTop}" width="${w}" height="${plotBottom - plotTop}" fill="${color}" fill-opacity="0.35" shape-rendering="crispEdges" />`,
+        `<rect x="${xLeft}" y="${plotBottom - lossBarHeight}" width="${w}" height="${lossBarHeight}" fill="${color}" shape-rendering="crispEdges" />`,
       )
     }
   }

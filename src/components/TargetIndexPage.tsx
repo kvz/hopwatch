@@ -250,11 +250,10 @@ export function TargetIndexPage({
                 return (
                   <tr key={snapshot.collectedAt}>
                     <td>
-                      <time dateTime={snapshot.collectedAt} title={absoluteCollectedAt}>
+                      <time dateTime={snapshot.collectedAt} title={snapshot.collectedAt}>
                         {formatRelativeCollectedAt(snapshot.collectedAt, now)}
                       </time>
-                      <br />
-                      <code>{snapshot.collectedAt}</code>
+                      <div className="cell-subtle">{absoluteCollectedAt}</div>
                     </td>
                     <td>
                       <span className={`loss ${getLossClass(snapshot.destinationLossPct)}`}>

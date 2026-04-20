@@ -15,6 +15,7 @@ import type { LoadedConfig, ProbeMode, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
 import { parseRawMtrOutput, parseStoredRawSnapshot } from './raw.ts'
 import { updateTargetRollups } from './rollups.ts'
+import { RESERVED_TARGET_FILES } from './snapshot.ts'
 
 export interface MtrHistoryTarget {
   slug: string
@@ -106,6 +107,10 @@ export async function removeOldSnapshots(
 
   for (const entry of entries) {
     if (!entry.isFile() || (!entry.name.endsWith('.txt') && !entry.name.endsWith('.json'))) {
+      continue
+    }
+
+    if (RESERVED_TARGET_FILES.has(entry.name)) {
       continue
     }
 
@@ -301,7 +306,14 @@ export async function runCollector(
   const runCommand = deps.runCommand ?? execFileAsync
 
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
-    await collectSnapshot(nodeLabel, timestamp, options, target, runCommand, logger)
+    try {
+      await collectSnapshot(nodeLabel, timestamp, options, target, runCommand, logger)
+    } catch (err) {
+      if (!(err instanceof Error)) {
+        throw new Error(`Was thrown a non-error: ${err}`)
+      }
+      logger.error('snapshot failed', { error: err.message, target: target.slug })
+    }
   })
 
   await updateRollupsForTargets(nodeLabel, options, nowDate)

@@ -362,7 +362,7 @@ export function parseSnapshotSummary(fileName: string, rawText: string): Snapsho
   }
 }
 
-const RESERVED_TARGET_FILES = new Set([
+export const RESERVED_TARGET_FILES: ReadonlySet<string> = new Set([
   'latest.json',
   'hourly.rollup.json',
   'daily.rollup.json',

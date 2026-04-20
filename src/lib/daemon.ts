@@ -60,26 +60,41 @@ async function serveFile(root: string, urlPath: string): Promise<Response> {
   })
 }
 
-interface SchedulerHandle {
+export interface SchedulerHandle {
+  runNow: () => Promise<void>
   stop: () => void
 }
 
-function startScheduler(config: LoadedConfig, logger: Logger): SchedulerHandle {
+export interface SchedulerDependencies {
+  runCollectorFn?: (config: LoadedConfig, logger: Logger) => Promise<void>
+}
+
+export function startScheduler(
+  config: LoadedConfig,
+  logger: Logger,
+  deps: SchedulerDependencies = {},
+): SchedulerHandle {
   const intervalMs = config.probe.interval_seconds * 1000
   const jitterMs = config.probe.jitter_seconds * 1000
+  const runCollectorFn = deps.runCollectorFn ?? runCollector
   let cancelled = false
   let activeRun: Promise<void> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
 
   async function runOnce(): Promise<void> {
-    if (cancelled || activeRun) {
+    if (cancelled) {
+      return
+    }
+
+    if (activeRun != null) {
+      await activeRun
       return
     }
 
     const run = (async (): Promise<void> => {
       const started = Date.now()
       try {
-        await runCollector(config, logger)
+        await runCollectorFn(config, logger)
         logger.info('cycle complete', {
           elapsedMs: Date.now() - started,
           targets: config.target.length,
@@ -117,6 +132,7 @@ function startScheduler(config: LoadedConfig, logger: Logger): SchedulerHandle {
   schedule(initialJitter)
 
   return {
+    runNow: runOnce,
     stop(): void {
       cancelled = true
       if (timer != null) {
@@ -201,7 +217,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
     port: server.port,
   })
 
-  void runCollector(config, logger).catch((err: unknown) => {
+  void scheduler.runNow().catch((err: unknown) => {
     if (!(err instanceof Error)) {
       throw new Error(`Was thrown a non-error: ${err}`)
     }

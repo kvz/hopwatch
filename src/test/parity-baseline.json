@@ -1,0 +1,13 @@
+{
+  "description": "Per-fixture upper bound for pixel-mismatch (%) and RMS delta when comparing our native renderer to real SmokePing PNGs from the AP observer. Tests fail if a fixture drifts above its budget. Tighten numbers as we improve parity. Regenerate inputs with `bun run scripts/extract-real-ap-points.ts`.",
+  "pixelThreshold": 20,
+  "fixtures": {
+    "AWS__AP-Southeast-1": { "maxMismatchPct": 25, "maxRms": 48 },
+    "AWS__EU-West-1": { "maxMismatchPct": 16, "maxRms": 45 },
+    "AWS__US-East-1": { "maxMismatchPct": 18, "maxRms": 41 },
+    "Cloudflare__r2-EU": { "maxMismatchPct": 25, "maxRms": 45 },
+    "General__Cloudflare": { "maxMismatchPct": 20, "maxRms": 44 },
+    "General__Google": { "maxMismatchPct": 30, "maxRms": 50 },
+    "Hetzner__S3-fsn1": { "maxMismatchPct": 18, "maxRms": 44 }
+  }
+}

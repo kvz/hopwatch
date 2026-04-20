@@ -1,0 +1,33 @@
+[server]
+listen     = ":8080"
+data_dir   = "./hopwatch-data"
+node_label = "dev"
+
+[probe]
+interval_seconds = 900
+packets          = 20
+ip_version       = 4
+mtr_bin          = "mtr"
+concurrency      = 3
+keep_days        = 14
+jitter_seconds   = 30
+
+[[target]]
+id    = "cloudflare"
+label = "Cloudflare public"
+host  = "cloudflare.com"
+
+[[target]]
+id    = "google-dns"
+label = "Google DNS"
+host  = "8.8.8.8"
+
+[[peer]]
+id    = "eu"
+url   = "https://hopwatch-eu.example.com"
+label = "EU"
+
+[[peer]]
+id    = "us"
+url   = "https://hopwatch-us.example.com"
+label = "US"

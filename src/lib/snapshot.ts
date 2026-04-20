@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import type { ProbeMode } from './config.ts'
-import { escapeHtml } from './layout.ts'
 import {
   deriveHopRecordsFromRawEvents,
   parseStoredRawSnapshot,
@@ -402,37 +401,6 @@ export function formatLoss(lossPct: number | null): string {
   }
 
   return `${lossPct.toFixed(1)}%`
-}
-
-const UNKNOWN_HOST_TITLE =
-  "Unknown hop identity. The router at this TTL did not send an ICMP Time Exceeded reply that named itself (commonly because it drops or rate-limits ICMP, because reverse DNS has no PTR record, or because it's an anonymizing middlebox), so neither a hostname nor an IP could be recovered."
-
-export function renderUnknownHopHost(): string {
-  return `<dfn title="${UNKNOWN_HOST_TITLE}">???</dfn>`
-}
-
-export function renderHopHostHtml(host: string): string {
-  if (host === '???') {
-    return renderUnknownHopHost()
-  }
-
-  return `<code>${escapeHtml(host)}</code>`
-}
-
-export function renderDiagnosisSummary(summary: string, hops: HopRecord[]): string {
-  let rendered = escapeHtml(summary)
-  const uniqueHosts = [
-    ...new Set(hops.map((hop) => hop.host).filter((host) => host.trim() !== '' && host !== '???')),
-  ].sort((left, right) => right.length - left.length)
-
-  for (const host of uniqueHosts) {
-    const escapedHost = escapeHtml(host)
-    rendered = rendered.replaceAll(escapedHost, `<code>${escapedHost}</code>`)
-  }
-
-  rendered = rendered.replaceAll('???', renderUnknownHopHost())
-
-  return rendered
 }
 
 function getSeverityScaleClass(

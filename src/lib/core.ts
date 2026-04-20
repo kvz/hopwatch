@@ -26,14 +26,13 @@ export {
   targetFromConfig,
 } from './collector.ts'
 export type { ProbeMode } from './config.ts'
-export { escapeHtml, getPeerNavLinks, renderLayout, renderTopNav } from './layout.ts'
+export { escapeHtml, getPeerNavLinks } from './layout.ts'
 export {
   listTargetSnapshots,
   type RenderedTarget,
-  renderChartCard,
   renderRootIndex,
   renderTargetIndex,
-} from './page.ts'
+} from './page.tsx'
 export {
   diagnoseSnapshot,
   formatAbsoluteCollectedAt,
@@ -48,10 +47,7 @@ export {
   parseSnapshotSummary,
   parseStoredSnapshotSummary,
   readSnapshotSummary,
-  renderDiagnosisSummary,
-  renderHopHostHtml,
   renderSnapshotRawText,
-  renderUnknownHopHost,
   type SnapshotDiagnosis,
   type SnapshotSummary,
 } from './snapshot.ts'

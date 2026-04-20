@@ -290,9 +290,7 @@ describe('readScmTimestampNs', () => {
     const cmsg = buildCmsg(SOL_SOCKET, SCM_TIMESTAMPNS, ts)
     const ctrl = new Uint8Array(256)
     ctrl.set(cmsg, 0)
-    expect(readScmTimestampNs(ctrl, cmsg.length)).toBe(
-      1_700_000_000_000_000_000n + 123_456_789n,
-    )
+    expect(readScmTimestampNs(ctrl, cmsg.length)).toBe(1_700_000_000_000_000_000n + 123_456_789n)
   })
 
   test('returns null when no timestamp cmsg is present', () => {

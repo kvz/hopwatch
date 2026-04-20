@@ -89,7 +89,7 @@ describe('renderChartSvg in mini mode', () => {
     expect(svg).toContain('#ff5500')
   })
 
-  test('paints a bottom-anchored loss bar for 100% loss bins in mini mode too', () => {
+  test('100% loss bins leave a gap in mini mode too (no bottom-anchored bar)', () => {
     const points = [
       healthyPoint(NOW - 5 * 60 * 60 * 1000, 1.5),
       {
@@ -107,7 +107,8 @@ describe('renderChartSvg in mini mode', () => {
     ]
     const svg = renderChartSvg(points, miniOptions())
 
-    // #a00000 = 100% loss bucket color. Bar must be present.
-    expect(svg).toContain('#a00000')
+    // #a00000 = 100% loss bucket color. SmokePing draws no marker without a
+    // median — we match that, so the bucket color must not appear.
+    expect(svg).not.toContain('#a00000')
   })
 })

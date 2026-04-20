@@ -201,7 +201,6 @@ export function renderChartSvg(
   const medianMarkers: string[] = []
   const plotLeftMarker = padding.left
   const plotRightMarker = width - padding.right
-  const plotBottom = Math.round(padding.top + chartHeight)
   for (const point of points) {
     const leftMs = leftEdgeMsFor.get(point.timestamp) ?? point.timestamp - 2 * barHalfMs
     const xLeftRaw = Math.max(plotLeftMarker, Math.min(plotRightMarker, xOf(leftMs)))
@@ -218,22 +217,10 @@ export function renderChartSvg(
       medianMarkers.push(
         `<rect x="${xLeft}" y="${yMid - 1}" width="${w}" height="2" fill="${color}" shape-rendering="crispEdges" />`,
       )
-      continue
     }
-
-    // No median to position a horizontal marker on (e.g. 100 % loss → no
-    // replies → no sample array). SmokePing paints a thin bottom-anchored
-    // loss bar in this case; mimic that with a short solid rect whose height
-    // scales with the loss fraction, so operators see a spike at the baseline
-    // instead of a full-height translucent wash.
-    if (point.destinationLossPct != null && point.destinationLossPct > 0) {
-      const color = lossColorFor(point.destinationLossPct)
-      const lossBarMaxPx = 12
-      const lossBarHeight = Math.max(1, Math.round((point.destinationLossPct / 100) * lossBarMaxPx))
-      medianMarkers.push(
-        `<rect x="${xLeft}" y="${plotBottom - lossBarHeight}" width="${w}" height="${lossBarHeight}" fill="${color}" shape-rendering="crispEdges" />`,
-      )
-    }
+    // No median (e.g. 100 % loss bin) → no marker. SmokePing does the same:
+    // without a median there's nothing to anchor a colored line on, so the bin
+    // reads as a gap. Loss is still visible in the stats row and neighbours.
   }
   const medianMarkersSvg = medianMarkers.join('')
 

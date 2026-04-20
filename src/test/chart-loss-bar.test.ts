@@ -69,7 +69,7 @@ function extractLossBars(svg: string): Array<{
 }
 
 describe('renderChartSvg loss bar', () => {
-  test('paints a thin bottom-anchored solid bar for 100% loss bins, not a full-height translucent strip', () => {
+  test('100% loss bins leave a gap — no median to anchor a marker on, same as SmokePing', () => {
     const points = [totalLossPoint(NOW - 30 * 60 * 1000)]
     const svg = renderChartSvg(points, {
       height: HEIGHT,
@@ -82,21 +82,11 @@ describe('renderChartSvg loss bar', () => {
 
     const rects = extractLossBars(svg)
     const lossRects = rects.filter((r) => r.fill.toLowerCase() === '#a00000')
-    expect(lossRects).toHaveLength(1)
-    const bar = lossRects[0]
+    expect(lossRects).toHaveLength(0)
 
-    const padding = { bottom: 82, top: 13 }
-    const plotBottom = padding.top + (HEIGHT - padding.top - padding.bottom)
-
-    // Bottom-anchored: rect's bottom edge sits on plotBottom.
-    expect(bar.y + bar.height).toBe(plotBottom)
-
-    // Thin: should be a small fraction of the plot, not the whole thing.
-    expect(bar.height).toBeLessThanOrEqual(14)
-    expect(bar.height).toBeGreaterThanOrEqual(1)
-
-    // Solid, not translucent.
-    expect(bar.opacity).toBeNull()
+    // And no translucent full-height strip either.
+    const translucent = rects.filter((r) => r.opacity != null)
+    expect(translucent).toHaveLength(0)
   })
 
   test('healthy bins keep their 2px colored median marker and no bottom loss bar is drawn', () => {

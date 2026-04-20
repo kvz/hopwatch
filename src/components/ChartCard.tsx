@@ -9,17 +9,10 @@ interface ChartCardProps {
   signature?: string
 }
 
-function rangeHoursFor(label: string): number {
-  if (label === '3h') return 3
-  if (label === '30h') return 30
-  if (label === '10d') return 10 * 24
-  return 360 * 24
-}
-
 export function ChartCard({ chart, now, compact = false, signature }: ChartCardProps): ReactNode {
   const width = compact ? 158 : 770
   const height = compact ? 42 : 340
-  const rangeMs = rangeHoursFor(chart.rangeLabel) * 60 * 60 * 1000
+  const { rangeMs } = chart
   const title = `${chart.label} latency and loss`
 
   if (compact) {

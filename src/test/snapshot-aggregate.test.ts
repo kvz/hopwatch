@@ -64,7 +64,7 @@ describe('summarizeSnapshots', () => {
       snapshot({ collectedAt: '20260420T110000Z', destinationLossPct: 10 }),
       snapshot({ collectedAt: '20260420T113000Z', destinationLossPct: 20 }),
     ]
-    const agg = summarizeSnapshots(snaps, now, 2 * HOUR)
+    const agg = summarizeSnapshots(selectSnapshotsInWindow(snaps, now, 2 * HOUR))
     expect(agg.sampleCount).toBe(2)
     expect(agg.averageDestinationLossPct).toBe(15)
   })
@@ -196,7 +196,7 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
         ],
       }),
     ]
-    const issues = summarizeHopIssues(snaps, now, HOUR)
+    const issues = summarizeHopIssues(selectSnapshotsInWindow(snaps, now, HOUR))
     expect(issues).toHaveLength(1)
     expect(issues[0]).toMatchObject({
       host: 'router.example',

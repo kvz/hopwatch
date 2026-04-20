@@ -49,33 +49,27 @@ export function selectSnapshotsInWindow(
   })
 }
 
-export function summarizeSnapshots(
-  snapshots: SnapshotSummary[],
-  now: number,
-  windowMs: number,
-): SnapshotAggregate {
-  const inWindow = selectSnapshotsInWindow(snapshots, now, windowMs)
-
+// summarize* helpers expect snapshots already restricted to the window of
+// interest — pass through selectSnapshotsInWindow() first. Letting the caller
+// pre-filter once and reuse the slice for multiple aggregates (as page.tsx
+// does) avoids redoing the cutoff walk per helper.
+export function summarizeSnapshots(snapshotsInWindow: SnapshotSummary[]): SnapshotAggregate {
   return {
     averageDestinationLossPct: average(
-      inWindow.flatMap((snapshot) =>
+      snapshotsInWindow.flatMap((snapshot) =>
         snapshot.destinationLossPct == null ? [] : [snapshot.destinationLossPct],
       ),
     ),
     averageWorstHopLossPct: average(
-      inWindow.flatMap((snapshot) =>
+      snapshotsInWindow.flatMap((snapshot) =>
         snapshot.worstHopLossPct == null ? [] : [snapshot.worstHopLossPct],
       ),
     ),
-    sampleCount: inWindow.length,
+    sampleCount: snapshotsInWindow.length,
   }
 }
 
-export function summarizeDiagnoses(
-  snapshots: SnapshotSummary[],
-  now: number,
-  windowMs: number,
-): DiagnosisAggregate {
+export function summarizeDiagnoses(snapshotsInWindow: SnapshotSummary[]): DiagnosisAggregate {
   const aggregate: DiagnosisAggregate = {
     destinationLossCount: 0,
     healthyCount: 0,
@@ -84,7 +78,7 @@ export function summarizeDiagnoses(
     unknownCount: 0,
   }
 
-  for (const snapshot of selectSnapshotsInWindow(snapshots, now, windowMs)) {
+  for (const snapshot of snapshotsInWindow) {
     aggregate.sampleCount += 1
     if (snapshot.diagnosis.kind === 'destination_loss') {
       aggregate.destinationLossCount += 1
@@ -139,14 +133,10 @@ export function getHistoricalSeverityBadge(
   }
 }
 
-export function summarizeHopIssues(
-  snapshots: SnapshotSummary[],
-  now: number,
-  windowMs: number,
-): HopAggregate[] {
+export function summarizeHopIssues(snapshotsInWindow: SnapshotSummary[]): HopAggregate[] {
   const hopMap = new Map<string, HopAggregate>()
 
-  for (const snapshot of selectSnapshotsInWindow(snapshots, now, windowMs)) {
+  for (const snapshot of snapshotsInWindow) {
     const destinationLossPct = snapshot.destinationLossPct ?? 0
     for (const hop of snapshot.hops.slice(0, -1)) {
       if (hop.lossPct <= 0) {

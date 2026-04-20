@@ -99,11 +99,12 @@ export function renderChartSvg(
       let lower: number | null | undefined
       let upper: number | null | undefined
       if (point.rttSamplesMs != null && point.rttSamplesMs.length > 0) {
-        const sorted = point.rttSamplesMs.slice().sort((a, b) => a - b)
+        // rttSamplesMs is pre-sorted in getPointsFromSnapshots (src/lib/chart.ts)
+        // so each smoke band can read quantiles without re-sorting.
         const qLo = (ibot - 1) / (pingSlots - 1)
         const qHi = (itop - 1) / (pingSlots - 1)
-        lower = quantile(sorted, qLo)
-        upper = quantile(sorted, qHi)
+        lower = quantile(point.rttSamplesMs, qLo)
+        upper = quantile(point.rttSamplesMs, qHi)
       } else {
         lower = point[fallbackLowerKey]
         upper = point[fallbackUpperKey]

@@ -61,10 +61,11 @@ export async function renderTargetIndex(
   }
 
   const latestSnapshot = snapshots[0]
-  const lastDay = summarizeSnapshots(snapshots, now, ONE_DAY_MS)
+  const lastDaySnapshots = selectSnapshotsInWindow(snapshots, now, ONE_DAY_MS)
   const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
-  const lastWeek = summarizeSnapshots(lastWeekSnapshots, now, SEVEN_DAYS_MS)
-  const hopIssues = summarizeHopIssues(lastWeekSnapshots, now, SEVEN_DAYS_MS).slice(0, 5)
+  const lastDay = summarizeSnapshots(lastDaySnapshots)
+  const lastWeek = summarizeSnapshots(lastWeekSnapshots)
+  const hopIssues = summarizeHopIssues(lastWeekSnapshots).slice(0, 5)
   const charts = await loadChartDefinitions(targetDir, snapshots, now)
 
   const html = renderDocument(
@@ -119,10 +120,10 @@ export async function renderRootIndex(
 
     const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
     targetSummaries.push({
-      aggregate: summarizeSnapshots(lastWeekSnapshots, now, SEVEN_DAYS_MS),
+      aggregate: summarizeSnapshots(lastWeekSnapshots),
       charts: await loadChartDefinitions(targetDir, snapshots, now),
-      diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots, now, SEVEN_DAYS_MS),
-      hopIssues: summarizeHopIssues(lastWeekSnapshots, now, SEVEN_DAYS_MS),
+      diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots),
+      hopIssues: summarizeHopIssues(lastWeekSnapshots),
       targetSlug,
       summary: snapshots[0],
     })

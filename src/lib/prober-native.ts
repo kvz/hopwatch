@@ -36,6 +36,12 @@ export interface NativeProbeOptions {
   packets?: number
   timeoutMs?: number
   resolveReverseDns?: boolean
+  // Inter-send pacing. Firing all TTLs back-to-back (<1ms) hammers routers
+  // into their ICMP rate limiters (saw ~70% apparent loss against 8.8.8.8
+  // with zero pacing) AND starves the non-blocking drain so destHopIndex
+  // is set too late for early-stop to kick in. 25ms is well under mtr's 1s
+  // default but gives replies enough headroom on low-RTT paths.
+  probeIntervalMs?: number
 }
 
 const DEFAULTS = {
@@ -43,6 +49,7 @@ const DEFAULTS = {
   packets: 10,
   timeoutMs: 5000,
   resolveReverseDns: true,
+  probeIntervalMs: 25,
 } as const
 
 const libc = dlopen('libc.so.6', {
@@ -74,6 +81,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
   const packets = options.packets ?? DEFAULTS.packets
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs
   const resolveRdns = options.resolveReverseDns ?? DEFAULTS.resolveReverseDns
+  const probeIntervalMs = options.probeIntervalMs ?? DEFAULTS.probeIntervalMs
 
   const targetBytes = parseIpv4(options.hostIp)
   const targetSa = buildSockaddrIn(targetBytes, 0)
@@ -159,7 +167,13 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
           continue
         }
         events.push({ kind: 'sent', hopIndex: ttl - 1, probeId: seq })
-        while (drainOnce()) {}
+        // Pace the next send while opportunistically draining replies. Using
+        // a real sleep (not a spin) gives the kernel time to accept incoming
+        // Time Exceeded packets and lets destHopIndex settle before cycle N+1.
+        const nextSendAtNs = Bun.nanoseconds() + probeIntervalMs * 1_000_000
+        while (Bun.nanoseconds() < nextSendAtNs) {
+          if (!drainOnce()) await Bun.sleep(2)
+        }
       }
     }
 

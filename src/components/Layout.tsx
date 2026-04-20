@@ -17,7 +17,7 @@ export function Layout({ title, children }: LayoutProps): ReactNode {
       </head>
       <body>
         <main>{children}</main>
-        <script src="/assets/sortable-tables.js" defer />
+        <script src="./assets/sortable-tables.js" defer />
       </body>
     </html>
   )

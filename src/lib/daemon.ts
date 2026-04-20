@@ -191,7 +191,12 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         return new Response('ok', { status: 200 })
       }
 
-      if (url.pathname === '/assets/sortable-tables.js') {
+      // The script tag uses `./assets/sortable-tables.js` so that it resolves
+      // both under the daemon's own root (`/`) and behind a reverse-proxy
+      // subpath (`/hopwatch/<slug>/...`). Accept any-depth suffix here so the
+      // request always hits the in-memory transpile rather than the file
+      // server, which would try to find it on disk per-slug.
+      if (url.pathname.endsWith('/assets/sortable-tables.js')) {
         return new Response(getSortableTablesJs(), {
           headers: {
             'cache-control': 'public, max-age=3600',

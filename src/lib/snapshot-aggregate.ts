@@ -37,16 +37,24 @@ function average(values: number[]): number | null {
   return values.reduce((sum, value) => sum + value, 0) / values.length
 }
 
+export function selectSnapshotsInWindow(
+  snapshots: SnapshotSummary[],
+  now: number,
+  windowMs: number,
+): SnapshotSummary[] {
+  const cutoff = now - windowMs
+  return snapshots.filter((snapshot) => {
+    const timestamp = parseCollectedAt(snapshot.collectedAt)
+    return timestamp != null && timestamp >= cutoff
+  })
+}
+
 export function summarizeSnapshots(
   snapshots: SnapshotSummary[],
   now: number,
   windowMs: number,
 ): SnapshotAggregate {
-  const cutoff = now - windowMs
-  const inWindow = snapshots.filter((snapshot) => {
-    const timestamp = parseCollectedAt(snapshot.collectedAt)
-    return timestamp != null && timestamp >= cutoff
-  })
+  const inWindow = selectSnapshotsInWindow(snapshots, now, windowMs)
 
   return {
     averageDestinationLossPct: average(
@@ -68,7 +76,6 @@ export function summarizeDiagnoses(
   now: number,
   windowMs: number,
 ): DiagnosisAggregate {
-  const cutoff = now - windowMs
   const aggregate: DiagnosisAggregate = {
     destinationLossCount: 0,
     healthyCount: 0,
@@ -77,12 +84,7 @@ export function summarizeDiagnoses(
     unknownCount: 0,
   }
 
-  for (const snapshot of snapshots) {
-    const timestamp = parseCollectedAt(snapshot.collectedAt)
-    if (timestamp == null || timestamp < cutoff) {
-      continue
-    }
-
+  for (const snapshot of selectSnapshotsInWindow(snapshots, now, windowMs)) {
     aggregate.sampleCount += 1
     if (snapshot.diagnosis.kind === 'destination_loss') {
       aggregate.destinationLossCount += 1
@@ -142,15 +144,9 @@ export function summarizeHopIssues(
   now: number,
   windowMs: number,
 ): HopAggregate[] {
-  const cutoff = now - windowMs
   const hopMap = new Map<string, HopAggregate>()
 
-  for (const snapshot of snapshots) {
-    const timestamp = parseCollectedAt(snapshot.collectedAt)
-    if (timestamp == null || timestamp < cutoff) {
-      continue
-    }
-
+  for (const snapshot of selectSnapshotsInWindow(snapshots, now, windowMs)) {
     const destinationLossPct = snapshot.destinationLossPct ?? 0
     for (const hop of snapshot.hops.slice(0, -1)) {
       if (hop.lossPct <= 0) {

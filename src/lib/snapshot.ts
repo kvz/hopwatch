@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import type { ProbeMode } from './config.ts'
@@ -8,6 +8,7 @@ import {
   quantile,
   resolveDestinationHopIndex,
   type StoredRawSnapshot,
+  summarizeDestinationSamples,
 } from './raw.ts'
 
 const nullableNumber = z
@@ -143,26 +144,6 @@ export function renderSnapshotRawText(
   ].join('\n')
 }
 
-function getDestinationRttSamplesMs(
-  rawSnapshot: StoredRawSnapshot,
-  destinationHopIndex: number | null,
-): number[] {
-  if (destinationHopIndex == null) {
-    return []
-  }
-
-  const samples: number[] = []
-  for (const event of rawSnapshot.rawEvents) {
-    if (event.kind !== 'reply' || event.hopIndex !== destinationHopIndex) {
-      continue
-    }
-
-    samples.push(event.rttUs / 1000)
-  }
-
-  return samples
-}
-
 export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
   const parsed = JSON.parse(contents) as unknown
   if (
@@ -181,10 +162,10 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     const destinationAvgRttMs = destinationHop?.avgMs ?? null
     const destinationLossPct = destinationHop?.lossPct ?? null
     const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
-    const destinationRttSamplesMs = getDestinationRttSamplesMs(
-      rawSnapshot,
+    const destinationRttSamplesMs = summarizeDestinationSamples(
+      rawSnapshot.rawEvents,
       destinationHopIndex,
-    ).sort((left, right) => left - right)
+    ).rttSamplesMs.sort((left, right) => left - right)
     const destinationRttMinMs =
       destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
     const destinationRttMaxMs =
@@ -379,6 +360,22 @@ export function parseSnapshotSummary(fileName: string, rawText: string): Snapsho
     target: labelMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
     worstHopLossPct,
   }
+}
+
+const RESERVED_TARGET_FILES = new Set([
+  'latest.json',
+  'hourly.rollup.json',
+  'daily.rollup.json',
+  'alert-state.json',
+])
+
+export async function listSnapshotFileNames(targetDir: string): Promise<string[]> {
+  const entries = await readdir(targetDir, { withFileTypes: true })
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    .filter((name) => !RESERVED_TARGET_FILES.has(name))
+    .sort()
 }
 
 export async function readSnapshotSummary(

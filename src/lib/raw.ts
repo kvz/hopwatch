@@ -311,6 +311,33 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
 // Linear-interpolation quantile (NIST / numpy default). Used everywhere we
 // compute percentiles from RTT samples so the smoke-band, summary stats, and
 // rollup aggregates all agree on the same math.
+export interface DestinationSampleSummary {
+  rttSamplesMs: number[]
+  sentCount: number
+}
+
+export function summarizeDestinationSamples(
+  rawEvents: RawMtrEvent[],
+  destinationHopIndex: number | null = resolveDestinationHopIndex(rawEvents),
+): DestinationSampleSummary {
+  if (destinationHopIndex == null) {
+    return { rttSamplesMs: [], sentCount: 0 }
+  }
+
+  const rttSamplesMs: number[] = []
+  let sentCount = 0
+  for (const event of rawEvents) {
+    if (event.hopIndex !== destinationHopIndex) continue
+    if (event.kind === 'sent') {
+      sentCount += 1
+    } else if (event.kind === 'reply') {
+      rttSamplesMs.push(event.rttUs / 1000)
+    }
+  }
+
+  return { rttSamplesMs, sentCount }
+}
+
 export function quantile(sortedValues: number[], percentile: number): number | null {
   if (sortedValues.length === 0) {
     return null

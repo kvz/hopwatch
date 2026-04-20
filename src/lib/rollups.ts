@@ -1,4 +1,4 @@
-import { readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -7,9 +7,10 @@ import type { ProbeMode } from './config.ts'
 import {
   parseStoredRawSnapshot,
   quantile,
-  resolveDestinationHopIndex,
   type StoredRawSnapshot,
+  summarizeDestinationSamples,
 } from './raw.ts'
+import { listSnapshotFileNames } from './snapshot.ts'
 
 export type RollupGranularity = 'hour' | 'day'
 
@@ -56,45 +57,7 @@ interface TargetRollupMetadata {
   target: string
 }
 
-interface DestinationSampleSummary {
-  rttSamplesMs: number[]
-  sentCount: number
-}
-
 const histogramUpperBoundsMs = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000] as const
-
-function getDestinationSampleSummary(snapshot: StoredRawSnapshot): DestinationSampleSummary {
-  const destinationHopIndex = resolveDestinationHopIndex(snapshot.rawEvents)
-  if (destinationHopIndex == null) {
-    return {
-      rttSamplesMs: [],
-      sentCount: 0,
-    }
-  }
-
-  const rttSamplesMs: number[] = []
-  let sentCount = 0
-
-  for (const event of snapshot.rawEvents) {
-    if (event.hopIndex !== destinationHopIndex) {
-      continue
-    }
-
-    if (event.kind === 'sent') {
-      sentCount += 1
-      continue
-    }
-
-    if (event.kind === 'reply') {
-      rttSamplesMs.push(event.rttUs / 1000)
-    }
-  }
-
-  return {
-    rttSamplesMs,
-    sentCount,
-  }
-}
 
 function average(values: number[]): number | null {
   if (values.length === 0) {
@@ -177,27 +140,27 @@ function buildRollupBucket(
   }
 }
 
-export function aggregateSnapshotsToRollupBuckets(
-  snapshots: StoredRawSnapshot[],
-  granularity: RollupGranularity,
-): MtrRollupBucket[] {
-  const bucketState = new Map<
-    string,
-    { destinationSentCount: number; rttSamplesMs: number[]; snapshotCount: number }
-  >()
+interface BucketReducerState {
+  destinationSentCount: number
+  rttSamplesMs: number[]
+  snapshotCount: number
+}
 
-  for (const snapshot of snapshots) {
-    const bucketStart = getBucketStartIso(getCollectedAtDate(snapshot.collectedAt), granularity)
-    const summary = getDestinationSampleSummary(snapshot)
+function reduceToRollupBuckets<T>(
+  items: T[],
+  granularity: RollupGranularity,
+  bucketDateOf: (item: T) => Date,
+  accumulate: (state: BucketReducerState, item: T) => void,
+): MtrRollupBucket[] {
+  const bucketState = new Map<string, BucketReducerState>()
+  for (const item of items) {
+    const bucketStart = getBucketStartIso(bucketDateOf(item), granularity)
     const current = bucketState.get(bucketStart) ?? {
       destinationSentCount: 0,
       rttSamplesMs: [],
       snapshotCount: 0,
     }
-
-    current.destinationSentCount += summary.sentCount
-    current.rttSamplesMs.push(...summary.rttSamplesMs)
-    current.snapshotCount += 1
+    accumulate(current, item)
     bucketState.set(bucketStart, current)
   }
 
@@ -213,50 +176,45 @@ export function aggregateSnapshotsToRollupBuckets(
     )
 }
 
+export function aggregateSnapshotsToRollupBuckets(
+  snapshots: StoredRawSnapshot[],
+  granularity: RollupGranularity,
+): MtrRollupBucket[] {
+  return reduceToRollupBuckets(
+    snapshots,
+    granularity,
+    (snapshot) => getCollectedAtDate(snapshot.collectedAt),
+    (state, snapshot) => {
+      const summary = summarizeDestinationSamples(snapshot.rawEvents)
+      state.destinationSentCount += summary.sentCount
+      state.rttSamplesMs.push(...summary.rttSamplesMs)
+      state.snapshotCount += 1
+    },
+  )
+}
+
 function aggregateRollupBuckets(
   buckets: MtrRollupBucket[],
   granularity: RollupGranularity,
 ): MtrRollupBucket[] {
-  const bucketState = new Map<
-    string,
-    { destinationSentCount: number; rttSamplesMs: number[]; snapshotCount: number }
-  >()
-
-  for (const bucket of buckets) {
-    const bucketStart = getBucketStartIso(new Date(bucket.bucketStart), granularity)
-    const current = bucketState.get(bucketStart) ?? {
-      destinationSentCount: 0,
-      rttSamplesMs: [],
-      snapshotCount: 0,
-    }
-
-    current.destinationSentCount += bucket.destinationSentCount
-    current.snapshotCount += bucket.snapshotCount
-
-    for (const histogramBucket of bucket.histogram) {
-      if (histogramBucket.count === 0) {
-        continue
+  return reduceToRollupBuckets(
+    buckets,
+    granularity,
+    (bucket) => new Date(bucket.bucketStart),
+    (state, bucket) => {
+      state.destinationSentCount += bucket.destinationSentCount
+      state.snapshotCount += bucket.snapshotCount
+      for (const histogramBucket of bucket.histogram) {
+        if (histogramBucket.count === 0) continue
+        const sampleValue =
+          histogramBucket.upperBoundMs ??
+          histogramUpperBoundsMs[histogramUpperBoundsMs.length - 1] + 1
+        for (let i = 0; i < histogramBucket.count; i += 1) {
+          state.rttSamplesMs.push(sampleValue)
+        }
       }
-
-      const sampleValue =
-        histogramBucket.upperBoundMs ??
-        histogramUpperBoundsMs[histogramUpperBoundsMs.length - 1] + 1
-      current.rttSamplesMs.push(...Array.from({ length: histogramBucket.count }, () => sampleValue))
-    }
-
-    bucketState.set(bucketStart, current)
-  }
-
-  return [...bucketState.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([bucketStart, state]) =>
-      buildRollupBucket(
-        bucketStart,
-        state.snapshotCount,
-        state.destinationSentCount,
-        state.rttSamplesMs,
-      ),
-    )
+    },
+  )
 }
 
 function mergeRollupBuckets(
@@ -305,18 +263,7 @@ export async function readRollupFile(
 }
 
 async function listStoredRawSnapshots(targetDir: string): Promise<StoredRawSnapshot[]> {
-  const entries = await readdir(targetDir, { withFileTypes: true })
-  const snapshotFiles = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-    .map((entry) => entry.name)
-    .filter(
-      (entry) =>
-        !['latest.json', 'hourly.rollup.json', 'daily.rollup.json', 'alert-state.json'].includes(
-          entry,
-        ),
-    )
-    .sort()
-
+  const snapshotFiles = await listSnapshotFileNames(targetDir)
   const snapshots: StoredRawSnapshot[] = []
   for (const fileName of snapshotFiles) {
     try {

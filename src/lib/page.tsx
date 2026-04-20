@@ -6,32 +6,29 @@ import { RootIndexPage, type TargetSummaryRow } from '../components/RootIndexPag
 import { TargetIndexPage } from '../components/TargetIndexPage.tsx'
 import { type ChartDefinition, loadChartDefinitions } from './chart.ts'
 import type { PeerConfig } from './config.ts'
-import { parseCollectedAt, readSnapshotSummary, type SnapshotSummary } from './snapshot.ts'
+import {
+  listSnapshotFileNames,
+  parseCollectedAt,
+  readSnapshotSummary,
+  type SnapshotSummary,
+} from './snapshot.ts'
 import {
   type DiagnosisAggregate,
   getHistoricalSeverityBadge,
   getRootSuspectHop,
   type HopAggregate,
   type SnapshotAggregate,
+  selectSnapshotsInWindow,
   summarizeDiagnoses,
   summarizeHopIssues,
   summarizeSnapshots,
 } from './snapshot-aggregate.ts'
 
-export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSummary[]> {
-  const entries = await readdir(targetDir, { withFileTypes: true })
-  const snapshotFiles = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-    .map((entry) => entry.name)
-    .filter(
-      (entry) =>
-        !['latest.json', 'hourly.rollup.json', 'daily.rollup.json', 'alert-state.json'].includes(
-          entry,
-        ),
-    )
-    .sort()
-    .reverse()
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
+export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSummary[]> {
+  const snapshotFiles = (await listSnapshotFileNames(targetDir)).reverse()
   const snapshots: SnapshotSummary[] = []
   for (const fileName of snapshotFiles) {
     snapshots.push(await readSnapshotSummary(targetDir, fileName))
@@ -63,9 +60,10 @@ export async function renderTargetIndex(
   }
 
   const latestSnapshot = snapshots[0]
-  const lastDay = summarizeSnapshots(snapshots, now, 24 * 60 * 60 * 1000)
-  const lastWeek = summarizeSnapshots(snapshots, now, 7 * 24 * 60 * 60 * 1000)
-  const hopIssues = summarizeHopIssues(snapshots, now, 7 * 24 * 60 * 60 * 1000).slice(0, 5)
+  const lastDay = summarizeSnapshots(snapshots, now, ONE_DAY_MS)
+  const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
+  const lastWeek = summarizeSnapshots(lastWeekSnapshots, now, SEVEN_DAYS_MS)
+  const hopIssues = summarizeHopIssues(lastWeekSnapshots, now, SEVEN_DAYS_MS).slice(0, 5)
   const charts = await loadChartDefinitions(targetDir, snapshots, now)
 
   const html = renderDocument(
@@ -116,11 +114,12 @@ export async function renderRootIndex(
       continue
     }
 
+    const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
     targetSummaries.push({
-      aggregate: summarizeSnapshots(snapshots, now, 7 * 24 * 60 * 60 * 1000),
+      aggregate: summarizeSnapshots(lastWeekSnapshots, now, SEVEN_DAYS_MS),
       charts: await loadChartDefinitions(targetDir, snapshots, now),
-      diagnosisAggregate: summarizeDiagnoses(snapshots, now, 7 * 24 * 60 * 60 * 1000),
-      hopIssues: summarizeHopIssues(snapshots, now, 7 * 24 * 60 * 60 * 1000),
+      diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots, now, SEVEN_DAYS_MS),
+      hopIssues: summarizeHopIssues(lastWeekSnapshots, now, SEVEN_DAYS_MS),
       targetSlug,
       summary: snapshots[0],
     })

@@ -45,6 +45,21 @@ function getLineStrokeForLoss(lossPct: number | null): string {
   return '#880000'
 }
 
+// SmokePing's default loss_colors for pings=20 (from Smokeping.pm:1300).
+// Buckets are 0, 1, 2, 3, 4-5, 6-10, 11-19, 20/20 — used to paint per-sample
+// median markers (matched by `maxLossPct`) and the legend swatches below the
+// chart (rendered from `legendLabel`).
+const SMOKEPING_LOSS_BUCKETS: { color: string; legendLabel: string; maxLossPct: number }[] = [
+  { color: '#26ff00', legendLabel: '0', maxLossPct: 0 },
+  { color: '#00b8ff', legendLabel: '1', maxLossPct: 5 },
+  { color: '#0059ff', legendLabel: '2', maxLossPct: 10 },
+  { color: '#7e00ff', legendLabel: '3', maxLossPct: 15 },
+  { color: '#ff00ff', legendLabel: '4-5', maxLossPct: 25 },
+  { color: '#ff5500', legendLabel: '6-10', maxLossPct: 50 },
+  { color: '#ff0000', legendLabel: '11-19', maxLossPct: 99.99 },
+  { color: '#a00000', legendLabel: '20/20', maxLossPct: 100 },
+]
+
 function niceYStep(rangeMs: number): number {
   const rawSteps = [
     0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20,
@@ -312,24 +327,13 @@ export function renderChartSvg(
 
   // Per-sample colored median markers (Smokeping.pm:1397-1405). For each
   // sample, rrdtool stacks a 2-pixel-tall AREA at `median ± 1px` in the color
-  // matching the sample's loss bucket. Defaults (for pings=20): 0→green,
-  // 1→cyan, 2→blue, 3→purple, 4–5→magenta, 6–10→orange, 11–19→red, 20→dark.
-  const lossBuckets: { maxLossPct: number; color: string }[] = [
-    { maxLossPct: 0, color: '#26ff00' },
-    { maxLossPct: 5, color: '#00b8ff' },
-    { maxLossPct: 10, color: '#0059ff' },
-    { maxLossPct: 15, color: '#7e00ff' },
-    { maxLossPct: 25, color: '#ff00ff' },
-    { maxLossPct: 50, color: '#ff5500' },
-    { maxLossPct: 99.99, color: '#ff0000' },
-    { maxLossPct: 100, color: '#a00000' },
-  ]
+  // matching the sample's loss bucket.
   const lossColorFor = (pct: number | null): string => {
     const v = pct == null || !Number.isFinite(pct) ? 0 : pct
-    for (const bucket of lossBuckets) {
+    for (const bucket of SMOKEPING_LOSS_BUCKETS) {
       if (v <= bucket.maxLossPct + 1e-9) return bucket.color
     }
-    return lossBuckets[lossBuckets.length - 1].color
+    return SMOKEPING_LOSS_BUCKETS[SMOKEPING_LOSS_BUCKETS.length - 1].color
   }
   const medianMarkers: string[] = []
   const plotLeftMarker = padding.left
@@ -499,18 +503,10 @@ export function renderChartSvg(
 
   const statsFontSize = 10
   const statsFontFamily = 'DejaVu Sans Mono,Menlo,Consolas,monospace'
-  // SmokePing's default loss_colors for pings=20 (from Smokeping.pm:1300).
-  // Buckets are 0, 1, 2, 3, 4-5, 6-10, 11-19, 20/20.
-  const lossSwatches = [
-    { color: '#26ff00', label: '0' },
-    { color: '#00b8ff', label: '1' },
-    { color: '#0059ff', label: '2' },
-    { color: '#7e00ff', label: '3' },
-    { color: '#ff00ff', label: '4-5' },
-    { color: '#ff5500', label: '6-10' },
-    { color: '#ff0000', label: '11-19' },
-    { color: '#a00000', label: '20/20' },
-  ]
+  const lossSwatches = SMOKEPING_LOSS_BUCKETS.map((bucket) => ({
+    color: bucket.color,
+    label: bucket.legendLabel,
+  }))
   const legendY = padding.top + chartHeight + 58
   const legendStartX = padding.left + 84
   const maxProbes = Math.max(

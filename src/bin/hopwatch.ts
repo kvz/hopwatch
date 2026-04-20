@@ -1,11 +1,14 @@
 #!/usr/bin/env bun
 import { Builtins, Cli, Command, Option } from 'clipanion'
+import packageJson from '../../package.json' with { type: 'json' }
 import { formatConfigSummary, type LoadedConfig, loadConfig } from '../lib/config.ts'
 import { refreshRollups, runCollector } from '../lib/core.ts'
 import { startDaemon } from '../lib/daemon.ts'
 import { createLogger, type Logger } from '../lib/logger.ts'
 
-const binaryVersion = '0.1.0'
+// Source the CLI version from package.json (bumped by Changesets on release)
+// so `hopwatch --version` cannot drift from the npm metadata.
+const binaryVersion = packageJson.version
 
 abstract class BaseCommand extends Command {
   config = Option.String('-c,--config', 'hopwatch.toml', {
@@ -17,9 +20,7 @@ abstract class BaseCommand extends Command {
   })
 
   protected async resolve(): Promise<{ config: LoadedConfig; logger: Logger }> {
-    const logger = createLogger({
-      level: (this.logLevel as 'debug' | 'info' | 'warn' | 'error' | undefined) ?? undefined,
-    })
+    const logger = createLogger({ level: this.logLevel })
     const config = await loadConfig(this.config)
     return { config, logger }
   }

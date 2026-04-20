@@ -130,12 +130,17 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-NoNewPrivileges=true
+# NoNewPrivileges=true and RestrictSUIDSGID=true would both block mtr-tiny's
+# setuid mtr-packet helper from elevating, which is exactly how the
+# unprivileged `hopwatch` user runs traceroutes in this recipe. Leave them
+# off if you rely on the setuid path. If you instead give hopwatch
+# CAP_NET_RAW via AmbientCapabilities, you can re-enable both.
+NoNewPrivileges=false
 ReadWritePaths=/var/lib/hopwatch
 LockPersonality=true
 RestrictRealtime=true
 RestrictNamespaces=true
-RestrictSUIDSGID=true
+RestrictSUIDSGID=false
 SystemCallArchitectures=native
 
 [Install]

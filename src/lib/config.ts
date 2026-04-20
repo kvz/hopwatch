@@ -175,6 +175,15 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
         `target '${target.id}' uses engine='native' with probe_mode='netns', which is not yet supported`,
       )
     }
+
+    if (target.engine === 'native' && config.probe.ip_version === 6) {
+      // collectSnapshot() rejects this combination at runtime; catch it at
+      // config-load time so `hopwatch config-check` flags the problem before
+      // the daemon is started and the first probe cycle fails.
+      throw new Error(
+        `target '${target.id}' uses engine='native' but probe.ip_version=6; IPv6 is not yet supported by the native prober`,
+      )
+    }
   }
 
   const peerIds = new Set<string>()

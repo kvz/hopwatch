@@ -1,4 +1,4 @@
-type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 const levelRank: Record<LogLevel, number> = {
   debug: 10,
@@ -21,9 +21,14 @@ export interface Logger {
   warn(msg: string, fields?: Record<string, unknown>): void
 }
 
-function resolveLevel(raw: string | undefined): LogLevel {
+export function resolveLevel(raw: string | undefined): LogLevel {
   const normalized = raw?.toLowerCase().trim()
-  if (normalized === 'debug' || normalized === 'warn' || normalized === 'error') {
+  if (
+    normalized === 'debug' ||
+    normalized === 'info' ||
+    normalized === 'warn' ||
+    normalized === 'error'
+  ) {
     return normalized
   }
 
@@ -112,9 +117,17 @@ function createLoggerWith(options: LoggerOptions, bindings: Record<string, unkno
   }
 }
 
-export function createLogger(overrides: Partial<LoggerOptions> = {}): Logger {
+export function createLogger(
+  overrides: Partial<Omit<LoggerOptions, 'level'>> & { level?: string } = {},
+): Logger {
+  // Always run the level override through resolveLevel so an invalid CLI flag
+  // like --log-level=verbose falls back to 'info' instead of producing an
+  // `undefined` threshold that effectively disables suppression.
   const options: LoggerOptions = {
-    level: overrides.level ?? resolveLevel(process.env.HOPWATCH_LOG_LEVEL),
+    level:
+      overrides.level != null
+        ? resolveLevel(overrides.level)
+        : resolveLevel(process.env.HOPWATCH_LOG_LEVEL),
     name: overrides.name ?? 'hopwatch',
     pretty: overrides.pretty ?? process.stdout.isTTY === true,
   }

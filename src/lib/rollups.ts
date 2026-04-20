@@ -230,8 +230,17 @@ export async function readRollupFile(
   filePath: string,
   granularity: RollupGranularity,
 ): Promise<MtrRollupFile | null> {
+  let contents: string
   try {
-    const contents = await readFile(filePath, 'utf8')
+    contents = await readFile(filePath, 'utf8')
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      return null
+    }
+    throw err
+  }
+
+  try {
     const parsed = parseRollupFile(contents)
     if (parsed.granularity !== granularity) {
       throw new Error(
@@ -240,7 +249,18 @@ export async function readRollupFile(
     }
 
     return parsed
-  } catch {
+  } catch (err) {
+    // A corrupt rollup would otherwise be silently overwritten with whatever
+    // we can still reconstruct from the raw snapshot retention window —
+    // dropping years of hourly/daily history in the process. Quarantine the
+    // bad file with a timestamped suffix so the next write starts fresh but
+    // the original is preserved for post-mortem.
+    const quarantinePath = `${filePath}.corrupted.${Date.now()}`
+    await rename(filePath, quarantinePath).catch(() => {})
+    const reason = err instanceof Error ? err.message : String(err)
+    process.stderr.write(
+      `hopwatch: corrupt rollup at ${filePath}, quarantined to ${quarantinePath}: ${reason}\n`,
+    )
     return null
   }
 }

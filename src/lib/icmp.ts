@@ -88,8 +88,13 @@ export function ipv4FromBytes(b: Uint8Array): string {
 // Sequence-number encoding we use for traceroute probes. Each cycle sweeps
 // all TTLs once; we stride by `maxHops * 2` so two adjacent cycles can't
 // collide on seq even if a late reply arrives after the next cycle started.
+// The wire field is 16 bits, so we mask here: long runs (packets=2000,
+// maxHops=30 → raw 120030) would otherwise overflow and replies would come
+// back with a truncated seq that no longer keyed the sendTimeNs map. On
+// wrap, older cycles reuse seqs — fine as long as each cycle's replies
+// arrive within the wrap window (in practice, within the probe timeout).
 export function encodeSeq(cycle: number, ttl: number, maxHops: number): number {
-  return cycle * maxHops * 2 + ttl
+  return (cycle * maxHops * 2 + ttl) & 0xffff
 }
 
 export function decodeSeq(seq: number, maxHops: number): { cycle: number; ttl: number } {

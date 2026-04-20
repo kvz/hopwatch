@@ -190,10 +190,20 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     for (const hosts of knownHostsByHop.values()) {
       for (const host of hosts) uniqueHosts.add(host)
     }
-    const hostToHopIndex = new Map<string, number>()
+    // The same IP can legitimately appear on multiple hops (asymmetric paths,
+    // ICMP-RESP from a routing loop, etc.). Map each IP to every hop index
+    // that saw it so each hop receives its own `dns` event — the renderer
+    // shows the reverse name next to each occurrence of the hop, and
+    // deduplicating to the first hop hides that information on later ones.
+    const hopIndicesByHost = new Map<string, number[]>()
     for (const [hopIndex, hosts] of knownHostsByHop.entries()) {
       for (const host of hosts) {
-        if (!hostToHopIndex.has(host)) hostToHopIndex.set(host, hopIndex)
+        const existing = hopIndicesByHost.get(host)
+        if (existing == null) {
+          hopIndicesByHost.set(host, [hopIndex])
+        } else if (!existing.includes(hopIndex)) {
+          existing.push(hopIndex)
+        }
       }
     }
     const resolved = await Promise.all(
@@ -204,9 +214,10 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     )
     for (const { ip, name } of resolved) {
       if (name == null) continue
-      const hopIndex = hostToHopIndex.get(ip)
-      if (hopIndex == null) continue
-      events.push({ kind: 'dns', hopIndex, host: name })
+      const hopIndices = hopIndicesByHost.get(ip) ?? []
+      for (const hopIndex of hopIndices) {
+        events.push({ kind: 'dns', hopIndex, host: name })
+      }
     }
   }
 

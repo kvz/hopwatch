@@ -65,7 +65,13 @@ jobs:
       - name: Package
         run: |
           cd bin-build
-          tar -czf ${{ matrix.asset }}.tar.gz ${{ matrix.asset }}
+          # The release asset keeps its platform suffix (for disambiguation on
+          # the releases page), but inside the tarball we always call the
+          # binary `hopwatch`. That way the install commands in README.md —
+          # `tar -xz -C /usr/local/bin` followed by `./hopwatch` — work without
+          # a post-extract rename.
+          cp ${{ matrix.asset }} hopwatch
+          tar -czf ${{ matrix.asset }}.tar.gz hopwatch
           sha256sum ${{ matrix.asset }}.tar.gz > ${{ matrix.asset }}.tar.gz.sha256
 
       - name: Attach to GitHub release

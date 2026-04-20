@@ -260,6 +260,21 @@ describe('encodeSeq / decodeSeq', () => {
     const maxSeq = encodeSeq(9, maxHops, maxHops)
     expect(maxSeq).toBeLessThan(0x10000)
   })
+
+  test('masks to 16 bits so the encoded seq always fits the ICMP wire field', () => {
+    // Without the mask, encodeSeq(2000, 1, 30) = 120001 — the wire
+    // truncates to (120001 & 0xffff) = 54465, so replies come back with a
+    // different key than what we stored locally. Mask at encode time so
+    // the local key matches the reply.
+    const maxHops = 30
+    for (let cycle = 0; cycle < 2200; cycle += 100) {
+      for (let ttl = 1; ttl <= maxHops; ttl += 1) {
+        const seq = encodeSeq(cycle, ttl, maxHops)
+        expect(seq).toBeGreaterThanOrEqual(0)
+        expect(seq).toBeLessThan(0x10000)
+      }
+    }
+  })
 })
 
 function buildCmsg(level: number, type: number, data: Uint8Array): Uint8Array {

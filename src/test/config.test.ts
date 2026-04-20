@@ -101,6 +101,24 @@ engine = "native"
     expect(config.target[0].engine).toBe('native')
   })
 
+  test('rejects engine="native" combined with ip_version=6', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[probe]
+ip_version = 6
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "native"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/IPv6/)
+  })
+
   test('rejects engine="native" combined with probe_mode="netns"', async () => {
     const configPath = await writeConfig(`
 [server]

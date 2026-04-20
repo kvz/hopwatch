@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
+import { parseListenAddress } from './listen.ts'
 
 export const probeModeSchema = z.enum(['default', 'netns'])
 export type ProbeMode = z.infer<typeof probeModeSchema>
@@ -15,7 +16,14 @@ const targetSchema = z.object({
     .min(1)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'target id must be slug-safe'),
   label: z.string().min(1),
-  host: z.string().min(1),
+  // `host` lands in `mtr`/`nsenter` argv untouched. A host that starts with `-`
+  // (e.g. `-h`, `--report-cycles=1`) would be parsed as an option instead of a
+  // destination and make the probe wildly misbehave — reject at config time so
+  // this can't sneak in via a typo or a hostile config file.
+  host: z
+    .string()
+    .min(1)
+    .regex(/^[^-]/, 'host must not start with "-" (would be interpreted as an mtr flag)'),
   probe_mode: probeModeSchema.default('default'),
   // `mtr` shells out to the external mtr binary (default, battle-tested).
   // `native` uses the built-in Linux raw-ICMP prober (no external mtr
@@ -32,7 +40,16 @@ export type TargetConfig = z.infer<typeof targetSchema>
 
 const peerSchema = z.object({
   id: z.string().min(1),
-  url: z.string().url(),
+  // `peer.url` is rendered unescaped into the peer dropdown's `href`. `z.url()`
+  // alone accepts `javascript:` / `data:` schemes, which would let a malformed
+  // or malicious peer config deliver clickable script URLs to dashboard users.
+  // Restrict to http/https.
+  url: z
+    .string()
+    .url()
+    .refine((value) => /^https?:\/\//i.test(value), {
+      message: 'peer url must use http:// or https://',
+    }),
   label: z.string().min(1),
 })
 export type PeerConfig = z.infer<typeof peerSchema>
@@ -156,6 +173,17 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
   }
 
   const config = result.data
+
+  // Surface a malformed listen address at config-load time (and in
+  // `hopwatch config-check`) instead of waiting for the daemon to fail when
+  // it hands the value to Bun.serve().
+  try {
+    parseListenAddress(config.server.listen)
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new Error(`Invalid hopwatch config at ${absolute}: server.listen: ${reason}`)
+  }
+
   const ids = new Set<string>()
   for (const target of config.target) {
     if (ids.has(target.id)) {

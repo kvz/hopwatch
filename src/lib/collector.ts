@@ -65,12 +65,20 @@ async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMt
 type RunCommand = (
   file: string,
   args: string[],
+  options?: { timeoutMs?: number },
 ) => Promise<{
   stderr: string
   stdout: string
 }>
 
-const execFileAsync: RunCommand = async (file, args) => execa(file, args)
+const execFileAsync: RunCommand = async (file, args, opts) => {
+  // execa's `timeout` SIGTERMs the child after N ms and rejects the promise,
+  // which is exactly the wedge-recovery behavior we want: a hung `mtr` or
+  // `nsenter` that never writes to stdout must not hold the concurrency slot
+  // (and therefore the next cycle) forever.
+  const timeout = opts?.timeoutMs
+  return timeout != null && timeout > 0 ? execa(file, args, { timeout }) : execa(file, args)
+}
 
 export interface CollectorOptions {
   concurrency: number
@@ -81,6 +89,7 @@ export interface CollectorOptions {
   namespaceDir: string
   netnsMount: boolean
   packets: number
+  probeTimeoutMs: number
   targets: MtrHistoryTarget[]
 }
 
@@ -101,6 +110,11 @@ export function getTimestamp(now: Date = new Date()): string {
 }
 
 export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptions {
+  // Bound each probe at roughly half the cycle interval, floored at 60s. A
+  // normal `mtr -c 20` finishes in ~20s; anything past the ceiling is stuck
+  // and blocking the next cycle. Half-interval keeps 15-min cadences around
+  // a 7.5-min ceiling — plenty of headroom for retries but not forever.
+  const probeTimeoutMs = Math.max(60_000, Math.floor(config.probe.interval_seconds * 500))
   return {
     concurrency: config.probe.concurrency,
     ipVersion: String(config.probe.ip_version) as '4' | '6',
@@ -110,6 +124,7 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
     namespaceDir: config.probe.namespace_dir,
     netnsMount: config.probe.netns_mount,
     packets: config.probe.packets,
+    probeTimeoutMs,
     targets: config.target.map(targetFromConfig),
   }
 }
@@ -305,7 +320,9 @@ export async function collectSnapshot(
         ? ['nsenter', [...nsenterArgs, options.mtrBin, ...mtrArgs]]
         : [options.mtrBin, mtrArgs]
 
-    const { stdout } = await runCommand(command, commandArgs)
+    const { stdout } = await runCommand(command, commandArgs, {
+      timeoutMs: options.probeTimeoutMs,
+    })
     rawEvents = parseRawMtrOutput(stdout)
   }
 

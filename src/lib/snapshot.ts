@@ -382,14 +382,15 @@ export async function readSnapshotSummary(
   targetDir: string,
   fileName: string,
 ): Promise<SnapshotSummary> {
+  // Only .json snapshots land here (listSnapshotFileNames filters for that
+  // extension). Any parse failure therefore signals corruption or schema
+  // drift, not a legacy raw-text snapshot — let the error propagate so the
+  // caller can log + skip + quarantine. Swallowing it and re-parsing the
+  // same file as legacy text would hide on-disk data loss by producing a
+  // synthetic "unknown" snapshot that pollutes the dashboard.
   const jsonFile = path.join(targetDir, fileName)
-  try {
-    const jsonContents = await readFile(jsonFile, 'utf8')
-    return parseStoredSnapshotSummary(jsonContents)
-  } catch {
-    const rawText = await readFile(path.join(targetDir, fileName), 'utf8')
-    return parseSnapshotSummary(fileName, rawText)
-  }
+  const jsonContents = await readFile(jsonFile, 'utf8')
+  return parseStoredSnapshotSummary(jsonContents)
 }
 
 export function formatLoss(lossPct: number | null): string {

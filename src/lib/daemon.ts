@@ -6,6 +6,7 @@ import path from 'node:path'
 import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
 import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
+import { parseListenAddress } from './listen.ts'
 import type { Logger } from './logger.ts'
 
 // Lazily transpile the sortable-tables client to browser JS on first request.
@@ -188,6 +189,21 @@ export function startScheduler(
 }
 
 export async function startDaemon(config: LoadedConfig, logger: Logger): Promise<void> {
+  // The native prober uses bun:ffi to dlopen('libc.so.6') + AF_INET raw
+  // sockets — that only exists on Linux. Darwin/Windows builds are published
+  // (binaries.yml), so catch the mismatch at startup rather than failing
+  // mid-probe on the first cycle. config-check still passes on any platform
+  // so operators can validate linux-targeted configs from a dev machine.
+  if (process.platform !== 'linux') {
+    for (const target of config.target) {
+      if (target.engine === 'native') {
+        throw new Error(
+          `target '${target.id}' uses engine='native' but this daemon is running on ${process.platform}; engine='native' requires Linux`,
+        )
+      }
+    }
+  }
+
   const scheduler = startScheduler(config, logger)
 
   const nodeLabel = config.server.node_label ?? 'hopwatch'
@@ -305,7 +321,15 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
     stopping = true
     logger.info('shutting down', { signal })
     scheduler.stop()
-    await scheduler.drain()
+    // Bound drain so a wedged probe (e.g. hung `mtr`/`nsenter`) cannot turn
+    // SIGTERM into a kill-9 wait. 30s is generous for a well-behaved cycle
+    // to complete and short enough that systemd's TimeoutStopSec (90s by
+    // default) still has headroom for the server.stop() call afterward.
+    const drainDeadlineMs = 30_000
+    await Promise.race([
+      scheduler.drain(),
+      new Promise<void>((resolve) => setTimeout(resolve, drainDeadlineMs).unref()),
+    ])
     await server.stop()
     process.exit(0)
   }
@@ -320,37 +344,6 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   await new Promise<void>((resolve) => {
     process.on('exit', () => resolve())
   })
-}
-
-export interface ParsedListenAddress {
-  hostname: string | undefined
-  port: number
-}
-
-export function parseListenAddress(listen: string): ParsedListenAddress {
-  // Accept [ipv6]:port, host:port, and :port (bind-all).
-  const bracketed = /^\[([^\]]+)\]:(\d+)$/.exec(listen)
-  let hostname: string | undefined
-  let portRaw: string
-  if (bracketed != null) {
-    hostname = bracketed[1]
-    portRaw = bracketed[2]
-  } else {
-    const lastColon = listen.lastIndexOf(':')
-    if (lastColon < 0) {
-      throw new Error(`Invalid listen address "${listen}"`)
-    }
-    const hostPart = listen.slice(0, lastColon)
-    hostname = hostPart.length === 0 ? undefined : hostPart
-    portRaw = listen.slice(lastColon + 1)
-  }
-
-  const port = Number(portRaw)
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`Invalid listen port in "${listen}"`)
-  }
-
-  return { hostname, port }
 }
 
 function parseHostname(listen: string): string | undefined {

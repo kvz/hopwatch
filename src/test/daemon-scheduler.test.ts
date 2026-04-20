@@ -1,7 +1,8 @@
 import path from 'node:path'
 import { describe, expect, test, vi } from 'vitest'
 import type { LoadedConfig } from '../lib/config.ts'
-import { parseListenAddress, startScheduler } from '../lib/daemon.ts'
+import { startScheduler } from '../lib/daemon.ts'
+import { parseListenAddress } from '../lib/listen.ts'
 import { createLogger } from '../lib/logger.ts'
 
 function buildConfig(overrides: { jitterSeconds?: number } = {}): LoadedConfig {

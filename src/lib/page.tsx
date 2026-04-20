@@ -27,11 +27,37 @@ import {
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
+// Parsed snapshot summaries are cached by absolute path. Snapshot files are
+// immutable once written (timestamped filenames, never updated in place), so
+// a never-invalidated cache is safe. Without this, every `/` render reparses
+// the entire retention window (keep_days * 96 files per target) — at the
+// default 15-minute cadence and 14-day retention that is ~1,344 parses per
+// target per request, which makes the open HTTP server trivial to exhaust
+// with repeat GETs.
+const snapshotCache = new Map<string, SnapshotSummary>()
+
 export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSummary[]> {
   const snapshotFiles = (await listSnapshotFileNames(targetDir)).reverse()
   const snapshots: SnapshotSummary[] = []
   for (const fileName of snapshotFiles) {
-    snapshots.push(await readSnapshotSummary(targetDir, fileName))
+    const cacheKey = path.join(targetDir, fileName)
+    const cached = snapshotCache.get(cacheKey)
+    if (cached != null) {
+      snapshots.push(cached)
+      continue
+    }
+
+    try {
+      const summary = await readSnapshotSummary(targetDir, fileName)
+      snapshotCache.set(cacheKey, summary)
+      snapshots.push(summary)
+    } catch (err) {
+      // A single corrupt snapshot must not kill the dashboard for an entire
+      // target. Log to stderr so operators can triage — the rollup rebuilder
+      // does the same with listStoredRawSnapshots.
+      const reason = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`hopwatch: skipping unreadable snapshot ${cacheKey}: ${reason}\n`)
+    }
   }
 
   return snapshots

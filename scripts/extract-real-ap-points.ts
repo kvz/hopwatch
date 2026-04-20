@@ -4,7 +4,7 @@ import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execa } from 'execa'
-import type { NativeChartPoint } from '../src/lib/core.ts'
+import type { ChartPoint } from '../src/lib/core.ts'
 import { quantile as sharedQuantile } from '../src/lib/raw.ts'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
@@ -17,7 +17,7 @@ const RANGE_HOURS = 3
 interface ExtractedFixture {
   anchorTs: number
   name: string
-  points: NativeChartPoint[]
+  points: ChartPoint[]
   referencePngPath: string
   upperLimitMs: number | null
 }
@@ -44,7 +44,7 @@ async function fetchSamples(
   rrdPath: string,
   startEpoch: number,
   endEpoch: number,
-): Promise<NativeChartPoint[]> {
+): Promise<ChartPoint[]> {
   const { stdout } = await execa('rrdtool', [
     'fetch',
     rrdPath,
@@ -55,7 +55,7 @@ async function fetchSamples(
     String(endEpoch),
   ])
   const lines = stdout.split('\n').filter((line) => line.includes(':') && !line.startsWith(' '))
-  const points: NativeChartPoint[] = []
+  const points: ChartPoint[] = []
   for (const line of lines) {
     const [tsPart, valuesPart] = line.split(':')
     const ts = Number(tsPart.trim())

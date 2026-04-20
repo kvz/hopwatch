@@ -3,7 +3,7 @@ import path from 'node:path'
 import { Resvg } from '@resvg/resvg-js'
 import sharp from 'sharp'
 import { describe, expect, test } from 'vitest'
-import { type NativeChartPoint, renderNativeChartSvg } from '../lib/core.ts'
+import { type ChartPoint, renderChartSvg } from '../lib/core.ts'
 
 interface FixtureBudget {
   maxMismatchPct: number
@@ -30,7 +30,7 @@ interface FixtureIndexEntry {
 }
 
 interface PointsFile {
-  points: NativeChartPoint[]
+  points: ChartPoint[]
 }
 
 interface DiffResult {
@@ -134,7 +134,7 @@ describe('chart parity', () => {
       const referencePngPath = path.join(FIXTURES_DIR, fixture.referencePngPath)
       const points = (JSON.parse(await readFile(pointsJsonPath, 'utf8')) as PointsFile).points
 
-      const svg = renderNativeChartSvg(points, {
+      const svg = renderChartSvg(points, {
         height: CHART_HEIGHT,
         now: fixture.anchorTs * 1000,
         rangeMs: index.rangeHours * 60 * 60 * 1000,

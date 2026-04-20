@@ -115,7 +115,7 @@ interface SnapshotSummary {
   worstHopLossPct: number | null
 }
 
-export interface NativeChartPoint {
+export interface ChartPoint {
   destinationLossPct: number | null
   rttAvgMs: number | null
   rttMaxMs: number | null
@@ -128,9 +128,9 @@ export interface NativeChartPoint {
   timestamp: number
 }
 
-interface NativeChartDefinition {
+interface ChartDefinition {
   label: string
-  points: NativeChartPoint[]
+  points: ChartPoint[]
   rangeLabel: string
   sourceLabel: string
 }
@@ -631,16 +631,33 @@ function formatLoss(lossPct: number | null): string {
   return `${lossPct.toFixed(1)}%`
 }
 
+const UNKNOWN_HOST_TITLE =
+  "Unknown hop identity. The router at this TTL did not send an ICMP Time Exceeded reply that named itself (commonly because it drops or rate-limits ICMP, because reverse DNS has no PTR record, or because it's an anonymizing middlebox), so neither a hostname nor an IP could be recovered."
+
+function renderUnknownHopHost(): string {
+  return `<dfn title="${UNKNOWN_HOST_TITLE}">???</dfn>`
+}
+
+function renderHopHostHtml(host: string): string {
+  if (host === '???') {
+    return renderUnknownHopHost()
+  }
+
+  return `<code>${escapeHtml(host)}</code>`
+}
+
 function renderDiagnosisSummary(summary: string, hops: HopRecord[]): string {
   let rendered = escapeHtml(summary)
   const uniqueHosts = [
-    ...new Set(hops.map((hop) => hop.host).filter((host) => host.trim() !== '')),
+    ...new Set(hops.map((hop) => hop.host).filter((host) => host.trim() !== '' && host !== '???')),
   ].sort((left, right) => right.length - left.length)
 
   for (const host of uniqueHosts) {
     const escapedHost = escapeHtml(host)
     rendered = rendered.replaceAll(escapedHost, `<code>${escapedHost}</code>`)
   }
+
+  rendered = rendered.replaceAll('???', renderUnknownHopHost())
 
   return rendered
 }
@@ -770,11 +787,14 @@ function getPeerNavLinks(
   peers: PeerConfig[],
   pathSuffix: string,
 ): ObserverRegionLink[] {
+  // The self link always points at the current directory so it works regardless
+  // of how hopwatch is mounted (root, /hopwatch/, behind any reverse-proxy
+  // prefix). pathSuffix is only used when building absolute peer URLs.
   const self: ObserverRegionLink = {
     host: selfLabel,
     isActive: true,
     label: selfLabel,
-    url: pathSuffix,
+    url: './',
   }
   const remote: ObserverRegionLink[] = peers.map((peer) => ({
     host: peer.url.replace(/^https?:\/\//, '').replace(/\/+$/, ''),
@@ -834,10 +854,14 @@ ${sections
   const backLink = backHref
     ? `    <a class="topnav-back" href="${escapeHtml(backHref)}"><span class="topnav-back-arrow" aria-hidden="true">‹</span> ${escapeHtml(backLabel ?? 'Back')}</a>`
     : ''
-  const titleEl = title ? `  <span class="topnav-title">${escapeHtml(title)}</span>` : ''
+  const titleEl = title
+    ? title === 'hopwatch'
+      ? `  <a class="topnav-title" href="https://github.com/kvz/hopwatch/">${escapeHtml(title)}</a>`
+      : `  <span class="topnav-title">${escapeHtml(title)}</span>`
+    : ''
   return `<nav class="topnav" aria-label="Primary">
   <div class="topnav-group topnav-group--left">
-${[backLink, nodesMenu].filter((part) => part.length > 0).join('\n')}
+${[nodesMenu, backLink].filter((part) => part.length > 0).join('\n')}
   </div>
 ${titleEl}
   <div class="topnav-group topnav-group--right">
@@ -860,11 +884,11 @@ function getPointsFromSnapshots(
   snapshots: SnapshotSummary[],
   now: number,
   rangeMs: number,
-): NativeChartPoint[] {
+): ChartPoint[] {
   const cutoff = now - rangeMs
 
   return snapshots
-    .map((snapshot): NativeChartPoint | null => {
+    .map((snapshot): ChartPoint | null => {
       const timestamp = parseCollectedAt(snapshot.collectedAt)
       if (timestamp == null || timestamp < cutoff) {
         return null
@@ -887,7 +911,7 @@ function getPointsFromSnapshots(
         timestamp,
       }
     })
-    .filter((point): point is NativeChartPoint => point != null)
+    .filter((point): point is ChartPoint => point != null)
     .sort((left, right) => left.timestamp - right.timestamp)
 }
 
@@ -896,11 +920,11 @@ function getPointsFromRollupBuckets(
   granularity: 'hour' | 'day',
   now: number,
   rangeMs: number,
-): NativeChartPoint[] {
+): ChartPoint[] {
   const cutoff = now - rangeMs
 
   return buckets
-    .map((bucket): NativeChartPoint | null => {
+    .map((bucket): ChartPoint | null => {
       const timestamp = bucketTimestamp(bucket.bucketStart, granularity)
       if (timestamp < cutoff) {
         return null
@@ -919,7 +943,7 @@ function getPointsFromRollupBuckets(
         timestamp,
       }
     })
-    .filter((point): point is NativeChartPoint => point != null)
+    .filter((point): point is ChartPoint => point != null)
     .sort((left, right) => left.timestamp - right.timestamp)
 }
 
@@ -927,7 +951,7 @@ async function loadChartDefinitions(
   targetDir: string,
   snapshots: SnapshotSummary[],
   now: number,
-): Promise<NativeChartDefinition[]> {
+): Promise<ChartDefinition[]> {
   const hourlyRollup = await readRollupFile(path.join(targetDir, 'hourly.rollup.json'), 'hour')
   const dailyRollup = await readRollupFile(path.join(targetDir, 'daily.rollup.json'), 'day')
 
@@ -1081,8 +1105,8 @@ function formatSmokeDate(date: Date): string {
   return `${dow} ${mon} ${day} ${hh}:${mm}:${ss} ${year}`
 }
 
-export function renderNativeChartSvg(
-  points: NativeChartPoint[],
+export function renderChartSvg(
+  points: ChartPoint[],
   options: {
     height: number
     now: number
@@ -1132,15 +1156,6 @@ export function renderNativeChartSvg(
   const avgGapMs = medianGapMs
   const barHalfMs = Math.max(avgGapMs / 2, options.rangeMs / 400)
   const gapThresholdMs = avgGapMs * 1.75
-
-  const quantile = (sorted: number[], q: number): number => {
-    if (sorted.length === 0) return 0
-    const pos = (sorted.length - 1) * q
-    const lo = Math.floor(pos)
-    const hi = Math.ceil(pos)
-    if (lo === hi) return sorted[lo]
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
-  }
 
   // rrdtool draws AREA+STACK as a polygon bounded above by the upper-quantile
   // curve and below by the lower-quantile curve, connecting consecutive valid
@@ -1835,9 +1850,20 @@ function renderLayout(title: string, body: string): string {
       font-weight: 700;
       font-size: 14px;
       color: var(--text);
+      text-decoration: none;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    a.topnav-title:hover {
+      color: var(--accent);
+    }
+
+    dfn {
+      font-style: normal;
+      cursor: help;
+      border-bottom: 1px dotted var(--muted);
     }
 
     .topnav-back {
@@ -2290,8 +2316,8 @@ function renderLayout(title: string, body: string): string {
 `
 }
 
-function renderNativeChartCard(
-  chart: NativeChartDefinition,
+function renderChartCard(
+  chart: ChartDefinition,
   now: number,
   {
     compact = false,
@@ -2312,7 +2338,7 @@ function renderNativeChartCard(
           ? 10 * 24
           : 360 * 24
 
-  const svg = renderNativeChartSvg(chart.points, {
+  const svg = renderChartSvg(chart.points, {
     height,
     now,
     rangeMs: rangeHours * 60 * 60 * 1000,
@@ -2328,7 +2354,7 @@ function renderNativeChartCard(
   return `<div class="graph-card">
     <h3>${escapeHtml(chart.label)}</h3>
     ${svg}
-    <div class="graph-caption">Native latency/loss chart rendered from ${escapeHtml(chart.sourceLabel)}.</div>
+    <div class="graph-caption">Latency and loss rendered from ${escapeHtml(chart.sourceLabel)}.</div>
   </div>`
 }
 
@@ -2389,7 +2415,7 @@ async function writeTargetIndex(
     .map(
       (hop) => `<tr>
   <td>${hop.index}</td>
-  <td><code>${escapeHtml(hop.host)}</code>${hop.asn ? `<br /><span>${escapeHtml(hop.asn)}</span>` : ''}</td>
+  <td>${renderHopHostHtml(hop.host)}${hop.asn ? `<br /><span>${escapeHtml(hop.asn)}</span>` : ''}</td>
   <td><span class="loss ${getLossClass(hop.lossPct)}">${escapeHtml(formatLoss(hop.lossPct))}</span></td>
   <td>${hop.sent ?? 'n/a'}</td>
   <td>${hop.avgMs?.toFixed(1) ?? 'n/a'}</td>
@@ -2398,14 +2424,14 @@ async function writeTargetIndex(
 </tr>`,
     )
     .join('\n')
-  const nativeCharts = await loadChartDefinitions(targetDir, snapshots, now)
-  const [mainChart, ...secondaryCharts] = nativeCharts
+  const charts = await loadChartDefinitions(targetDir, snapshots, now)
+  const [mainChart, ...secondaryCharts] = charts
   const historyPanel = `<section class="panel" id="history">
   <h2>Latency and loss history</h2>
   <div class="graph-grid">
-    ${renderNativeChartCard(mainChart, now, { signature })}
+    ${renderChartCard(mainChart, now, { signature })}
     <div class="graph-grid graph-grid--mini">
-      ${secondaryCharts.map((chart) => renderNativeChartCard(chart, now, { signature })).join('\n')}
+      ${secondaryCharts.map((chart) => renderChartCard(chart, now, { signature })).join('\n')}
     </div>
   </div>
 </section>`
@@ -2458,7 +2484,7 @@ ${renderTopNav({
 ${historyPanel}
 <section class="panel" id="raw">
   <h2>Latest raw output</h2>
-  <p class="panel-hint">Reconstructed <code>mtr --report</code> view of the newest snapshot. The full per-probe event stream is stored as JSON — expand below or grab the file.</p>
+  <p class="panel-hint">Reconstructed <code>mtr --report</code> view of the newest snapshot. The full per-probe event stream is stored as JSON. Expand below or grab the file.</p>
   <pre class="scroll-x">${escapeHtml(latestSnapshot.rawText)}</pre>
   <p class="panel-hint">Download the full JSON snapshot: <a href="./${encodeURIComponent(latestSnapshot.fileName)}">${escapeHtml(latestSnapshot.fileName)}</a></p>
 </section>
@@ -2568,7 +2594,7 @@ async function writeRootIndex(
 
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
-    charts: NativeChartDefinition[]
+    charts: ChartDefinition[]
     diagnosisAggregate: DiagnosisAggregate
     hopIssues: HopAggregate[]
     summary: SnapshotSummary
@@ -2616,13 +2642,13 @@ async function writeRootIndex(
   <td><span class="loss ${destinationLossClass}">${escapeHtml(formatLoss(aggregate.averageDestinationLossPct))}</span><br /><span>${aggregate.sampleCount} samples</span></td>
   <td><span class="loss ${getLossOccurrenceClass(diagnosisAggregate.destinationLossCount, diagnosisAggregate.sampleCount)}">${diagnosisAggregate.destinationLossCount}</span><span> / ${diagnosisAggregate.sampleCount}</span></td>
   <td>${suspectHop ? `<code>${escapeHtml(suspectHop.host)}</code><br /><span>${suspectHop.downstreamLossCount} downstream / ${suspectHop.isolatedLossCount} isolated</span>` : 'n/a'}</td>
-  <td><a class="thumb-link" href="./${encodeURIComponent(targetSlug)}/">${renderNativeChartCard(thumbnailChart, now, { compact: true, signature })}</a></td>
+  <td><a class="thumb-link" href="./${encodeURIComponent(targetSlug)}/">${renderChartCard(thumbnailChart, now, { compact: true, signature })}</a></td>
 </tr>`
     })
     .join('\n')
 
   const html = renderLayout(
-    `hopwatch — ${selfLabel}`,
+    `hopwatch: ${selfLabel}`,
     `
 ${renderTopNav({
   peers,

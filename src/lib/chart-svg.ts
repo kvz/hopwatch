@@ -318,10 +318,9 @@ export function renderChartSvg(
   const medianMarkers: string[] = []
   const plotLeftMarker = padding.left
   const plotRightMarker = width - padding.right
+  const plotTop = Math.round(padding.top)
+  const plotBottom = Math.round(padding.top + chartHeight)
   for (const point of points) {
-    const medianMs = point.rttP50Ms ?? point.rttAvgMs
-    if (medianMs == null || !Number.isFinite(medianMs)) continue
-    if (medianMs > yMaxMs) continue
     const xLeftRaw = Math.max(
       plotLeftMarker,
       Math.min(plotRightMarker, xOf(point.timestamp - 2 * barHalfMs)),
@@ -331,11 +330,28 @@ export function renderChartSvg(
     const xRight = Math.round(xRightRaw)
     const w = xRight - xLeft
     if (w <= 0) continue
-    const yMid = Math.round(yOf(medianMs))
-    const color = lossColorFor(point.destinationLossPct)
-    medianMarkers.push(
-      `<rect x="${xLeft}" y="${yMid - 1}" width="${w}" height="2" fill="${color}" shape-rendering="crispEdges" />`,
-    )
+
+    const medianMs = point.rttP50Ms ?? point.rttAvgMs
+    if (medianMs != null && Number.isFinite(medianMs) && medianMs <= yMaxMs) {
+      const yMid = Math.round(yOf(medianMs))
+      const color = lossColorFor(point.destinationLossPct)
+      medianMarkers.push(
+        `<rect x="${xLeft}" y="${yMid - 1}" width="${w}" height="2" fill="${color}" shape-rendering="crispEdges" />`,
+      )
+      continue
+    }
+
+    // No median to position a horizontal marker on (e.g. 100 % loss → no
+    // replies → no sample array). Without a fallback these bins render
+    // completely empty on the raw-snapshot charts while showing up on the
+    // rollup-backed charts (where other snapshots in the bucket still have a
+    // median). Paint a full-height colored strip so loss spikes are visible.
+    if (point.destinationLossPct != null && point.destinationLossPct > 0) {
+      const color = lossColorFor(point.destinationLossPct)
+      medianMarkers.push(
+        `<rect x="${xLeft}" y="${plotTop}" width="${w}" height="${plotBottom - plotTop}" fill="${color}" fill-opacity="0.35" shape-rendering="crispEdges" />`,
+      )
+    }
   }
   const medianMarkersSvg = medianMarkers.join('')
 

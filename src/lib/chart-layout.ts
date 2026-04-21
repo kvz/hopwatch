@@ -111,10 +111,10 @@ export function pickYScale(upperLimitMs: number): { step: number; yMax: number }
 }
 
 export function formatYLabel(ms: number): string {
-  if (ms === 0) return '0.0'
-  if (ms < 10) return `${ms.toFixed(1)} m`
-  if (ms < 1000) return `${ms.toFixed(0)} m`
-  return `${(ms / 1000).toFixed(1)}`
+  if (ms === 0) return '0 ms'
+  if (ms < 10) return `${ms.toFixed(1)} ms`
+  if (ms < 1000) return `${ms.toFixed(0)} ms`
+  return `${(ms / 1000).toFixed(1)} s`
 }
 
 export function formatXLabel(ts: number, stepMs: number): string {

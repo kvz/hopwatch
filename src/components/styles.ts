@@ -150,7 +150,9 @@ dfn { font-style: normal; cursor: help; border-bottom: 1px dotted var(--muted); 
 .topnav-menu-host { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 .topnav-menu-item.is-active .topnav-menu-host { color: var(--accent); }
 
-.lede { color: var(--muted); margin-bottom: 24px; }
+.lede { color: var(--muted); margin-bottom: 16px; }
+.freshness { color: var(--text); font-size: 13px; margin-top: -8px; margin-bottom: 24px; }
+.freshness strong { color: var(--accent); }
 .status-age { color: var(--muted); font-weight: 500; white-space: nowrap; }
 .cell-subtle { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; }
 
@@ -228,6 +230,12 @@ time[datetime] { white-space: nowrap; }
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   margin: 0 -4px;
+  background:
+    linear-gradient(to right, var(--panel) 30%, rgba(255, 253, 246, 0)) 0 0 / 24px 100% no-repeat,
+    linear-gradient(to left, var(--panel) 30%, rgba(255, 253, 246, 0)) 100% 0 / 24px 100% no-repeat,
+    linear-gradient(to right, rgba(17, 24, 20, 0.08), rgba(17, 24, 20, 0)) 0 0 / 14px 100% no-repeat,
+    linear-gradient(to left, rgba(17, 24, 20, 0.08), rgba(17, 24, 20, 0)) 100% 0 / 14px 100% no-repeat;
+  background-attachment: local, local, scroll, scroll;
 }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td {
@@ -283,6 +291,7 @@ details.raw-events > summary { cursor: pointer; color: var(--accent); font-size:
 .loss.warn { color: var(--warn); }
 .loss.bad { color: var(--bad); }
 .loss.unknown { color: var(--muted); }
+.loss.muted { color: var(--muted); }
 .loss.scale-0 { color: var(--scale-0); }
 .loss.scale-1 { color: var(--scale-1); }
 .loss.scale-2 { color: var(--scale-2); }

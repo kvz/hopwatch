@@ -133,10 +133,10 @@ describe('computeChartStats', () => {
 
 describe('formatYLabel', () => {
   test.each([
-    [0, '0.0'],
-    [5.5, '5.5 m'],
-    [50, '50 m'],
-    [1500, '1.5'],
+    [0, '0 ms'],
+    [5.5, '5.5 ms'],
+    [50, '50 ms'],
+    [1500, '1.5 s'],
   ])('formats %i as %s', (ms, label) => {
     expect(formatYLabel(ms)).toBe(label)
   })

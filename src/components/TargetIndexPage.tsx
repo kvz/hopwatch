@@ -73,10 +73,9 @@ export function TargetIndexPage({
       />
       <h1>{latestSnapshot.target}</h1>
       <p className="lede target-meta">
-        Observer snapshot archive for <code>{targetSlug}</code>. Host:{' '}
-        <code>{latestSnapshot.host}</code>. Probe: <code>{latestSnapshot.probeMode}</code>.
-        Destination loss is the last hop only; worst hop loss may include intermediate router reply
-        rate limiting.
+        Probing <code>{latestSnapshot.host}</code> via <code>{latestSnapshot.probeMode}</code>.
+        Destination loss counts only the final hop; worst-hop loss may include intermediate router
+        reply rate-limiting and is shown muted for that reason.
       </p>
 
       <section className="panel" id="summary">
@@ -103,11 +102,9 @@ export function TargetIndexPage({
             <div>{lastWeek.sampleCount} samples</div>
           </div>
           <div className="summary-card">
-            <strong>Average worst hop loss</strong>
-            <span className={`loss ${getLossClass(lastWeek.averageWorstHopLossPct)}`}>
-              {formatLoss(lastWeek.averageWorstHopLossPct)}
-            </span>
-            <div>7-day window</div>
+            <strong>Worst intermediate non-reply</strong>
+            <span className="loss muted">{formatLoss(lastWeek.averageWorstHopLossPct)}</span>
+            <div>7-day avg — often ICMP rate limiting, not real loss</div>
           </div>
         </div>
       </section>
@@ -269,8 +266,13 @@ export function TargetIndexPage({
               </tr>
             </thead>
             <tbody>
-              {snapshots.map((snapshot) => {
+              {snapshots.map((snapshot, i) => {
                 const absoluteCollectedAt = formatAbsoluteCollectedAt(snapshot.collectedAt)
+                const prev = i > 0 ? snapshots[i - 1] : null
+                const sameAsPrev =
+                  prev != null &&
+                  prev.diagnosis.label === snapshot.diagnosis.label &&
+                  prev.diagnosis.summary === snapshot.diagnosis.summary
                 return (
                   <tr key={snapshot.collectedAt}>
                     <td data-sort-value={snapshot.collectedAt}>
@@ -293,13 +295,17 @@ export function TargetIndexPage({
                       <span className={`loss ${getDiagnosisClass(snapshot.diagnosis)}`}>
                         {snapshot.diagnosis.label}
                       </span>
-                      <br />
-                      <span>
-                        <DiagnosisSummary
-                          summary={snapshot.diagnosis.summary}
-                          hops={snapshot.hops}
-                        />
-                      </span>
+                      {sameAsPrev ? null : (
+                        <>
+                          <br />
+                          <span>
+                            <DiagnosisSummary
+                              summary={snapshot.diagnosis.summary}
+                              hops={snapshot.hops}
+                            />
+                          </span>
+                        </>
+                      )}
                     </td>
                     <td>{snapshot.hopCount}</td>
                     <td>

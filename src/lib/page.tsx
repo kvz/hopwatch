@@ -249,10 +249,17 @@ export async function renderRootIndex(
     ),
   )
 
+  const latestCollectedAt = rows.reduce<string | null>((acc, row) => {
+    const rowTs = parseCollectedAt(row.summary.collectedAt) ?? 0
+    const accTs = acc == null ? 0 : (parseCollectedAt(acc) ?? 0)
+    return rowTs > accTs ? row.summary.collectedAt : acc
+  }, null)
+
   return renderDocument(
     <RootIndexPage
       crossTargetDiagnosis={crossTargetDiagnosis}
       keepDays={keepDays}
+      latestCollectedAt={latestCollectedAt}
       now={now}
       peers={peers}
       rows={rows}

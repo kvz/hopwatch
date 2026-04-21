@@ -405,7 +405,7 @@ export function renderChartSvg(
       ? ''
       : `<text x="${width - 3}" y="${padding.top + chartHeight / 2}" font-size="8" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#999" text-anchor="middle" transform="rotate(-90 ${width - 3} ${padding.top + chartHeight / 2})">${escapeHtml(signatureText)}</text>`
 
-  const secondsLabel = `<text x="12" y="${padding.top + chartHeight / 2}" font-size="10" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#333" text-anchor="middle" transform="rotate(-90 12 ${padding.top + chartHeight / 2})">Seconds</text>`
+  const secondsLabel = `<text x="12" y="${padding.top + chartHeight / 2}" font-size="10" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#333" text-anchor="middle" transform="rotate(-90 12 ${padding.top + chartHeight / 2})">Latency</text>`
 
   const plotClipId = 'mtr-plot-clip'
   const plotClip = `<clipPath id="${plotClipId}"><rect x="${padding.left}" y="${padding.top}" width="${chartWidth}" height="${chartHeight}" /></clipPath>`

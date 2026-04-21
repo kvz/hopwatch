@@ -59,7 +59,7 @@ export function TopNav({
         {backHref != null ? (
           <a className="topnav-back" href={backHref}>
             <span className="topnav-back-arrow" aria-hidden="true">
-              ‹
+              ←
             </span>{' '}
             {backLabel ?? 'Back'}
           </a>

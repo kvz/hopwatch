@@ -41,6 +41,7 @@ export interface TargetSummaryRow {
 interface RootIndexPageProps {
   crossTargetDiagnosis: CrossTargetDiagnosis
   keepDays: number
+  latestCollectedAt: string | null
   now: number
   peers: PeerConfig[]
   rows: TargetSummaryRow[]
@@ -52,6 +53,7 @@ interface RootIndexPageProps {
 export function RootIndexPage({
   crossTargetDiagnosis,
   keepDays,
+  latestCollectedAt,
   now,
   peers,
   rows,
@@ -59,6 +61,10 @@ export function RootIndexPage({
   selfLabel,
   signature,
 }: RootIndexPageProps): ReactNode {
+  const freshnessRelative =
+    latestCollectedAt == null ? null : formatRelativeCollectedAt(latestCollectedAt, now)
+  const freshnessAbsolute =
+    latestCollectedAt == null ? null : formatAbsoluteCollectedAt(latestCollectedAt)
   return (
     <Layout title={`hopwatch: ${selfLabel}`}>
       <TopNav
@@ -74,6 +80,14 @@ export function RootIndexPage({
         loss below is the 7-day average. Raw JSON snapshots are retained for {keepDays} days, then
         rolled up into coarser historical buckets.
       </p>
+      {freshnessRelative != null && freshnessAbsolute != null ? (
+        <p className="freshness">
+          Last probe cycle: <strong>{freshnessRelative}</strong>{' '}
+          <span className="cell-subtle" title={freshnessAbsolute}>
+            ({freshnessAbsolute})
+          </span>
+        </p>
+      ) : null}
       <section className="panel">
         <h2>Cross-target diagnosis (7d)</h2>
         <p>
@@ -128,8 +142,12 @@ export function RootIndexPage({
                     <tr key={targetSlug}>
                       <td data-sort-value={summary.target}>
                         <a href={`./${encodeURIComponent(targetSlug)}/`}>{summary.target}</a>
-                        <br />
-                        <code>{summary.host}</code>
+                        {summary.target.includes(summary.host) ? null : (
+                          <>
+                            <br />
+                            <code>{summary.host}</code>
+                          </>
+                        )}
                       </td>
                       <td data-sort-value={summary.diagnosis.label}>
                         <span className={`loss ${getDiagnosisClass(summary.diagnosis)}`}>

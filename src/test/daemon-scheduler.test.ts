@@ -136,6 +136,16 @@ describe('parseListenAddress', () => {
     expect(() => parseListenAddress(':70000')).toThrow(/Invalid listen port/)
   })
 
+  test('rejects unbracketed values with multiple colons (ambiguous host:port split)', () => {
+    // `lastIndexOf(':')` on `host:123:456` happily produces hostname="host:123"
+    // and port=456. That's almost certainly a typo (the operator probably meant
+    // to wrap an IPv6 host in brackets) and silently accepting it would bind to
+    // a port nobody expected. Bracketed IPv6 (`[::1]:8080`) remains the only
+    // way to encode a colon-bearing hostname.
+    expect(() => parseListenAddress('host:123:456')).toThrow(/Invalid listen address/)
+    expect(() => parseListenAddress('::1:8080')).toThrow(/Invalid listen address/)
+  })
+
   test('rejects empty port values instead of coercing to ephemeral port 0', () => {
     // `Number("")` is 0 in JS; without an explicit empty-string check, a
     // misconfigured `listen = "127.0.0.1:"` would silently bind to a random

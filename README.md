@@ -19,7 +19,8 @@ curl -fsSL https://github.com/kvz/hopwatch/releases/latest/download/hopwatch-lin
 # Write a config
 cat > hopwatch.toml <<'EOF'
 [server]
-listen  = ":8080"
+# Loopback by default; set to "0.0.0.0:8080" to expose on every interface.
+listen  = "127.0.0.1:8080"
 data_dir = "./hopwatch-data"
 
 [probe]
@@ -82,7 +83,10 @@ install -d -o hopwatch -g hopwatch -m 0750 /var/lib/hopwatch
 # 5. Config.
 cat > /etc/hopwatch/hopwatch.toml <<'EOF'
 [server]
-listen   = ":8080"
+# Loopback by default — the nginx recipe below terminates TLS and forwards to
+# 127.0.0.1:8080. Drop the listen line or set it to "0.0.0.0:8080" if you want
+# to expose the daemon directly (not recommended without an auth proxy).
+listen   = "127.0.0.1:8080"
 data_dir = "/var/lib/hopwatch"
 node_label = "observer-1"
 

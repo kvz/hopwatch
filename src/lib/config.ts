@@ -55,7 +55,12 @@ const peerSchema = z.object({
 export type PeerConfig = z.infer<typeof peerSchema>
 
 const serverSchema = z.object({
-  listen: z.string().default(':8080'),
+  // Loopback by default. Hop topology + reverse-DNS for every target is
+  // sensitive enough that we'd rather operators opt into exposing the UI —
+  // front with nginx (README shows the proxy recipe) or set
+  // `listen = "0.0.0.0:8080"` explicitly. Before this, fresh installs bound
+  // on every interface with no authentication shipped.
+  listen: z.string().default('127.0.0.1:8080'),
   data_dir: z.string().default('./hopwatch-data'),
   public_url: z.string().url().optional(),
   node_label: z.string().optional(),

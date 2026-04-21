@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { LoadedConfig } from '../lib/config.ts'
-import { resolveServeFilePath, startScheduler } from '../lib/daemon.ts'
+import { resolveServeFilePath, resolveTargetDirPath, startScheduler } from '../lib/daemon.ts'
 import { parseListenAddress } from '../lib/listen.ts'
 import { createLogger } from '../lib/logger.ts'
 
@@ -192,5 +192,47 @@ describe('resolveServeFilePath', () => {
 
   test('returns null for a missing path', async () => {
     expect(await resolveServeFilePath(rootDir, '/nope.txt')).toBeNull()
+  })
+})
+
+describe('resolveTargetDirPath', () => {
+  let rootDir: string
+  let outsideDir: string
+
+  beforeEach(async () => {
+    rootDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-target-root-'))
+    outsideDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-target-outside-'))
+  })
+
+  afterEach(async () => {
+    await rm(rootDir, { recursive: true, force: true })
+    await rm(outsideDir, { recursive: true, force: true })
+  })
+
+  test('resolves a normal target slug to its on-disk directory', async () => {
+    await mkdir(path.join(rootDir, 'cloudflare'), { recursive: true })
+    const resolved = await resolveTargetDirPath(rootDir, 'cloudflare')
+    expect(resolved).not.toBeNull()
+    expect(resolved).toMatch(/cloudflare$/)
+  })
+
+  test('refuses a slug whose on-disk directory is a symlink pointing outside the root', async () => {
+    // Before the fix, the target dashboard route only applied the lexical
+    // safeResolve check — it never took the realpath. An operator (or an
+    // attacker who can write into data_dir) could create a symlink pointing
+    // at /etc or /var/log, and rendering /<slug>/ would enumerate and parse
+    // JSON files from that external location.
+    await symlink(outsideDir, path.join(rootDir, 'escape'))
+    const resolved = await resolveTargetDirPath(rootDir, 'escape')
+    expect(resolved).toBeNull()
+  })
+
+  test('rejects a slug that traverses out of the root', async () => {
+    expect(await resolveTargetDirPath(rootDir, '..')).toBeNull()
+    expect(await resolveTargetDirPath(rootDir, '')).toBeNull()
+  })
+
+  test('returns null when the directory does not exist yet', async () => {
+    expect(await resolveTargetDirPath(rootDir, 'never-created')).toBeNull()
   })
 })

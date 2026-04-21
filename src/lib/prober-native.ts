@@ -76,6 +76,17 @@ function errno(): number {
   return read.i32(p)
 }
 
+// Module-level monotonic counter, seeded randomly so restarts don't all start
+// at 0 and collide with in-flight replies from a previous process. Wraps at
+// 16 bits to fit the ICMP Echo identifier field. Used instead of
+// Math.random() so two concurrent probes on the same host cannot draw the
+// same id by chance and cross-wire each other's replies.
+let nextProbeIdCounter = Math.floor(Math.random() * 0x10000) & 0xffff
+function nextProbeId(): number {
+  nextProbeIdCounter = (nextProbeIdCounter + 1) & 0xffff
+  return nextProbeIdCounter
+}
+
 export async function probeTargetNative(options: NativeProbeOptions): Promise<RawMtrEvent[]> {
   const maxHops = options.maxHops ?? DEFAULTS.maxHops
   const packets = options.packets ?? DEFAULTS.packets
@@ -91,14 +102,15 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     throw new Error(`socket(AF_INET, SOCK_RAW, IPPROTO_ICMP) failed, errno=${errno()}`)
   }
 
-  // A random 16-bit identifier per call — not `process.pid & 0xffff`. Two
-  // concurrent probes on the same host share the raw socket's incoming queue
-  // (the kernel delivers every ICMP reply to every open raw ICMP socket); if
-  // both calls used the same identifier, probe A could drain probe B's
-  // matching replies and attribute them to the wrong target/hop. Random
-  // collisions between concurrent calls are possible but negligible at the
-  // concurrency we run (default 3).
-  const id = Math.floor(Math.random() * 0x10000) & 0xffff
+  // Monotonic 16-bit identifier per call — not `process.pid & 0xffff`, not
+  // Math.random(). Two concurrent probes on the same host share the raw
+  // socket's incoming queue (the kernel delivers every ICMP reply to every
+  // open raw ICMP socket); if both calls used the same identifier, probe A
+  // could drain probe B's matching replies and attribute them to the wrong
+  // target/hop. A monotonic counter guarantees no two in-flight probes ever
+  // draw the same id unless 65,536 calls are live simultaneously, which we
+  // are nowhere near at the concurrency we run (default 3).
+  const id = nextProbeId()
   const sendTimeNs = new Map<number, number>()
   const events: RawMtrEvent[] = []
   // Hop indices (0-based = ttl-1) where we've observed any reply, so we can

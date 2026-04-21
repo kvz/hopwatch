@@ -60,6 +60,43 @@ function safeResolve(root: string, urlPath: string): string | null {
   return resolved
 }
 
+// Resolves a target-dashboard slug to its on-disk directory while guarding
+// against symlink escape. The daemon's target route previously only applied
+// the lexical `safeResolve()` check, so a symlink under data_dir pointing at
+// /var/log or /etc would render — the page code then enumerated and parsed
+// JSON files from outside the data tree. Must stay in lockstep with
+// `resolveServeFilePath` so both entry points enforce the same containment
+// contract. Returns the realpath of the directory, or null if missing /
+// not-a-directory / escapes the root.
+export async function resolveTargetDirPath(root: string, slug: string): Promise<string | null> {
+  const lexical = safeResolve(root, slug)
+  if (lexical == null) return null
+
+  try {
+    const info = await stat(lexical)
+    if (!info.isDirectory()) return null
+  } catch {
+    return null
+  }
+
+  let realRoot: string
+  let realDir: string
+  try {
+    realRoot = await realpath(root)
+    realDir = await realpath(lexical)
+  } catch {
+    return null
+  }
+
+  // The bare root is never a valid target dir — the dashboard needs a leaf
+  // under it. This matches the daemon's existing `targetDir === dataDir`
+  // 403 guard and keeps the realpath version just as strict.
+  if (realDir === realRoot) return null
+  if (!realDir.startsWith(`${realRoot}${path.sep}`)) return null
+
+  return realDir
+}
+
 // Resolves a URL path to a file on disk while guarding against symlink escape.
 // `safeResolve()` only checks the lexical path, but `stat()` and `Bun.file()`
 // both follow symlinks — so a symlink under data_dir pointing at /etc/passwd
@@ -280,9 +317,9 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         } catch {
           return new Response('bad request', { status: 400 })
         }
-        const targetDir = safeResolve(dataDir, targetSlug)
-        if (targetDir == null || targetDir === dataDir) {
-          return new Response('forbidden', { status: 403 })
+        const targetDir = await resolveTargetDirPath(dataDir, targetSlug)
+        if (targetDir == null) {
+          return new Response('not found', { status: 404 })
         }
 
         const rendered = await renderTargetIndex(

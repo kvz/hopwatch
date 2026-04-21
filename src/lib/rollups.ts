@@ -118,9 +118,16 @@ function buildRollupBucket(
   rttSamplesMs: number[],
 ): MtrRollupBucket {
   const destinationReplyCount = rttSamplesMs.length
+  // When every snapshot in a bucket was completely blackholed,
+  // summarizeDestinationSamples returns sentCount: 0 (no resolvable
+  // destination hop). Reporting that as 0% loss would render a full hour of
+  // "target unreachable" as a healthy bar on the long-range chart. Mirror
+  // raw.ts's per-snapshot summary — zero sent, zero replies = 100% loss.
+  // We only reach buildRollupBucket for non-empty buckets, so this branch
+  // always represents "we had data, none of it hit the destination".
   const destinationLossPct =
     destinationSentCount === 0
-      ? 0
+      ? 100
       : ((destinationSentCount - destinationReplyCount) / destinationSentCount) * 100
   const sorted = [...rttSamplesMs].sort((left, right) => left - right)
 
@@ -255,12 +262,29 @@ export async function readRollupFile(
     // dropping years of hourly/daily history in the process. Quarantine the
     // bad file with a timestamped suffix so the next write starts fresh but
     // the original is preserved for post-mortem.
-    const quarantinePath = `${filePath}.corrupted.${Date.now()}`
-    await rename(filePath, quarantinePath).catch(() => {})
     const reason = err instanceof Error ? err.message : String(err)
-    process.stderr.write(
-      `hopwatch: corrupt rollup at ${filePath}, quarantined to ${quarantinePath}: ${reason}\n`,
-    )
+    const quarantinePath = `${filePath}.corrupted.${Date.now()}`
+    let quarantineError: string | null = null
+    try {
+      await rename(filePath, quarantinePath)
+    } catch (renameErr) {
+      // Previously swallowed silently, which produced a log line claiming the
+      // file was quarantined even when the rename had failed — and the caller
+      // would then `writeRollupFile()` over `filePath`, losing the original.
+      // Surface it so operators at least see both failures in the log.
+      quarantineError = renameErr instanceof Error ? renameErr.message : String(renameErr)
+    }
+    if (quarantineError != null) {
+      process.stderr.write(
+        `hopwatch: corrupt rollup at ${filePath} (${reason}); ` +
+          `quarantine rename to ${quarantinePath} failed (${quarantineError}) — ` +
+          `about to overwrite the corrupt file\n`,
+      )
+    } else {
+      process.stderr.write(
+        `hopwatch: corrupt rollup at ${filePath}, quarantined to ${quarantinePath}: ${reason}\n`,
+      )
+    }
     return null
   }
 }

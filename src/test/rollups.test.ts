@@ -85,6 +85,32 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
     expect(bucket.histogram.every((h) => h.count === 0)).toBe(true)
   })
 
+  test('reports 100% loss (not 0%) when every snapshot in a bucket was completely blackholed', () => {
+    // resolveDestinationHopIndex returns null when nothing survives — no
+    // reply/host events at any hop — and summarizeDestinationSamples returns
+    // sentCount: 0. Before the fix, buildRollupBucket short-circuited that to
+    // destinationLossPct=0, so a full hour of "target unreachable" appeared as
+    // a healthy 0% bar on the long-range chart, hiding the outage.
+    const blackholed: StoredRawSnapshot = {
+      collectedAt: '20260420T100000Z',
+      fileName: '20260420T100000Z.json',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      // Only `sent` events, no replies and no host — resolveDestinationHopIndex
+      // returns null, so both sentCount and replyCount are 0.
+      rawEvents: [
+        { kind: 'sent', hopIndex: 0, probeId: 0 },
+        { kind: 'sent', hopIndex: 0, probeId: 1 },
+      ],
+      schemaVersion: 2,
+      target: 'example.com',
+    }
+    const [bucket] = aggregateSnapshotsToRollupBuckets([blackholed], 'hour')
+    expect(bucket.destinationLossPct).toBe(100)
+  })
+
   test('histogram bins samples and leaves an overflow bucket', () => {
     const snaps = [snap('20260420T100000Z', destinationEvents(4, [500, 1500, 500_000, 1_100_000]))]
     const [bucket] = aggregateSnapshotsToRollupBuckets(snaps, 'hour')

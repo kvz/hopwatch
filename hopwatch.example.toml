@@ -1,5 +1,8 @@
 [server]
-listen     = ":8080"
+# Loopback-only by default — hop topology + reverse-DNS is sensitive and
+# hopwatch ships without auth. Front with nginx (see README) or set
+# `listen = "0.0.0.0:8080"` explicitly to expose on every interface.
+listen     = "127.0.0.1:8080"
 data_dir   = "./hopwatch-data"
 node_label = "dev"
 

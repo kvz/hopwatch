@@ -220,16 +220,20 @@ export function renderChartSvg(
     if (w <= 0) continue
 
     const medianMs = point.rttP50Ms ?? point.rttAvgMs
-    if (medianMs != null && Number.isFinite(medianMs) && medianMs <= yMaxMs) {
+    const lossPct = point.destinationLossPct
+    // Under near-total loss (≥95%, i.e. 19/20+ probes dropped) any surviving
+    // median is a one- or two-sample artefact. Anchoring a 2px-wide strip at
+    // that value — in our widest loss colour, no less — gives the chart a
+    // long red line on the baseline that SmokePing deliberately avoids. Match
+    // SmokePing's behaviour: treat those bins as gaps, not as dots at rtt≈0.
+    const nearTotalLoss = lossPct != null && lossPct >= 95
+    if (!nearTotalLoss && medianMs != null && Number.isFinite(medianMs) && medianMs <= yMaxMs) {
       const yMid = Math.round(yOf(medianMs))
-      const color = lossColorFor(point.destinationLossPct)
+      const color = lossColorFor(lossPct)
       medianMarkers.push(
         `<rect x="${xLeft}" y="${yMid - 1}" width="${w}" height="2" fill="${color}" shape-rendering="crispEdges" />`,
       )
     }
-    // No median (e.g. 100 % loss bin) → no marker. SmokePing does the same:
-    // without a median there's nothing to anchor a colored line on, so the bin
-    // reads as a gap. Loss is still visible in the stats row and neighbours.
   }
   const medianMarkersSvg = medianMarkers.join('')
 

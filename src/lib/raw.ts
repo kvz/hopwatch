@@ -63,7 +63,7 @@ const storedRawSnapshotSchema = z.object({
 
 export type StoredRawSnapshot = z.infer<typeof storedRawSnapshotSchema>
 
-function average(values: number[]): number | null {
+export function average(values: number[]): number | null {
   if (values.length === 0) {
     return null
   }

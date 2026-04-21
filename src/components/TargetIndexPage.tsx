@@ -158,7 +158,9 @@ export function TargetIndexPage({
                 <th data-sort="text">Hop</th>
                 <th data-sort="number">Latest index</th>
                 <th data-sort="loss">Average loss when seen</th>
-                <th data-sort="number">Snapshots with downstream loss</th>
+                <th data-sort="number" data-sort-default="desc">
+                  Snapshots with downstream loss
+                </th>
                 <th data-sort="number">Snapshots with isolated loss</th>
               </tr>
             </thead>
@@ -195,7 +197,9 @@ export function TargetIndexPage({
           <table data-sortable>
             <thead>
               <tr>
-                <th data-sort="number">Hop</th>
+                <th data-sort="number" data-sort-default="asc">
+                  Hop
+                </th>
                 <th data-sort="text">Host</th>
                 <th data-sort="loss">Loss</th>
                 <th data-sort="number">Sent</th>
@@ -239,7 +243,9 @@ export function TargetIndexPage({
           <table data-sortable>
             <thead>
               <tr>
-                <th data-sort="text">Collected at</th>
+                <th data-sort="text" data-sort-default="desc">
+                  Collected at
+                </th>
                 <th data-sort="loss">Destination loss</th>
                 <th data-sort="loss">Worst hop loss</th>
                 <th data-sort="text">Diagnosis</th>

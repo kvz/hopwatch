@@ -8,6 +8,21 @@ export type SortKind = 'text' | 'number' | 'loss' | 'time'
 export type SortDirection = 'asc' | 'desc'
 export type SortValue = number | string | null
 
+// Translate a declared default direction on a column header into the
+// aria-sort token used by both the CSS caret and the activate-cycle. The
+// server already ordered rows; we only need the caret to reflect that.
+export function ariaSortFor(direction: SortDirection | null): 'ascending' | 'descending' | 'none' {
+  if (direction === 'asc') return 'ascending'
+  if (direction === 'desc') return 'descending'
+  return 'none'
+}
+
+export function parseDefaultSort(raw: string | null): SortDirection | null {
+  if (raw === 'asc' || raw === 'ascending') return 'asc'
+  if (raw === 'desc' || raw === 'descending') return 'desc'
+  return null
+}
+
 const MISSING_TEXT = new Set(['', 'n/a', '—', '-', 'unknown', 'nan'])
 
 export function parseSortValue(raw: string, kind: SortKind): SortValue {
@@ -92,7 +107,8 @@ export function enhanceTable(table: HTMLTableElement): void {
 
     th.setAttribute('role', 'button')
     th.setAttribute('tabindex', '0')
-    th.setAttribute('aria-sort', 'none')
+    const defaultDirection = parseDefaultSort(th.getAttribute('data-sort-default'))
+    th.setAttribute('aria-sort', ariaSortFor(defaultDirection))
     th.classList.add('is-sortable')
 
     const onActivate = (): void => {

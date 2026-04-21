@@ -5,12 +5,13 @@ import { z } from 'zod'
 
 import type { ProbeMode } from './config.ts'
 import {
+  average,
   parseStoredRawSnapshot,
   quantile,
   type StoredRawSnapshot,
   summarizeDestinationSamples,
 } from './raw.ts'
-import { listSnapshotFileNames } from './snapshot.ts'
+import { listSnapshotFileNames, parseCompactCollectedAt } from './snapshot.ts'
 
 export type RollupGranularity = 'hour' | 'day'
 
@@ -59,22 +60,15 @@ interface TargetRollupMetadata {
 
 const histogramUpperBoundsMs = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000] as const
 
-function average(values: number[]): number | null {
-  if (values.length === 0) {
-    return null
-  }
-
-  return values.reduce((sum, value) => sum + value, 0) / values.length
-}
-
 function getCollectedAtDate(collectedAt: string): Date {
-  const match = collectedAt.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
-  if (!match) {
+  const parts = parseCompactCollectedAt(collectedAt)
+  if (parts == null) {
     throw new Error(`Unsupported collectedAt timestamp: ${collectedAt}`)
   }
 
-  const [, year, month, day, hour, minute, second] = match
-  return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`)
+  return new Date(
+    `${parts.year}-${parts.month}-${parts.day}T${parts.hours}:${parts.minutes}:${parts.seconds}Z`,
+  )
 }
 
 function getBucketStartIso(date: Date, granularity: RollupGranularity): string {

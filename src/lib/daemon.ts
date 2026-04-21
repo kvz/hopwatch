@@ -60,14 +60,38 @@ function safeResolve(root: string, urlPath: string): string | null {
   return resolved
 }
 
+// Shared symlink-escape guard for both entry points. safeResolve() only checks
+// the lexical path, but stat() and Bun.file() follow symlinks — so a symlink
+// under data_dir pointing at /etc/passwd would otherwise be happily used. We
+// realpath both the root and the resolved target and require the target stay
+// within the root's realpath. `allowRoot=false` additionally rejects the bare
+// root itself (target dashboards need a leaf). Returns the realpath of the
+// target, or null if blocked / missing / escaping.
+async function realpathContained(
+  root: string,
+  lexical: string,
+  allowRoot: boolean,
+): Promise<string | null> {
+  let realRoot: string
+  let realTarget: string
+  try {
+    realRoot = await realpath(root)
+    realTarget = await realpath(lexical)
+  } catch {
+    return null
+  }
+
+  if (realTarget === realRoot) return allowRoot ? realTarget : null
+  if (!realTarget.startsWith(`${realRoot}${path.sep}`)) return null
+
+  return realTarget
+}
+
 // Resolves a target-dashboard slug to its on-disk directory while guarding
 // against symlink escape. The daemon's target route previously only applied
 // the lexical `safeResolve()` check, so a symlink under data_dir pointing at
 // /var/log or /etc would render — the page code then enumerated and parsed
-// JSON files from outside the data tree. Must stay in lockstep with
-// `resolveServeFilePath` so both entry points enforce the same containment
-// contract. Returns the realpath of the directory, or null if missing /
-// not-a-directory / escapes the root.
+// JSON files from outside the data tree.
 export async function resolveTargetDirPath(root: string, slug: string): Promise<string | null> {
   const lexical = safeResolve(root, slug)
   if (lexical == null) return null
@@ -79,30 +103,10 @@ export async function resolveTargetDirPath(root: string, slug: string): Promise<
     return null
   }
 
-  let realRoot: string
-  let realDir: string
-  try {
-    realRoot = await realpath(root)
-    realDir = await realpath(lexical)
-  } catch {
-    return null
-  }
-
-  // The bare root is never a valid target dir — the dashboard needs a leaf
-  // under it. This matches the daemon's existing `targetDir === dataDir`
-  // 403 guard and keeps the realpath version just as strict.
-  if (realDir === realRoot) return null
-  if (!realDir.startsWith(`${realRoot}${path.sep}`)) return null
-
-  return realDir
+  return realpathContained(root, lexical, false)
 }
 
 // Resolves a URL path to a file on disk while guarding against symlink escape.
-// `safeResolve()` only checks the lexical path, but `stat()` and `Bun.file()`
-// both follow symlinks — so a symlink under data_dir pointing at /etc/passwd
-// would otherwise be happily served. We realpath both the root and the
-// resolved target and require the target stay within the root's realpath.
-// Returns the realpath of the file to serve, or null if blocked / missing.
 export async function resolveServeFilePath(root: string, urlPath: string): Promise<string | null> {
   const lexical = safeResolve(root, urlPath)
   if (lexical == null) return null
@@ -117,20 +121,7 @@ export async function resolveServeFilePath(root: string, urlPath: string): Promi
     return null
   }
 
-  let realRoot: string
-  let realFile: string
-  try {
-    realRoot = await realpath(root)
-    realFile = await realpath(filePath)
-  } catch {
-    return null
-  }
-
-  if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${path.sep}`)) {
-    return null
-  }
-
-  return realFile
+  return realpathContained(root, filePath, true)
 }
 
 async function serveFile(root: string, urlPath: string): Promise<Response> {

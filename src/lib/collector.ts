@@ -16,7 +16,7 @@ import type { LoadedConfig, ProbeEngine, ProbeMode, TargetConfig } from './confi
 import type { Logger } from './logger.ts'
 import { parseRawMtrOutput, parseStoredRawSnapshot, type RawMtrEvent } from './raw.ts'
 import { updateTargetRollups } from './rollups.ts'
-import { RESERVED_TARGET_FILES } from './snapshot.ts'
+import { formatCompactCollectedAt, RESERVED_TARGET_FILES } from './snapshot.ts'
 
 export interface MtrHistoryTarget {
   slug: string
@@ -108,13 +108,7 @@ export interface CollectorDependencies {
 }
 
 export function getTimestamp(now: Date = new Date()): string {
-  const year = now.getUTCFullYear()
-  const month = String(now.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(now.getUTCDate()).padStart(2, '0')
-  const hours = String(now.getUTCHours()).padStart(2, '0')
-  const minutes = String(now.getUTCMinutes()).padStart(2, '0')
-  const seconds = String(now.getUTCSeconds()).padStart(2, '0')
-  return `${year}${month}${day}T${hours}${minutes}${seconds}Z`
+  return formatCompactCollectedAt(now)
 }
 
 export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptions {

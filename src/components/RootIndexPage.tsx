@@ -11,6 +11,7 @@ import {
   type SnapshotSummary,
 } from '../lib/snapshot.ts'
 import type {
+  CrossTargetDiagnosis,
   DiagnosisAggregate,
   HopAggregate,
   SeverityBadge,
@@ -29,10 +30,8 @@ const SEVERITY_SORT_RANK: Record<SeverityBadge['className'], number> = {
 
 export interface TargetSummaryRow {
   aggregate: SnapshotAggregate
-  charts: ChartDefinition[]
   diagnosisAggregate: DiagnosisAggregate
   historicalSeverity: SeverityBadge
-  hopIssues: HopAggregate[]
   suspectHop: HopAggregate | null
   summary: SnapshotSummary
   targetSlug: string
@@ -40,6 +39,7 @@ export interface TargetSummaryRow {
 }
 
 interface RootIndexPageProps {
+  crossTargetDiagnosis: CrossTargetDiagnosis
   keepDays: number
   now: number
   peers: PeerConfig[]
@@ -50,6 +50,7 @@ interface RootIndexPageProps {
 }
 
 export function RootIndexPage({
+  crossTargetDiagnosis,
   keepDays,
   now,
   peers,
@@ -74,6 +75,15 @@ export function RootIndexPage({
         rolled up into coarser historical buckets.
       </p>
       <section className="panel">
+        <h2>Cross-target diagnosis (7d)</h2>
+        <p>
+          <span className={`loss ${crossTargetDiagnosis.className}`}>
+            {crossTargetDiagnosis.label}
+          </span>{' '}
+          {crossTargetDiagnosis.summary}
+        </p>
+      </section>
+      <section className="panel">
         <h2>Targets</h2>
         <div className="table-wrap">
           <table data-sortable>
@@ -84,7 +94,9 @@ export function RootIndexPage({
                 <th data-sort="number">Hops now</th>
                 <th data-sort="number">Severity (7d)</th>
                 <th data-sort="loss">Destination loss (7d avg)</th>
-                <th data-sort="number">Destination-loss snapshots (7d)</th>
+                <th data-sort="number" data-sort-default="desc">
+                  Destination-loss snapshots (7d)
+                </th>
                 <th data-sort="text">Most suspicious hop (7d)</th>
                 <th>
                   Latency/Loss

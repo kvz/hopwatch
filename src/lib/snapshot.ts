@@ -94,13 +94,12 @@ function parseNullableNumber(value: string | undefined): number | null {
 }
 
 function formatReportCollectedAt(collectedAt: string): string {
-  const match = collectedAt.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
-  if (!match) {
+  const parts = parseCompactCollectedAt(collectedAt)
+  if (parts == null) {
     return collectedAt
   }
 
-  const [, year, month, day, hour, minute, second] = match
-  return `${year}-${month}-${day}T${hour}:${minute}:${second}Z`
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hours}:${parts.minutes}:${parts.seconds}Z`
 }
 
 function padReportCell(value: string, width: number): string {
@@ -510,20 +509,50 @@ export function getDiagnosisClass(diagnosis: SnapshotDiagnosis): string {
   return 'unknown'
 }
 
-export function parseCollectedAt(value: string): number | null {
+export interface CompactCollectedAtParts {
+  day: string
+  hours: string
+  minutes: string
+  month: string
+  seconds: string
+  year: string
+}
+
+// Single source of truth for the on-disk `YYYYMMDDTHHmmssZ` timestamp format
+// used by snapshot filenames and `collectedAt` fields. All callers that need
+// to parse/reformat this timestamp should go through here so the regex and
+// semantics stay in lockstep. `formatCompactCollectedAt` is the inverse —
+// used by the collector when naming new snapshots.
+export function formatCompactCollectedAt(date: Date): string {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  const hours = String(date.getUTCHours()).padStart(2, '0')
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0')
+  return `${year}${month}${day}T${hours}${minutes}${seconds}Z`
+}
+
+export function parseCompactCollectedAt(value: string): CompactCollectedAtParts | null {
   const match = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/)
-  if (!match) {
+  if (!match) return null
+  const [, year, month, day, hours, minutes, seconds] = match
+  return { day, hours, minutes, month, seconds, year }
+}
+
+export function parseCollectedAt(value: string): number | null {
+  const parts = parseCompactCollectedAt(value)
+  if (parts == null) {
     return null
   }
 
-  const [, year, month, day, hours, minutes, seconds] = match
   return Date.UTC(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hours),
-    Number(minutes),
-    Number(seconds),
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hours),
+    Number(parts.minutes),
+    Number(parts.seconds),
   )
 }
 

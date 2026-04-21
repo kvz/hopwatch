@@ -101,6 +101,28 @@ export function getPointsFromRollupBuckets(
     .sort((left, right) => left.timestamp - right.timestamp)
 }
 
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000
+const THIRTY_HOURS_MS = 30 * 60 * 60 * 1000
+const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000
+const THREE_SIXTY_DAYS_MS = 360 * 24 * 60 * 60 * 1000
+
+// Thumbnail-only loader for the root overview. renderRootIndex used to call
+// loadChartDefinitions() and throw three of the four charts away — each target
+// paying for two rollup-file reads plus three unused ChartPoint arrays. This
+// helper builds just the 30h snapshot-backed chart that the overview needs.
+export function buildThumbnailChartDefinition(
+  snapshots: SnapshotSummary[],
+  now: number,
+): ChartDefinition {
+  return {
+    label: 'Last 30 hours',
+    points: getPointsFromSnapshots(snapshots, now, THIRTY_HOURS_MS),
+    rangeLabel: '30h',
+    rangeMs: THIRTY_HOURS_MS,
+    sourceLabel: 'raw snapshots',
+  }
+}
+
 export async function loadChartDefinitions(
   targetDir: string,
   snapshots: SnapshotSummary[],
@@ -108,11 +130,6 @@ export async function loadChartDefinitions(
 ): Promise<ChartDefinition[]> {
   const hourlyRollup = await readRollupFile(path.join(targetDir, 'hourly.rollup.json'), 'hour')
   const dailyRollup = await readRollupFile(path.join(targetDir, 'daily.rollup.json'), 'day')
-
-  const THREE_HOURS_MS = 3 * 60 * 60 * 1000
-  const THIRTY_HOURS_MS = 30 * 60 * 60 * 1000
-  const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000
-  const THREE_SIXTY_DAYS_MS = 360 * 24 * 60 * 60 * 1000
 
   return [
     {

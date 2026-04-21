@@ -22,6 +22,24 @@ function totalLossPoint(timestamp: number): ChartPoint {
   }
 }
 
+function nearTotalLossWithTinyMedianPoint(timestamp: number): ChartPoint {
+  // 19/20 probes lost, one probe got through quickly. A strict reading of the
+  // sample data yields a median near 0 ms — but SmokePing suppresses the dot
+  // under near-total loss rather than anchoring a red marker on the baseline.
+  return {
+    destinationLossPct: 95,
+    rttAvgMs: 0.9,
+    rttMaxMs: 0.9,
+    rttMinMs: 0.9,
+    rttP25Ms: 0.9,
+    rttP50Ms: 0.9,
+    rttP75Ms: 0.9,
+    rttP90Ms: 0.9,
+    rttSamplesMs: [0.9],
+    timestamp,
+  }
+}
+
 function healthyPoint(timestamp: number): ChartPoint {
   return {
     destinationLossPct: 0,
@@ -87,6 +105,27 @@ describe('renderChartSvg loss bar', () => {
     // And no translucent full-height strip either.
     const translucent = rects.filter((r) => r.opacity != null)
     expect(translucent).toHaveLength(0)
+  })
+
+  test('near-total-loss bins (≥95% loss) suppress the median marker so nothing red rides the floor', () => {
+    const points = [nearTotalLossWithTinyMedianPoint(NOW - 30 * 60 * 1000)]
+    const svg = renderChartSvg(points, {
+      height: HEIGHT,
+      now: NOW,
+      rangeMs: RANGE_MS,
+      title: 'near-total-loss',
+      upperLimitMs: 2,
+      width: WIDTH,
+    })
+
+    const rects = extractLossBars(svg)
+    // The two loss colors that would otherwise sit on the floor: #ff0000 (19/20
+    // lost) and #a00000 (20/20 lost). SmokePing treats near-total-loss bins as
+    // gaps rather than anchoring a wide 2px strip at rtt≈0.
+    const redMarkers = rects.filter(
+      (r) => r.fill.toLowerCase() === '#ff0000' || r.fill.toLowerCase() === '#a00000',
+    )
+    expect(redMarkers).toHaveLength(0)
   })
 
   test('healthy bins keep their 2px colored median marker and no bottom loss bar is drawn', () => {

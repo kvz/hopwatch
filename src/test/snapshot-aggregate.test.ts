@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest'
 import type { SnapshotSummary } from '../lib/snapshot.ts'
 import {
+  getCrossTargetDiagnosis,
   getHistoricalSeverityBadge,
   getRootSuspectHop,
   type HopAggregate,
   selectSnapshotsInWindow,
   shouldSurfaceHopIssueForRoot,
+  summarizeCrossTargetHopIssues,
   summarizeHopIssues,
   summarizeSnapshots,
 } from '../lib/snapshot-aggregate.ts'
@@ -371,5 +373,105 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
     // destination — i.e. the real destination (index 3) must not appear as
     // an intermediate.
     expect(issues.find((issue) => issue.latestHopIndex === 3)).toBeUndefined()
+  })
+})
+
+describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
+  const suspect = (partial: Partial<HopAggregate> & { host: string }): HopAggregate => ({
+    averageLossPct: 10,
+    downstreamLossCount: 2,
+    isolatedLossCount: 0,
+    latestHopIndex: 2,
+    sampleCount: 5,
+    ...partial,
+  })
+
+  test('groups a shared hop across multiple targets and sums its downstream-loss tallies', () => {
+    const cross = summarizeCrossTargetHopIssues([
+      {
+        asnByHost: new Map([['router.example', 'AS24940']]),
+        hopIssues: [
+          suspect({ host: 'router.example', downstreamLossCount: 3, averageLossPct: 12 }),
+        ],
+        target: 's3-us-east-1',
+      },
+      {
+        asnByHost: new Map([['router.example', 'AS24940']]),
+        hopIssues: [
+          suspect({ host: 'router.example', downstreamLossCount: 4, averageLossPct: 18 }),
+        ],
+        target: 's3-us-west-2',
+      },
+    ])
+    expect(cross).toHaveLength(1)
+    expect(cross[0]).toMatchObject({
+      host: 'router.example',
+      asn: 'AS24940',
+      targetCount: 2,
+      totalDownstreamLoss: 7,
+    })
+    expect(cross[0].targets.sort()).toEqual(['s3-us-east-1', 's3-us-west-2'])
+  })
+
+  test('ignores hops that a per-target aggregate already rejected as not root-suspect', () => {
+    // A hop with only isolated loss shouldn't be elevated to "cross-target
+    // escalation" just because it appears on many targets — that's usually
+    // ICMP reply rate-limiting, not a real upstream issue.
+    const cross = summarizeCrossTargetHopIssues([
+      {
+        asnByHost: new Map(),
+        hopIssues: [
+          suspect({ host: 'rate-limited.example', downstreamLossCount: 0, isolatedLossCount: 5 }),
+        ],
+        target: 'target-a',
+      },
+      {
+        asnByHost: new Map(),
+        hopIssues: [
+          suspect({ host: 'rate-limited.example', downstreamLossCount: 0, isolatedLossCount: 5 }),
+        ],
+        target: 'target-b',
+      },
+    ])
+    expect(cross).toHaveLength(0)
+  })
+
+  test('diagnosis is neutral when no hop is shared across ≥2 targets', () => {
+    const diagnosis = getCrossTargetDiagnosis([
+      {
+        asn: null,
+        averageLossPct: 5,
+        host: 'isolated.example',
+        targetCount: 1,
+        targets: ['only-one'],
+        totalDownstreamLoss: 3,
+        totalIsolatedLoss: 0,
+        totalSampleCount: 5,
+      },
+    ])
+    expect(diagnosis.className).toBe('good')
+    expect(diagnosis.suspect).toBeNull()
+  })
+
+  test('diagnosis flags bad vs warn based on total downstream-loss volume', () => {
+    const mildBase = {
+      asn: 'AS24940',
+      averageLossPct: 8,
+      host: 'shared.example',
+      targetCount: 2,
+      targets: ['a', 'b'],
+      totalDownstreamLoss: 4,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 10,
+    }
+    expect(getCrossTargetDiagnosis([mildBase]).className).toBe('warn')
+
+    const severe = { ...mildBase, totalDownstreamLoss: 12 }
+    expect(getCrossTargetDiagnosis([severe]).className).toBe('bad')
+    // The summary should name the hop, ASN, and escalation call-to-action so
+    // the page reads as actionable, not just descriptive.
+    expect(getCrossTargetDiagnosis([severe]).summary).toContain('shared.example')
+    expect(getCrossTargetDiagnosis([severe]).summary).toContain('AS24940')
+    expect(getCrossTargetDiagnosis([severe]).summary).toContain('escalating')
   })
 })

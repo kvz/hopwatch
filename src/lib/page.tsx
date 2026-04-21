@@ -4,7 +4,11 @@ import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RootIndexPage, type TargetSummaryRow } from '../components/RootIndexPage.tsx'
 import { TargetIndexPage } from '../components/TargetIndexPage.tsx'
-import { type ChartDefinition, loadChartDefinitions } from './chart.ts'
+import {
+  buildThumbnailChartDefinition,
+  type ChartDefinition,
+  loadChartDefinitions,
+} from './chart.ts'
 import type { PeerConfig } from './config.ts'
 import {
   listSnapshotFileNames,
@@ -14,11 +18,13 @@ import {
 } from './snapshot.ts'
 import {
   type DiagnosisAggregate,
+  getCrossTargetDiagnosis,
   getHistoricalSeverityBadge,
   getRootSuspectHop,
   type HopAggregate,
   type SnapshotAggregate,
   selectSnapshotsInWindow,
+  summarizeCrossTargetHopIssues,
   summarizeDiagnoses,
   summarizeHopIssues,
   summarizeSnapshots,
@@ -179,11 +185,11 @@ export async function renderRootIndex(
 
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
-    charts: ChartDefinition[]
     diagnosisAggregate: DiagnosisAggregate
     hopIssues: HopAggregate[]
     summary: SnapshotSummary
     targetSlug: string
+    thumbnailChart: ChartDefinition
   }> = []
   for (const targetSlug of targetDirs) {
     const targetDir = path.join(logDir, targetSlug)
@@ -195,11 +201,11 @@ export async function renderRootIndex(
     const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
     targetSummaries.push({
       aggregate: summarizeSnapshots(lastWeekSnapshots),
-      charts: await loadChartDefinitions(targetDir, snapshots, now),
       diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots),
       hopIssues: summarizeHopIssues(lastWeekSnapshots),
-      targetSlug,
       summary: snapshots[0],
+      targetSlug,
+      thumbnailChart: buildThumbnailChartDefinition(snapshots, now),
     })
   }
 
@@ -216,18 +222,36 @@ export async function renderRootIndex(
     })
     .map((entry) => ({
       aggregate: entry.aggregate,
-      charts: entry.charts,
       diagnosisAggregate: entry.diagnosisAggregate,
       historicalSeverity: getHistoricalSeverityBadge(entry.aggregate, entry.diagnosisAggregate),
-      hopIssues: entry.hopIssues,
       suspectHop: getRootSuspectHop(entry.hopIssues),
       summary: entry.summary,
       targetSlug: entry.targetSlug,
-      thumbnailChart: entry.charts.find((chart) => chart.rangeLabel === '30h') ?? entry.charts[0],
+      thumbnailChart: entry.thumbnailChart,
     }))
+
+  // ASN labels are per-target/per-snapshot; keep the latest seen mapping per
+  // host so the cross-target diagnosis can attribute a hop to its upstream
+  // network without re-walking the full snapshot set.
+  const crossTargetDiagnosis = getCrossTargetDiagnosis(
+    summarizeCrossTargetHopIssues(
+      targetSummaries.map((entry) => {
+        const asnByHost = new Map<string, string | null>()
+        for (const hop of entry.summary.hops) {
+          asnByHost.set(hop.host, hop.asn)
+        }
+        return {
+          asnByHost,
+          hopIssues: entry.hopIssues,
+          target: entry.summary.target,
+        }
+      }),
+    ),
+  )
 
   return renderDocument(
     <RootIndexPage
+      crossTargetDiagnosis={crossTargetDiagnosis}
       keepDays={keepDays}
       now={now}
       peers={peers}

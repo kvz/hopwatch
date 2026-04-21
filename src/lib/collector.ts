@@ -1,5 +1,15 @@
 import { lookup } from 'node:dns/promises'
-import { lstat, mkdir, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  link,
+  lstat,
+  mkdir,
+  readdir,
+  readlink,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 import { execa } from 'execa'
 import type { LoadedConfig, ProbeEngine, ProbeMode, TargetConfig } from './config.ts'
@@ -52,6 +62,11 @@ async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMt
   })
 }
 
+async function defaultWarmupNativeEngine(): Promise<void> {
+  const { warmupNativeEngine } = await import('./prober-native.ts')
+  warmupNativeEngine()
+}
+
 type RunCommand = (
   file: string,
   args: string[],
@@ -87,6 +102,9 @@ export interface CollectorDependencies {
   getNow?: () => Date
   runCommand?: RunCommand
   runNativeProbeFn?: RunNativeProbeFn
+  // Calls warmupNativeEngine() from prober-native.ts; injectable so tests
+  // don't have to load bun:ffi to exercise the musl / missing-glibc guard.
+  warmupNativeEngineFn?: () => void
 }
 
 export function getTimestamp(now: Date = new Date()): string {
@@ -335,6 +353,18 @@ export async function collectSnapshot(
       // diverged the two engines' behavior from the scheduler's budget.
       timeoutMs: options.probeTimeoutMs,
     })
+    // An empty event stream from the native prober means every sendto()
+    // failed (raw-socket EPERM, missing CAP_NET_RAW after a systemd reload,
+    // etc). Persisting this used to produce a dashboard that disagreed with
+    // itself: detail pages classified it as `unknown` (no events) while
+    // rollups counted `destinationSentCount === 0` as 100% loss. Treat it
+    // as a hard probe failure instead so the target lands in
+    // failedTargetSlugs and the snapshot is not written at all.
+    if (rawEvents.length === 0) {
+      throw new Error(
+        `native probe for '${target.slug}' returned no events (likely raw-socket failure — check CAP_NET_RAW)`,
+      )
+    }
   } else {
     const mtrArgs = [
       '-b',
@@ -385,7 +415,23 @@ export async function collectSnapshot(
   }
   parseStoredRawSnapshot(`${JSON.stringify(storedSnapshot)}`)
   await writeFile(tmpJsonFile, `${JSON.stringify(storedSnapshot, null, 2)}\n`)
-  await rename(tmpJsonFile, jsonFile)
+  // Publish atomically via link() instead of rename() so a second process
+  // probing the same target in the same wall-clock second collides on
+  // EEXIST instead of silently overwriting the first snapshot. The common
+  // single-writer case is unaffected — link()+unlink() is one extra syscall.
+  try {
+    await link(tmpJsonFile, jsonFile)
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'EEXIST') {
+      await rm(tmpJsonFile, { force: true })
+      throw new Error(
+        `snapshot collision at ${jsonFile}: another process already wrote this timestamp`,
+      )
+    }
+    throw err
+  } finally {
+    await rm(tmpJsonFile, { force: true })
+  }
   await updateLatestSymlink(jsonFile, latestJsonFile)
   await removeOldSnapshots(targetDir, options.keepDays)
   logger?.info('snapshot saved', { file: jsonFile, target: target.slug })
@@ -447,13 +493,38 @@ export async function runCollector(
   // validate linux-targeted configs from a dev machine. Tests that inject a
   // mock `runNativeProbeFn` bypass the FFI load entirely and therefore also
   // bypass this guard — the check is about protecting the real code path.
-  if (process.platform !== 'linux' && deps.runNativeProbeFn == null) {
-    for (const target of config.target) {
-      if (target.engine === 'native') {
-        throw new Error(
-          `target '${target.id}' uses engine='native' but collector is running on ${process.platform}; engine='native' requires Linux`,
-        )
-      }
+  const nativeTargets = config.target.filter((target) => target.engine === 'native')
+  // An explicit `warmupNativeEngineFn` in deps opts into the warmup path and
+  // bypasses the platform check below, so tests can exercise the "libc failed
+  // to load" branch on any OS without smuggling a no-op runNativeProbeFn in.
+  const shouldRunWarmup =
+    nativeTargets.length > 0 &&
+    (deps.warmupNativeEngineFn != null ||
+      (process.platform === 'linux' && deps.runNativeProbeFn == null))
+  if (
+    nativeTargets.length > 0 &&
+    process.platform !== 'linux' &&
+    deps.runNativeProbeFn == null &&
+    deps.warmupNativeEngineFn == null
+  ) {
+    throw new Error(
+      `target '${nativeTargets[0].id}' uses engine='native' but collector is running on ${process.platform}; engine='native' requires Linux`,
+    )
+  }
+  // Linux-but-musl (Alpine, distroless-musl) does not ship glibc, so
+  // dlopen('libc.so.6') inside the native prober fails with an opaque
+  // bun:ffi error on every probe cycle. Warm the FFI load up front so the
+  // failure surfaces once, with a clear glibc requirement, before the first
+  // probe — matching the intent of the platform check above.
+  if (shouldRunWarmup) {
+    try {
+      const warmup = deps.warmupNativeEngineFn ?? defaultWarmupNativeEngine
+      await warmup()
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      throw new Error(
+        `target '${nativeTargets[0].id}' uses engine='native' but libc.so.6 could not be loaded (${reason}); engine='native' requires glibc Linux`,
+      )
     }
   }
 

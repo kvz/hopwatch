@@ -85,6 +85,16 @@ function getLibc(): ReturnType<typeof openLibc> {
   return cachedLibc
 }
 
+// Surfaced to the collector so the daemon can fail fast with a clear message
+// instead of emitting an opaque bun:ffi `dlopen libc.so.6` error on every
+// cycle. Alpine / distroless-musl ships `ld-musl-*` rather than glibc, so
+// dlopen('libc.so.6') has no candidate to bind against. Calling this once at
+// collector init makes the missing-glibc state observable before the first
+// real probe.
+export function warmupNativeEngine(): void {
+  getLibc()
+}
+
 function errno(libc: ReturnType<typeof openLibc>): number {
   const p = libc.symbols.__errno_location()
   if (p == null) return -1

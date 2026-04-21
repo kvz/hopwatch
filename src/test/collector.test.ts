@@ -174,6 +174,94 @@ describe('runCollector', () => {
     expect(result.failedTargetSlugs).toEqual([])
   })
 
+  test('rejects engine="native" with a clear error when the FFI warmup fails (e.g. musl)', async () => {
+    // config-check and daemon start both succeed on musl because the native
+    // prober dlopens libc.so.6 lazily (that library does not exist on Alpine /
+    // distroless-musl). Before the warmup hook, the first probe cycle failed
+    // with an opaque `dlopen libc.so.6` error from bun:ffi. We want the
+    // failure surfaced once, with a clear glibc requirement, so operators
+    // don't chase the symptoms.
+    const config = buildConfig(dataDir, ['native.example'])
+    config.target[0].engine = 'native'
+    config.target[0].host = '127.0.0.1'
+    const logger = createLogger({ level: 'error', pretty: false })
+    const warmupNativeEngineFn = vi.fn(() => {
+      throw new Error('dlopen(libc.so.6) failed: no such file')
+    })
+
+    await expect(
+      runCollector(config, logger, {
+        runCommand: async () => ({ stdout: '', stderr: '' }),
+        warmupNativeEngineFn,
+      }),
+    ).rejects.toThrow(/engine='native'.*glibc|libc\.so\.6/)
+    expect(warmupNativeEngineFn).toHaveBeenCalled()
+  })
+
+  test('treats an empty native probe result as a failed target instead of persisting an empty snapshot', async () => {
+    // When every sendto() fails, the native prober returns an empty event
+    // list. Before this fix the collector persisted the snapshot anyway —
+    // detail pages classified it as "unknown" (no events) while rollups saw
+    // destinationSentCount=0 and rendered 100% loss, producing a dashboard
+    // that disagreed with itself about the same probe.
+    const config = buildConfig(dataDir, ['native.example'])
+    config.target[0].engine = 'native'
+    config.target[0].host = '127.0.0.1'
+    const logger = createLogger({ level: 'error', pretty: false })
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const runNativeProbeFn = vi.fn(async () => [] as RawMtrEvent[])
+
+    const result = await runCollector(config, logger, { runNativeProbeFn })
+    expect(result.failedTargetSlugs).toEqual(['native.example'])
+    expect(errorSpy).toHaveBeenCalled()
+    const entries = await readdir(path.join(dataDir, 'native.example')).catch(() => [])
+    expect(entries.some((name) => /^\d{8}T\d{6}Z.*\.json$/.test(name))).toBe(false)
+  })
+
+  test('surfaces same-second snapshot collisions instead of silently overwriting', async () => {
+    // Two independent processes (e.g. daemon + a manual `hopwatch collect`)
+    // probing the same target in the same wall-clock second both resolve to
+    // `<targetDir>/<timestamp>.json`. Before the fix, the later rename()
+    // silently replaced the first snapshot's data. Now the second writer sees
+    // EEXIST and the target is reported as failed, keeping the original
+    // snapshot intact.
+    const config = buildConfig(dataDir, ['native.example'])
+    config.target[0].engine = 'native'
+    config.target[0].host = '127.0.0.1'
+    const logger = createLogger({ level: 'error', pretty: false })
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+    const fixedNow = new Date('2026-04-21T09:45:00Z')
+    const runNativeProbeFn = vi.fn(async () => [
+      { kind: 'sent', hopIndex: 0, probeId: 1 } as RawMtrEvent,
+      { kind: 'host', hopIndex: 0, host: '10.0.0.1' } as RawMtrEvent,
+      { kind: 'reply', hopIndex: 0, probeId: 1, rttUs: 1234 } as RawMtrEvent,
+    ])
+
+    // First probe "wins" and writes the snapshot.
+    await runCollector(config, logger, { getNow: () => fixedNow, runNativeProbeFn })
+    const firstSnapshot = (await readdir(path.join(dataDir, 'native.example')))
+      .filter((name) => /^20260421T094500Z.*\.json$/.test(name))
+      .sort()[0]
+    expect(firstSnapshot).toBeDefined()
+    const originalContents = await readFile(
+      path.join(dataDir, 'native.example', firstSnapshot),
+      'utf8',
+    )
+
+    // Second probe in the same second must not silently overwrite.
+    const result = await runCollector(config, logger, {
+      getNow: () => fixedNow,
+      runNativeProbeFn,
+    })
+    expect(result.failedTargetSlugs).toEqual(['native.example'])
+    const preservedContents = await readFile(
+      path.join(dataDir, 'native.example', firstSnapshot),
+      'utf8',
+    )
+    expect(preservedContents).toBe(originalContents)
+  })
+
   test('engine="native" skips runCommand and writes the injected RawMtrEvent stream', async () => {
     const config = buildConfig(dataDir, ['native.example'])
     config.target[0].engine = 'native'

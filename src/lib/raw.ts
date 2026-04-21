@@ -273,6 +273,7 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
   // destination is at hop `maxHops - 1` and corrupt every downstream aggregate
   // (destination loss %, summary RTT, diagnosis).
   let maxHopIndex = -1
+  let maxSentHopIndex = -1
   for (const event of rawEvents) {
     if (event.kind === 'reply') {
       replyCountByHop.set(event.hopIndex, (replyCountByHop.get(event.hopIndex) ?? 0) + 1)
@@ -285,10 +286,23 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
       }
       hosts.add(event.host)
       if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
+    } else if (event.kind === 'sent' && event.hopIndex > maxSentHopIndex) {
+      maxSentHopIndex = event.hopIndex
     }
   }
 
   if (maxHopIndex < 0) {
+    return null
+  }
+
+  // Partial blackhole: we sent probes well past the last responding hop.
+  // This means the packets stopped getting replies somewhere in the middle,
+  // and the deepest responder is almost certainly NOT the destination — it's
+  // just the last hop that answered before the path went dark. Returning it
+  // as the destination would make the trace look healthy (100% at "dest")
+  // when the real destination never responded. Threshold of 3 matches the
+  // idle-TTL margin the prober keeps past destHopIndex in its send loop.
+  if (maxSentHopIndex > maxHopIndex + 3) {
     return null
   }
 

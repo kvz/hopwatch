@@ -165,13 +165,13 @@ export interface SchedulerHandle {
 }
 
 export interface SchedulerDependencies {
+  // `| void` (not `| undefined`) lets vitest mocks that default to
+  // Promise<void> satisfy this signature without spelling out the full
+  // failed-slug shape.
   runCollectorFn?: (
     config: LoadedConfig,
     logger: Logger,
-    // biome-ignore lint/suspicious/noConfusingVoidType: the `| void` variant is
-    // the ergonomic signature for vitest mocks (which default to Promise<void>)
-    // — switching to `| undefined` would force every test to spell out the full
-    // failed-slug shape just to satisfy the type checker.
+    // biome-ignore lint/suspicious/noConfusingVoidType: see note above.
   ) => Promise<{ failedTargetSlugs: string[]; failedRollupSlugs: string[] } | void>
 }
 

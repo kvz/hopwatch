@@ -49,7 +49,27 @@ const peerSchema = z.object({
     .url()
     .refine((value) => /^https?:\/\//i.test(value), {
       message: 'peer url must use http:// or https://',
-    }),
+    })
+    // Peer URLs surface into href + subtitle via string slicing in
+    // layout.ts. Embedded credentials (`https://user:pass@host`) or a
+    // query/hash would either leak into the dashboard subtitle or be
+    // stripped inconsistently from the link target. Reject them at config
+    // load so the rendered link always matches what the operator wrote.
+    .refine(
+      (value) => {
+        try {
+          const parsed = new URL(value)
+          if (parsed.username !== '' || parsed.password !== '') return false
+          if (parsed.search !== '' || parsed.hash !== '') return false
+          return true
+        } catch {
+          return false
+        }
+      },
+      {
+        message: 'peer url must not include credentials, query string, or fragment',
+      },
+    ),
   label: z.string().min(1),
 })
 export type PeerConfig = z.infer<typeof peerSchema>

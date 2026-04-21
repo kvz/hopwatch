@@ -108,17 +108,37 @@ describe('resolveDestinationHopIndex', () => {
     expect(resolveDestinationHopIndex(events)).toBeNull()
   })
 
-  test('picks the deepest replying hop when deeper hops only emit sent events', () => {
-    // Replies stop at hop 7 but the prober keeps sending through hop 29; the
-    // destination is hop 7, not hop 29.
+  test('returns null for a partial blackhole where sends go far past the last reply', () => {
+    // Earlier behavior picked the deepest replying hop (7) as the destination
+    // even when we sent all the way through hop 29 without a single response
+    // past hop 7. That misidentifies a silent / firewalled destination as a
+    // healthy one: under the native prober the send loop only walks past
+    // destHopIndex if no echo_reply ever landed, so a 22-hop trailing silence
+    // is strong evidence hop 7 is just a router and the real destination never
+    // answered. Returning null lets parseStoredSnapshotSummary mark the
+    // snapshot as a blackhole (100% destination loss) instead.
     const events: RawMtrEvent[] = [
-      { kind: 'host', hopIndex: 7, host: 'final.example' },
+      { kind: 'host', hopIndex: 7, host: 'intermediate.example' },
       { kind: 'reply', hopIndex: 7, probeId: 1, rttUs: 100 },
       { kind: 'reply', hopIndex: 7, probeId: 2, rttUs: 110 },
     ]
     for (let ttl = 8; ttl <= 30; ttl += 1) {
       events.push({ kind: 'sent', hopIndex: ttl - 1, probeId: ttl })
     }
+    expect(resolveDestinationHopIndex(events)).toBeNull()
+  })
+
+  test('still picks the deepest replying hop when sends stop shortly past it (normal early-exit)', () => {
+    // When destHopIndex was set by an echo_reply, the native prober stops
+    // sending within a small margin. That margin (<= 3 TTLs) must NOT trigger
+    // the partial-blackhole branch; the deepest responder really is the
+    // destination.
+    const events: RawMtrEvent[] = [
+      { kind: 'host', hopIndex: 7, host: 'final.example' },
+      { kind: 'reply', hopIndex: 7, probeId: 1, rttUs: 100 },
+      { kind: 'reply', hopIndex: 7, probeId: 2, rttUs: 110 },
+      { kind: 'sent', hopIndex: 8, probeId: 8 },
+    ]
     expect(resolveDestinationHopIndex(events)).toBe(7)
   })
 })

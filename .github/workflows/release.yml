@@ -40,6 +40,13 @@ jobs:
           title: "chore: release"
           commit: "chore: release"
           version: bun run changeset:version
+          # Without a `publish` command, changesets/action only merges the
+          # "Version Packages" PR — it never tags or emits `published: true`,
+          # so the binaries workflow_call below stays dormant and tagged
+          # releases ship without tarballs. `changeset tag` pushes the git
+          # tag (and sets the output for our private-package setup) without
+          # attempting an npm publish.
+          publish: bun run changeset:publish
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

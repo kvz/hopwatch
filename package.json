@@ -31,6 +31,7 @@
     "check": "bun run format && bun run lint && bun run typecheck && bun run test",
     "changeset": "changeset",
     "changeset:version": "changeset version",
+    "changeset:publish": "changeset tag",
     "dev": "bun run --watch src/bin/hopwatch.ts daemon --config ./hopwatch.example.toml",
     "format": "biome format . --write",
     "lint": "biome check .",

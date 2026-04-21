@@ -39,7 +39,33 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000
 // drops entries for files in this target's directory that are no longer on
 // disk. Without that pruning, a long-lived daemon's cache would grow by one
 // entry per probe cycle forever.
+//
+// Per-target pruning alone leaves entries for *removed* targets in memory
+// forever, and is also a soft cap (bounded by keep_days × cycles). A hard LRU
+// ceiling protects against runaway memory if a config rewrite renames many
+// targets or if an operator browses a lot of historical data.
+const SNAPSHOT_CACHE_MAX_SIZE = 10_000
 const snapshotCache = new Map<string, SnapshotSummary>()
+
+function cacheSnapshot(key: string, summary: SnapshotSummary): void {
+  // Re-inserting moves the key to the end of Map iteration order; combined
+  // with evicting from the front, this gives us LRU semantics.
+  if (snapshotCache.has(key)) snapshotCache.delete(key)
+  snapshotCache.set(key, summary)
+  while (snapshotCache.size > SNAPSHOT_CACHE_MAX_SIZE) {
+    const oldest = snapshotCache.keys().next().value
+    if (oldest == null) break
+    snapshotCache.delete(oldest)
+  }
+}
+
+function touchCached(key: string): SnapshotSummary | undefined {
+  const value = snapshotCache.get(key)
+  if (value == null) return undefined
+  snapshotCache.delete(key)
+  snapshotCache.set(key, value)
+  return value
+}
 
 export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSummary[]> {
   const snapshotFiles = (await listSnapshotFileNames(targetDir)).reverse()
@@ -48,7 +74,7 @@ export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSu
   for (const fileName of snapshotFiles) {
     const cacheKey = path.join(targetDir, fileName)
     liveKeys.add(cacheKey)
-    const cached = snapshotCache.get(cacheKey)
+    const cached = touchCached(cacheKey)
     if (cached != null) {
       snapshots.push(cached)
       continue
@@ -56,7 +82,7 @@ export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSu
 
     try {
       const summary = await readSnapshotSummary(targetDir, fileName)
-      snapshotCache.set(cacheKey, summary)
+      cacheSnapshot(cacheKey, summary)
       snapshots.push(summary)
     } catch (err) {
       // A single corrupt snapshot must not kill the dashboard for an entire

@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { z } from 'zod'
@@ -335,8 +335,28 @@ function isoBucketStartToFileName(iso: string): string | null {
   return `${y}${mo}${d}T${h}${mi}${s}Z.json`
 }
 
+// Returns true if `filePath` has a `.corrupted.<ts>` sibling left behind by
+// a previous readRollupFile quarantine. Used to distinguish "rollup was
+// just quarantined and needs a full rebuild" from "rollup never existed
+// yet (normal startup)".
+async function hasQuarantinedSibling(filePath: string): Promise<boolean> {
+  const dir = path.dirname(filePath)
+  const base = path.basename(filePath)
+  const prefix = `${base}.corrupted.`
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return false
+  }
+  return entries.some((name) => name.startsWith(prefix))
+}
+
 async function writeRollupFile(filePath: string, rollupFile: MtrRollupFile): Promise<void> {
-  const tmpFilePath = `${filePath}.tmp`
+  // Stage via a pid+random suffix so two overlapping cycles writing to the
+  // same rollup (e.g. a scheduled run racing a manual `hopwatch rollup`)
+  // cannot clobber each other's tmp file mid-write and ship truncated JSON.
+  const tmpFilePath = `${filePath}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 10)}`
   await writeFile(tmpFilePath, `${JSON.stringify(rollupFile, null, 2)}\n`)
   await rename(tmpFilePath, filePath)
 }
@@ -393,7 +413,19 @@ export async function updateTargetRollups(
   const existingDaily = await readRollupFile(dailyRollupPath, 'day')
 
   let sinceFileName: string | undefined
-  if (!hooks.fullRebuild) {
+  // A quarantined rollup (readRollupFile renamed it to `.corrupted.<ts>`)
+  // leaves the other rollup intact. If we then derive sinceFileName from the
+  // survivor's latest bucket, the rebuild for the missing side is scoped to
+  // that narrow window and every older retained bucket is erased for good.
+  // Force a full rebuild so the quarantined side repopulates from on-disk
+  // history. Startup-state (neither rollup ever existed, or both absent) is
+  // NOT in this branch, so the normal incremental path still applies there.
+  const hourlyWasQuarantined =
+    existingHourly == null && (await hasQuarantinedSibling(hourlyRollupPath))
+  const dailyWasQuarantined =
+    existingDaily == null && (await hasQuarantinedSibling(dailyRollupPath))
+  const rollupJustQuarantined = hourlyWasQuarantined || dailyWasQuarantined
+  if (!hooks.fullRebuild && !rollupJustQuarantined) {
     // Use the earlier of (latest hourly bucket start, latest daily bucket start)
     // as the incremental cutoff. Deriving it from only the hourly rollup freezes
     // the daily rollup: once the current hour advances past the day's first hour,

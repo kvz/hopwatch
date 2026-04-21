@@ -165,6 +165,13 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
       hosts.add(parsed.src)
       events.push({ kind: 'host', hopIndex, host: parsed.src })
     }
+    // Destination Unreachable is a failure signal, not a successful hop.
+    // Keep the host event so the dashboard surfaces which router rejected
+    // the probe, but do NOT emit a `reply` — counting it as a reply made
+    // firewalled/blocked destinations render as healthy low-loss paths.
+    if (parsed.kind === 'dest_unreachable') {
+      return true
+    }
     const rttUs = Math.max(0, Math.round((arrivedNs - sendNs) / 1000))
     events.push({ kind: 'reply', hopIndex, probeId: parsed.seq, rttUs })
     if (parsed.kind === 'echo_reply' && (destHopIndex == null || hopIndex < destHopIndex)) {

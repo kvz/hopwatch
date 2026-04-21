@@ -1,15 +1,5 @@
 import { lookup } from 'node:dns/promises'
-import {
-  lstat,
-  mkdir,
-  readdir,
-  readlink,
-  rename,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
+import { lstat, mkdir, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { execa } from 'execa'
 import type { LoadedConfig, ProbeEngine, ProbeMode, TargetConfig } from './config.ts'
@@ -147,7 +137,20 @@ export async function removeOldSnapshots(
   const cutoff = now - maxAgeMs
 
   for (const entry of entries) {
-    if (!entry.isFile() || (!entry.name.endsWith('.txt') && !entry.name.endsWith('.json'))) {
+    // Orphaned staging symlinks from updateLatestSymlink (if the process
+    // crashed between `symlink` and `rename`) and orphaned rollup/snapshot
+    // tmp files would otherwise accumulate indefinitely because neither
+    // ends in `.txt` or `.json`. Pick them up here once they are older
+    // than the retention window.
+    const isStaleStaging =
+      entry.name.startsWith('latest.json.new.') ||
+      entry.name.includes('.tmp.') ||
+      entry.name.endsWith('.tmp')
+    const isRetainable = entry.name.endsWith('.txt') || entry.name.endsWith('.json')
+    if (!entry.isFile() && !entry.isSymbolicLink()) {
+      continue
+    }
+    if (!isRetainable && !isStaleStaging) {
       continue
     }
 
@@ -156,7 +159,8 @@ export async function removeOldSnapshots(
     }
 
     const entryPath = path.join(targetDir, entry.name)
-    const entryStat = await stat(entryPath)
+    // lstat so a dangling symlink doesn't throw ENOENT via stat().
+    const entryStat = await lstat(entryPath)
     if (entryStat.mtimeMs >= cutoff) {
       continue
     }
@@ -300,7 +304,9 @@ export async function collectSnapshot(
 
   const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
   const jsonFile = path.join(targetDir, `${timestamp}.json`)
-  const tmpJsonFile = `${jsonFile}.tmp`
+  // pid+random suffix prevents two overlapping cycles from the same target
+  // slug colliding on the staging file and publishing a partial write.
+  const tmpJsonFile = `${jsonFile}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 10)}`
   const latestJsonFile = path.join(targetDir, 'latest.json')
 
   let rawEvents: RawMtrEvent[]

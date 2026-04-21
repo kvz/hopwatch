@@ -95,10 +95,21 @@ export function ipv4FromBytes(b: Uint8Array): string {
 const TTL_BITS = 5
 const TTL_MASK = (1 << TTL_BITS) - 1
 const MAX_HOPS_SUPPORTED = TTL_MASK
+export const MAX_CYCLES_SUPPORTED = (1 << (16 - TTL_BITS)) - 1
 
 export function encodeSeq(cycle: number, ttl: number, maxHops: number): number {
   if (maxHops > MAX_HOPS_SUPPORTED) {
     throw new Error(`encodeSeq: maxHops=${maxHops} exceeds the ${MAX_HOPS_SUPPORTED}-hop limit`)
+  }
+  // Cycle wraps at 2048 (11-bit cycle space). Late replies from a pre-wrap
+  // cycle would collide with a post-wrap cycle at the same ttl — same seq
+  // key → same sendTimeNs slot → nonsense RTT. Fail fast instead of silently
+  // misattributing; `probe.packets` should be capped at the config boundary
+  // for engine='native' targets.
+  if (cycle < 0 || cycle > MAX_CYCLES_SUPPORTED) {
+    throw new Error(
+      `encodeSeq: cycle=${cycle} is outside the 0-${MAX_CYCLES_SUPPORTED} range supported by the 16-bit ICMP seq field`,
+    )
   }
   return ((cycle << TTL_BITS) | (ttl & TTL_MASK)) & 0xffff
 }

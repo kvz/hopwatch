@@ -261,15 +261,9 @@ describe('encodeSeq / decodeSeq', () => {
     expect(maxSeq).toBeLessThan(0x10000)
   })
 
-  test('decodes ttl correctly even once the 16-bit sequence wraps', () => {
-    // Long-running probes (packets=2000+ or continuous-mode cycles) wrap the
-    // 16-bit sequence space. Before the fix, decodeSeq used modulo stride
-    // against the wrapped value and returned a different ttl than was encoded,
-    // so replies were attributed to the wrong hop. We only require the ttl to
-    // round-trip — the cycle can alias on wrap, which is fine: cycles across
-    // a wrap can't both have outstanding replies at once.
+  test('roundtrips ttl for every valid cycle in the 11-bit cycle space', () => {
     const maxHops = 30
-    for (let cycle = 0; cycle < 4096; cycle += 17) {
+    for (let cycle = 0; cycle <= 2047; cycle += 17) {
       for (let ttl = 1; ttl <= maxHops; ttl += 1) {
         const seq = encodeSeq(cycle, ttl, maxHops)
         expect(decodeSeq(seq, maxHops).ttl).toBe(ttl)
@@ -277,19 +271,26 @@ describe('encodeSeq / decodeSeq', () => {
     }
   })
 
-  test('masks to 16 bits so the encoded seq always fits the ICMP wire field', () => {
-    // Without the mask, encodeSeq(2000, 1, 30) = 120001 — the wire
-    // truncates to (120001 & 0xffff) = 54465, so replies come back with a
-    // different key than what we stored locally. Mask at encode time so
-    // the local key matches the reply.
+  test('always fits within the 16-bit ICMP seq field', () => {
     const maxHops = 30
-    for (let cycle = 0; cycle < 2200; cycle += 100) {
+    for (let cycle = 0; cycle <= 2047; cycle += 100) {
       for (let ttl = 1; ttl <= maxHops; ttl += 1) {
         const seq = encodeSeq(cycle, ttl, maxHops)
         expect(seq).toBeGreaterThanOrEqual(0)
         expect(seq).toBeLessThan(0x10000)
       }
     }
+  })
+
+  test('rejects cycles past the 11-bit cycle space instead of silently wrapping', () => {
+    // Wrapping silently reused seq values within a single probe run, letting
+    // a late pre-wrap reply overwrite a post-wrap send time and return
+    // nonsense RTT. The cycle value must be validated by the caller;
+    // probe.packets is capped at config-load time for engine='native'
+    // targets so this case should never land here in practice.
+    const maxHops = 30
+    expect(() => encodeSeq(2048, 5, maxHops)).toThrow(/cycle=2048/)
+    expect(() => encodeSeq(-1, 5, maxHops)).toThrow(/cycle=-1/)
   })
 })
 

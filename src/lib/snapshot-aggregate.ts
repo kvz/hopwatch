@@ -143,7 +143,16 @@ export function summarizeHopIssues(snapshotsInWindow: SnapshotSummary[]): HopAgg
   for (const snapshot of snapshotsInWindow) {
     const destinationLossPct = snapshot.destinationLossPct ?? 0
     const snapshotTs = parseCollectedAt(snapshot.collectedAt) ?? 0
-    for (const hop of snapshot.hops.slice(0, -1)) {
+    // Filter by the resolved destination hop index when available — MTR
+    // sometimes emits a phantom trailing hop past the real destination, so
+    // `slice(0, -1)` would leak the real destination into the intermediates
+    // tally and attribute its loss to itself. Fall back to position-based
+    // slicing for legacy snapshots where destinationHopIndex is null.
+    const intermediateHops =
+      snapshot.destinationHopIndex != null
+        ? snapshot.hops.filter((hop) => hop.index !== snapshot.destinationHopIndex)
+        : snapshot.hops.slice(0, -1)
+    for (const hop of intermediateHops) {
       if (hop.lossPct <= 0) {
         continue
       }

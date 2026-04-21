@@ -62,6 +62,11 @@ const legacyStoredSnapshotSummarySchema = z.object({
 export interface SnapshotSummary {
   collectedAt: string
   destinationAvgRttMs: number | null
+  // 1-based hop index of the destination (matches `HopRecord.index`). Can
+  // differ from `hops.at(-1)?.index` when MTR emits a phantom trailing hop
+  // past the true destination; consumers that want intermediates must filter
+  // by this index rather than `slice(0, -1)`.
+  destinationHopIndex: number | null
   destinationLossPct: number | null
   destinationRttMaxMs: number | null
   destinationRttMinMs: number | null
@@ -160,7 +165,17 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
         ? null
         : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
     const destinationAvgRttMs = destinationHop?.avgMs ?? null
-    const destinationLossPct = destinationHop?.lossPct ?? null
+    // Blackholed traces (`sent` events but no `reply`/`host` events at all)
+    // have destinationHopIndex == null. Treat them as 100% destination loss
+    // instead of "unknown" — otherwise full outages vanish from the 3h/30h
+    // charts and the weekly status logic records them as "no destination
+    // loss observed". Preserve null for the genuinely-empty case (probe
+    // tool errored and we have zero events to work with).
+    let destinationLossPct = destinationHop?.lossPct ?? null
+    if (destinationLossPct == null && hasAnySentEvent(rawSnapshot.rawEvents)) {
+      destinationLossPct = 100
+    }
+    const destinationHopIndex1Based = destinationHop?.index ?? null
     const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
     const destinationRttSamplesMs = summarizeDestinationSamples(
       rawSnapshot.rawEvents,
@@ -178,6 +193,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     return {
       collectedAt: rawSnapshot.collectedAt,
       destinationAvgRttMs,
+      destinationHopIndex: destinationHopIndex1Based,
       destinationLossPct,
       destinationRttMaxMs,
       destinationRttMinMs,
@@ -185,7 +201,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
       destinationRttP90Ms,
       destinationRttSamplesMs:
         destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
-      diagnosis: diagnoseSnapshot(hops, destinationLossPct),
+      diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based),
       fileName: rawSnapshot.fileName,
       host: rawSnapshot.host,
       hopCount: hops.length,
@@ -203,6 +219,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
   return {
     collectedAt: legacy.collectedAt,
     destinationAvgRttMs: destinationHop?.avgMs ?? null,
+    destinationHopIndex: destinationHop?.index ?? null,
     destinationLossPct: legacy.destinationLossPct,
     destinationRttMaxMs: destinationHop?.worstMs ?? null,
     destinationRttMinMs: destinationHop?.bestMs ?? null,
@@ -219,6 +236,13 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     target: legacy.target,
     worstHopLossPct: legacy.worstHopLossPct,
   }
+}
+
+function hasAnySentEvent(rawEvents: readonly { kind: string }[]): boolean {
+  for (const event of rawEvents) {
+    if (event.kind === 'sent') return true
+  }
+  return false
 }
 
 export function parseHopLine(line: string): HopRecord | null {
@@ -259,8 +283,9 @@ export function parseHopLine(line: string): HopRecord | null {
 export function diagnoseSnapshot(
   hops: HopRecord[],
   destinationLossPct: number | null,
+  destinationHopIndex?: number | null,
 ): SnapshotDiagnosis {
-  if (hops.length === 0 || destinationLossPct == null) {
+  if (destinationLossPct == null) {
     return {
       kind: 'unknown',
       label: 'Unknown',
@@ -270,7 +295,21 @@ export function diagnoseSnapshot(
     }
   }
 
-  const intermediateHops = hops.slice(0, -1)
+  // When the destination hop index is known, exclude strictly that hop
+  // (not "everything before the last index"). MTR sometimes emits a phantom
+  // trailing hop past the real destination; slicing by position would
+  // misclassify the real destination as an intermediate and misattribute
+  // "intermediate-only loss" diagnoses and suspect hops.
+  const intermediateHops =
+    destinationHopIndex != null
+      ? hops.filter((hop) => hop.index !== destinationHopIndex)
+      : hops.slice(0, -1)
+  if (intermediateHops.length === hops.length && hops.length > 0) {
+    // `destinationHopIndex` was supplied but no hop matches — fall back to
+    // the legacy "last hop is destination" assumption to stay consistent
+    // with the pre-fix behavior for unexpected shapes.
+    intermediateHops.pop()
+  }
   const lossyIntermediateHops = intermediateHops.filter((hop) => hop.lossPct > 0)
   if (destinationLossPct === 0) {
     if (lossyIntermediateHops.length === 0) {
@@ -344,13 +383,14 @@ export function parseSnapshotSummary(fileName: string, rawText: string): Snapsho
   return {
     collectedAt: collectedAtMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
     destinationAvgRttMs: destinationHop?.avgMs ?? null,
+    destinationHopIndex: destinationHop?.index ?? null,
     destinationLossPct,
     destinationRttMaxMs: destinationHop?.worstMs ?? null,
     destinationRttMinMs: destinationHop?.bestMs ?? null,
     destinationRttP50Ms: null,
     destinationRttP90Ms: null,
     destinationRttSamplesMs: null,
-    diagnosis: diagnoseSnapshot(hops, destinationLossPct),
+    diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHop?.index ?? null),
     fileName,
     host: hostMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
     hopCount: hops.length,

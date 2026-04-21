@@ -13,6 +13,7 @@ import {
 function snapshot(partial: Partial<SnapshotSummary> & { collectedAt: string }): SnapshotSummary {
   return {
     destinationAvgRttMs: null,
+    destinationHopIndex: null,
     destinationLossPct: 0,
     destinationRttMaxMs: null,
     destinationRttMinMs: null,
@@ -302,5 +303,73 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
       sampleCount: 5,
     }
     expect(shouldSurfaceHopIssueForRoot(hop)).toBe(false)
+  })
+
+  test('does not count the real destination as an intermediate hop when a phantom trailing hop follows it', () => {
+    // MTR sometimes emits an extra hop past the real destination (same host,
+    // TTL bumped by one). `resolveDestinationHopIndex` sets
+    // `destinationHopIndex` to the real hop (index 3 here), but the phantom
+    // lives at index 4 — so `slice(0, -1)` would still include the real
+    // destination in the intermediates tally and attribute its loss to it.
+    const snap = snapshot({
+      collectedAt: '20260420T120000Z',
+      destinationHopIndex: 3,
+      destinationLossPct: 20,
+      hops: [
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'router.example',
+          index: 1,
+          lastMs: null,
+          lossPct: 0,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'upstream.example',
+          index: 2,
+          lastMs: null,
+          lossPct: 0,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'destination',
+          index: 3,
+          lastMs: null,
+          lossPct: 20,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: 'destination',
+          index: 4,
+          lastMs: null,
+          lossPct: 80,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+      ],
+    })
+    const issues = summarizeHopIssues(selectSnapshotsInWindow([snap], now, HOUR))
+    // Only the phantom trailing hop should be considered "beyond" the real
+    // destination — i.e. the real destination (index 3) must not appear as
+    // an intermediate.
+    expect(issues.find((issue) => issue.latestHopIndex === 3)).toBeUndefined()
   })
 })

@@ -391,7 +391,8 @@ async function updateRollupsForTargets(
   nowDate: Date,
   fullRebuild = false,
   logger?: Logger,
-): Promise<void> {
+): Promise<string[]> {
+  const failedTargetSlugs: string[] = []
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
     try {
       const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
@@ -416,9 +417,11 @@ async function updateRollupsForTargets(
       if (!(err instanceof Error)) {
         throw new Error(`Was thrown a non-error: ${err}`)
       }
+      failedTargetSlugs.push(target.slug)
       logger?.error('rollup failed', { error: err.message, target: target.slug })
     }
   })
+  return failedTargetSlugs
 }
 
 export interface RunCollectorResult {
@@ -477,14 +480,20 @@ export async function runCollector(
   return { failedTargetSlugs }
 }
 
+export interface RefreshRollupsResult {
+  failedTargetSlugs: string[]
+}
+
 export async function refreshRollups(
   config: LoadedConfig,
+  logger: Logger | undefined,
   deps: CollectorDependencies = {},
-): Promise<void> {
+): Promise<RefreshRollupsResult> {
   const options = collectorOptionsFromConfig(config)
   await mkdir(options.logDir, { recursive: true })
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
   // `hopwatch rollup` is the recovery escape hatch — always do a full rebuild.
-  await updateRollupsForTargets(nodeLabel, options, nowDate, true)
+  const failedTargetSlugs = await updateRollupsForTargets(nodeLabel, options, nowDate, true, logger)
+  return { failedTargetSlugs }
 }

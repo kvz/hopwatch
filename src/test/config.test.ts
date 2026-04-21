@@ -156,4 +156,51 @@ netns = "ns-uk-1"
 `)
     await expect(loadConfig(configPath)).rejects.toThrow(/not yet supported/)
   })
+
+  test('rejects target IDs that differ only in case, which collide on case-insensitive filesystems', async () => {
+    // Target IDs are reused verbatim as on-disk directory names. On macOS
+    // (APFS, default case-insensitive) `Foo` and `foo` map to the same
+    // directory, so snapshots and rollups silently overwrite each other.
+    // Linux filesystems treat them as distinct, but we reject at load time
+    // everywhere so the collision never reaches production.
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "Foo"
+label = "upper"
+host = "a.example"
+
+[[target]]
+id = "foo"
+label = "lower"
+host = "b.example"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/duplicate target id/)
+  })
+
+  test('rejects engine="native" combined with probe.packets > 2048 (native seq overflow)', async () => {
+    // The native prober packs (cycle, ttl) into the 16-bit ICMP seq field;
+    // only 11 bits of cycle fit (0-2047). Past cycle 2047 the seq wraps and
+    // late replies from a pre-wrap cycle overwrite a post-wrap send time,
+    // producing garbage RTT. Cap at config time so operators discover the
+    // limit before the daemon is even started.
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[probe]
+packets = 3000
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "native"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/native prober supports at most/)
+  })
 })

@@ -189,13 +189,19 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
     throw new Error(`Invalid hopwatch config at ${absolute}: server.listen: ${reason}`)
   }
 
-  const ids = new Set<string>()
+  // Target IDs are reused verbatim as on-disk directory names. On macOS/APFS
+  // and Windows (case-insensitive by default) `Foo` and `foo` map to the same
+  // directory, so their snapshots and rollups would silently stomp each other.
+  // Dedup case-insensitively to catch the collision everywhere, even though
+  // Linux filesystems treat them as distinct paths.
+  const idsLower = new Set<string>()
   for (const target of config.target) {
-    if (ids.has(target.id)) {
+    const idLower = target.id.toLowerCase()
+    if (idsLower.has(idLower)) {
       throw new Error(`duplicate target id: ${target.id}`)
     }
 
-    ids.add(target.id)
+    idsLower.add(idLower)
     if (target.probe_mode === 'netns' && !target.netns) {
       throw new Error(`target '${target.id}' uses probe_mode='netns' but has no 'netns' field`)
     }
@@ -215,6 +221,17 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
       // the daemon is started and the first probe cycle fails.
       throw new Error(
         `target '${target.id}' uses engine='native' but probe.ip_version=6; IPv6 is not yet supported by the native prober`,
+      )
+    }
+
+    // The native prober packs (cycle, ttl) into the 16-bit ICMP seq field
+    // (11 bits for cycle). Past cycle 2047 the seq wraps and late replies
+    // from a pre-wrap cycle overwrite post-wrap send times, returning
+    // garbage RTT. encodeSeq() throws, but we'd rather reject at config
+    // load than fail mid-probe.
+    if (target.engine === 'native' && config.probe.packets > 2048) {
+      throw new Error(
+        `target '${target.id}' uses engine='native' but probe.packets=${config.probe.packets}; the native prober supports at most 2048 packets per probe`,
       )
     }
   }

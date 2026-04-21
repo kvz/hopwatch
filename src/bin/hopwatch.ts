@@ -71,7 +71,18 @@ class RollupCommand extends BaseCommand {
 
   async execute(): Promise<number> {
     const { config, logger } = await this.resolve()
-    await refreshRollups(config)
+    const { failedTargetSlugs } = await refreshRollups(config, logger)
+    if (failedTargetSlugs.length > 0) {
+      // `hopwatch rollup` is the documented recovery path for stale or
+      // corrupt rollups; returning 0 here would tell operators the rebuild
+      // worked when it partially did not. Surface the failed slugs and
+      // exit non-zero so scripts and humans both notice.
+      logger.error('rollups refresh failed for some targets', {
+        failedTargetSlugs,
+      })
+      return 1
+    }
+
     logger.info('rollups refreshed')
     return 0
   }

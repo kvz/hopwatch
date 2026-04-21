@@ -3,6 +3,7 @@ import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 
 export interface SnapshotAggregate {
   averageDestinationLossPct: number | null
+  averageDestinationMedianRttMs: number | null
   averageWorstHopLossPct: number | null
   sampleCount: number
 }
@@ -52,6 +53,12 @@ export function summarizeSnapshots(snapshotsInWindow: SnapshotSummary[]): Snapsh
       snapshotsInWindow.flatMap((snapshot) =>
         snapshot.destinationLossPct == null ? [] : [snapshot.destinationLossPct],
       ),
+    ),
+    averageDestinationMedianRttMs: average(
+      snapshotsInWindow.flatMap((snapshot) => {
+        const rtt = snapshot.destinationRttP50Ms ?? snapshot.destinationAvgRttMs
+        return rtt == null ? [] : [rtt]
+      }),
     ),
     averageWorstHopLossPct: average(
       snapshotsInWindow.flatMap((snapshot) =>

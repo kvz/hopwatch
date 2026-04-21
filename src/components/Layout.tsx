@@ -18,6 +18,7 @@ export function Layout({ title, children }: LayoutProps): ReactNode {
       <body>
         <main>{children}</main>
         <script src="./assets/sortable-tables.js" type="module" />
+        <script src="./assets/relative-time.js" type="module" />
       </body>
     </html>
   )

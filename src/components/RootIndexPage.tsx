@@ -3,8 +3,8 @@ import type { ChartDefinition } from '../lib/chart.ts'
 import type { PeerConfig } from '../lib/config.ts'
 import {
   formatAbsoluteCollectedAt,
+  formatLatencyMs,
   formatLoss,
-  formatRelativeCollectedAt,
   getDiagnosisClass,
   getLossClass,
   getLossOccurrenceClass,
@@ -19,6 +19,7 @@ import type {
 } from '../lib/snapshot-aggregate.ts'
 import { ChartCard } from './ChartCard.tsx'
 import { Layout } from './Layout.tsx'
+import { RelativeTime } from './RelativeTime.tsx'
 import { TopNav } from './TopNav.tsx'
 
 const SEVERITY_SORT_RANK: Record<SeverityBadge['className'], number> = {
@@ -61,8 +62,6 @@ export function RootIndexPage({
   selfLabel,
   signature,
 }: RootIndexPageProps): ReactNode {
-  const freshnessRelative =
-    latestCollectedAt == null ? null : formatRelativeCollectedAt(latestCollectedAt, now)
   const freshnessAbsolute =
     latestCollectedAt == null ? null : formatAbsoluteCollectedAt(latestCollectedAt)
   return (
@@ -76,12 +75,15 @@ export function RootIndexPage({
       />
       <h1>hopwatch</h1>
       <p className="lede">
-        Destination loss below is the 7-day average. Raw JSON snapshots are kept for {keepDays}{' '}
-        days, then rolled up into coarser historical buckets.
+        Raw JSON snapshots are kept for {keepDays} days, then rolled up into coarser historical
+        buckets.
       </p>
-      {freshnessRelative != null && freshnessAbsolute != null ? (
+      {latestCollectedAt != null && freshnessAbsolute != null ? (
         <p className="freshness">
-          Last probe cycle: <strong>{freshnessRelative}</strong>{' '}
+          Last probe cycle:{' '}
+          <strong>
+            <RelativeTime collectedAt={latestCollectedAt} now={now} />
+          </strong>{' '}
           <span className="cell-subtle" title={freshnessAbsolute}>
             ({freshnessAbsolute})
           </span>
@@ -106,6 +108,7 @@ export function RootIndexPage({
                 <th data-sort="text">Status now</th>
                 <th data-sort="number">Hops now</th>
                 <th data-sort="number">Severity (7d)</th>
+                <th data-sort="number">Latency (7d avg median)</th>
                 <th data-sort="loss">Dest. loss (7d avg)</th>
                 <th
                   aria-sort="descending"
@@ -135,7 +138,6 @@ export function RootIndexPage({
                   thumbnailChart,
                 }) => {
                   const destinationLossClass = getLossClass(aggregate.averageDestinationLossPct)
-                  const relativeCollectedAt = formatRelativeCollectedAt(summary.collectedAt, now)
                   const absoluteCollectedAt = formatAbsoluteCollectedAt(summary.collectedAt)
                   return (
                     <tr key={targetSlug}>
@@ -153,7 +155,7 @@ export function RootIndexPage({
                           {summary.diagnosis.label}
                         </span>{' '}
                         <span className="status-age" title={absoluteCollectedAt}>
-                          ({relativeCollectedAt})
+                          (<RelativeTime collectedAt={summary.collectedAt} now={now} />)
                         </span>
                       </td>
                       <td>{summary.hopCount}</td>
@@ -161,6 +163,9 @@ export function RootIndexPage({
                         <span className={`loss ${historicalSeverity.className}`}>
                           {historicalSeverity.label}
                         </span>
+                      </td>
+                      <td data-sort-value={aggregate.averageDestinationMedianRttMs ?? ''}>
+                        {formatLatencyMs(aggregate.averageDestinationMedianRttMs)}
                       </td>
                       <td data-sort-value={aggregate.averageDestinationLossPct ?? ''}>
                         <span className={`loss ${destinationLossClass}`}>
@@ -208,18 +213,6 @@ export function RootIndexPage({
             </tbody>
           </table>
         </div>
-      </section>
-      <section className="panel">
-        <p>
-          This overview is sorted by destination-loss frequency, then by 7-day average destination
-          loss. Columns are grouped by time horizon: what is happening now first, then 7-day
-          history, then the 30-hour native latency/loss chart. “Status now” answers what happened in
-          the newest snapshot and shows how fresh that snapshot is; “Severity (7d)” summarizes how
-          worried to be overall. “Most suspicious hop (7d)” is only shown when the same hop
-          repeatedly coincides with downstream destination loss. Isolated intermediate-hop loss
-          stays available on detail pages, but is not elevated here because it is often just ICMP
-          reply rate limiting.
-        </p>
       </section>
     </Layout>
   )

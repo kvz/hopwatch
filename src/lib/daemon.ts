@@ -3,6 +3,8 @@ import path from 'node:path'
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
 // value is always a string and Bun.Transpiler handles the rest.
+import relativeTimeSource from '../client/relative-time.ts' with { type: 'text' }
+// @ts-expect-error see note on relativeTimeSource — same import-attribute shape.
 import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
 import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
@@ -21,6 +23,17 @@ function getSortableTablesJs(): string {
     }).transformSync(sortableTablesSource)
   }
   return sortableTablesJsCache
+}
+
+let relativeTimeJsCache: string | null = null
+function getRelativeTimeJs(): string {
+  if (relativeTimeJsCache == null) {
+    relativeTimeJsCache = new Bun.Transpiler({
+      loader: 'ts',
+      target: 'browser',
+    }).transformSync(relativeTimeSource)
+  }
+  return relativeTimeJsCache
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -291,6 +304,15 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       // server, which would try to find it on disk per-slug.
       if (url.pathname.endsWith('/assets/sortable-tables.js')) {
         return new Response(getSortableTablesJs(), {
+          headers: {
+            'cache-control': 'public, max-age=3600',
+            'content-type': 'application/javascript; charset=utf-8',
+          },
+        })
+      }
+
+      if (url.pathname.endsWith('/assets/relative-time.js')) {
+        return new Response(getRelativeTimeJs(), {
           headers: {
             'cache-control': 'public, max-age=3600',
             'content-type': 'application/javascript; charset=utf-8',

@@ -4,7 +4,6 @@ import type { PeerConfig } from '../lib/config.ts'
 import {
   formatAbsoluteCollectedAt,
   formatLoss,
-  formatRelativeCollectedAt,
   formatSnapshotDay,
   getDiagnosisClass,
   getLossClass,
@@ -15,6 +14,7 @@ import { ChartCard } from './ChartCard.tsx'
 import { DiagnosisSummary } from './DiagnosisSummary.tsx'
 import { HopHost } from './HopHost.tsx'
 import { Layout } from './Layout.tsx'
+import { RelativeTime } from './RelativeTime.tsx'
 import { TopNav } from './TopNav.tsx'
 
 interface TargetIndexPageProps {
@@ -51,8 +51,6 @@ export function TargetIndexPage({
   targetSlug,
 }: TargetIndexPageProps): ReactNode {
   const [mainChart, ...secondaryCharts] = charts
-  const hasAnonymizedHop = latestSnapshot.hops.some((hop) => hop.host === '???')
-  const relativeLatestCollectedAt = formatRelativeCollectedAt(latestSnapshot.collectedAt, now)
   const absoluteLatestCollectedAt = formatAbsoluteCollectedAt(latestSnapshot.collectedAt)
   const probeIsNetns = latestSnapshot.probeMode === 'netns'
   // Strip a trailing "(hostname)" from the display target — the hostname is
@@ -90,7 +88,10 @@ export function TargetIndexPage({
         reply rate-limiting and is shown muted for that reason.
       </p>
       <p className="freshness">
-        Last probe cycle: <strong>{relativeLatestCollectedAt}</strong>{' '}
+        Last probe cycle:{' '}
+        <strong>
+          <RelativeTime collectedAt={latestSnapshot.collectedAt} now={now} />
+        </strong>{' '}
         <span className="cell-subtle" title={absoluteLatestCollectedAt}>
           ({absoluteLatestCollectedAt})
         </span>
@@ -105,7 +106,7 @@ export function TargetIndexPage({
               {latestSnapshot.diagnosis.label}
             </span>
             <div className="cell-subtle" title={absoluteLatestCollectedAt}>
-              {relativeLatestCollectedAt}
+              <RelativeTime collectedAt={latestSnapshot.collectedAt} now={now} />
             </div>
           </div>
           <div className="summary-card">
@@ -148,10 +149,7 @@ export function TargetIndexPage({
           Reconstructed <code>mtr --report</code> view of the newest snapshot. The full per-probe
           event stream is stored as JSON.
         </p>
-        <details>
-          <summary>Show raw mtr-report output</summary>
-          <pre className="scroll-x">{latestSnapshot.rawText}</pre>
-        </details>
+        <pre className="scroll-x">{latestSnapshot.rawText}</pre>
         <p className="panel-hint">
           Download the full JSON snapshot:{' '}
           <a href={`./${encodeURIComponent(latestSnapshot.fileName)}`}>{latestSnapshot.fileName}</a>
@@ -168,13 +166,6 @@ export function TargetIndexPage({
         <p>
           <DiagnosisSummary summary={latestSnapshot.diagnosis.summary} hops={latestSnapshot.hops} />
         </p>
-        {hasAnonymizedHop ? (
-          <p className="panel-hint">
-            Hops labelled <code>???</code> didn't reply with a name or IP. That usually means the
-            router drops or rate-limits ICMP — it doesn't mean the probe failed. 100% loss on a{' '}
-            <code>???</code> row in the hop table below is normal and can be ignored.
-          </p>
-        ) : null}
       </section>
 
       <section className="panel" id="problematic-hops">
@@ -320,9 +311,11 @@ export function TargetIndexPage({
                     ) : null}
                     <tr>
                       <td data-sort-value={snapshot.collectedAt}>
-                        <time dateTime={snapshot.collectedAt} title={snapshot.collectedAt}>
-                          {formatRelativeCollectedAt(snapshot.collectedAt, now)}
-                        </time>
+                        <RelativeTime
+                          collectedAt={snapshot.collectedAt}
+                          now={now}
+                          title={snapshot.collectedAt}
+                        />
                         <div className="cell-subtle">{absoluteCollectedAt}</div>
                       </td>
                       <td>

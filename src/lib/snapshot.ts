@@ -441,6 +441,15 @@ export function formatLoss(lossPct: number | null): string {
   return `${lossPct.toFixed(1)}%`
 }
 
+export function formatLatencyMs(rttMs: number | null): string {
+  if (rttMs == null || !Number.isFinite(rttMs)) {
+    return 'n/a'
+  }
+  if (rttMs < 10) return `${rttMs.toFixed(1)} ms`
+  if (rttMs < 1000) return `${rttMs.toFixed(0)} ms`
+  return `${(rttMs / 1000).toFixed(1)} s`
+}
+
 function getSeverityScaleClass(
   value: number | null,
   {

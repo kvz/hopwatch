@@ -333,7 +333,11 @@ export function renderChartSvg(
 
   const statsFontSize = 10
   const statsFontFamily = 'DejaVu Sans Mono,Menlo,Consolas,monospace'
-  const lossSwatches = buildLossLegendLabels(maxProbes >= 1 ? maxProbes : 20)
+  // Use smokePings (maxProbes rounded down to even, or 20 fallback) so the
+  // legend keeps the full SmokePing color range even on 3h/30h charts where
+  // a single raw snapshot may carry only one RTT sample — `buildLossLegendLabels(1)`
+  // collapses to just 0/1 and 1/1 swatches, which wipes out the color legend.
+  const lossSwatches = buildLossLegendLabels(smokePings)
   const legendY = padding.top + chartHeight + 58
   const legendStartX = padding.left + 84
   const probeCountLabel =

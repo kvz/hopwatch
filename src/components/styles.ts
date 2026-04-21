@@ -69,9 +69,17 @@ a { color: var(--accent); }
 }
 a.topnav-title:hover { color: var(--accent); }
 
-/* ??? rows in the hop table are rendered as plain <code> — the explainer
-   under "Latest diagnosis" covers the semantics, so a hover-only tooltip
-   (unreachable on mobile) would just add noise. */
+/* ??? tokens carry a native browser tooltip via <dfn title=…>. Desktop users
+   get the explanation on hover; mobile users see the dotted-underline
+   affordance but can't get the tooltip — accepted trade-off, a <details>
+   alternative would be heavier and rarely needed. */
+dfn {
+  font-style: normal;
+  cursor: help;
+  border-bottom: 1px dotted var(--muted);
+  text-decoration: none;
+}
+code dfn, dfn code { border-bottom: 0; }
 
 .topnav-back {
   display: inline-flex;
@@ -128,6 +136,9 @@ a.topnav-title:hover { color: var(--accent); }
   background: var(--panel);
   box-shadow: 0 14px 32px rgba(17, 24, 20, 0.12);
   z-index: 30;
+}
+@media (min-width: 960px) {
+  .topnav-menu { min-width: 320px; }
 }
 .topnav-menu--right { left: auto; right: 0; }
 

@@ -77,7 +77,12 @@ describe('getHistoricalSeverityBadge', () => {
   test('returns Unknown for empty windows', () => {
     expect(
       getHistoricalSeverityBadge(
-        { averageDestinationLossPct: null, averageWorstHopLossPct: null, sampleCount: 0 },
+        {
+          averageDestinationLossPct: null,
+          averageDestinationMedianRttMs: null,
+          averageWorstHopLossPct: null,
+          sampleCount: 0,
+        },
         {
           destinationLossCount: 0,
           healthyCount: 0,
@@ -92,7 +97,12 @@ describe('getHistoricalSeverityBadge', () => {
   test('returns Stable when no destination loss observed', () => {
     expect(
       getHistoricalSeverityBadge(
-        { averageDestinationLossPct: 0, averageWorstHopLossPct: 0, sampleCount: 20 },
+        {
+          averageDestinationLossPct: 0,
+          averageDestinationMedianRttMs: null,
+          averageWorstHopLossPct: 0,
+          sampleCount: 20,
+        },
         {
           destinationLossCount: 0,
           healthyCount: 20,
@@ -107,7 +117,12 @@ describe('getHistoricalSeverityBadge', () => {
   test('returns Degraded when destination loss rate is high', () => {
     expect(
       getHistoricalSeverityBadge(
-        { averageDestinationLossPct: 30, averageWorstHopLossPct: 20, sampleCount: 10 },
+        {
+          averageDestinationLossPct: 30,
+          averageDestinationMedianRttMs: null,
+          averageWorstHopLossPct: 20,
+          sampleCount: 10,
+        },
         {
           destinationLossCount: 5,
           healthyCount: 5,
@@ -122,7 +137,12 @@ describe('getHistoricalSeverityBadge', () => {
   test('returns Flaky for intermittent loss', () => {
     expect(
       getHistoricalSeverityBadge(
-        { averageDestinationLossPct: 2, averageWorstHopLossPct: 1, sampleCount: 100 },
+        {
+          averageDestinationLossPct: 2,
+          averageDestinationMedianRttMs: null,
+          averageWorstHopLossPct: 1,
+          sampleCount: 100,
+        },
         {
           destinationLossCount: 1,
           healthyCount: 99,

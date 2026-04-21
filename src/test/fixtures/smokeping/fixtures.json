@@ -1,0 +1,86 @@
+{
+  "description": "Ground-truth SmokePing PNGs plus locked pixel-parity numbers. Tests fail if a fixture's mismatchPct or rmsDelta drifts outside ± tolerance of the locked value, in either direction. Relock after an intended parity change with: UPDATE_PARITY_BASELINE=1 bun run test -- chart-parity. Regenerate fixture inputs with: bun run scripts/update-smokeping-fixtures.ts.",
+  "rangeHours": 3,
+  "pixelThreshold": 20,
+  "tolerancePct": 0.1,
+  "toleranceRms": 0.25,
+  "fixtures": [
+    {
+      "name": "AWS__AP-Southeast-1",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/AWS__AP-Southeast-1.points.json",
+      "referencePngPath": "images/AWS/AP-Southeast-1_last_10800.png",
+      "upperLimitMs": 2.112,
+      "locked": {
+        "mismatchPct": 21.49,
+        "rmsDelta": 44.21
+      }
+    },
+    {
+      "name": "AWS__EU-West-1",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/AWS__EU-West-1.points.json",
+      "referencePngPath": "images/AWS/EU-West-1_last_10800.png",
+      "upperLimitMs": 239.568,
+      "locked": {
+        "mismatchPct": 12.3,
+        "rmsDelta": 41.54
+      }
+    },
+    {
+      "name": "AWS__US-East-1",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/AWS__US-East-1.points.json",
+      "referencePngPath": "images/AWS/US-East-1_last_10800.png",
+      "upperLimitMs": 316.8,
+      "locked": {
+        "mismatchPct": 14.78,
+        "rmsDelta": 37.69
+      }
+    },
+    {
+      "name": "Cloudflare__r2-EU",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/Cloudflare__r2-EU.points.json",
+      "referencePngPath": "images/Cloudflare/r2-EU_last_10800.png",
+      "upperLimitMs": 1.5340799999999999,
+      "locked": {
+        "mismatchPct": 20.93,
+        "rmsDelta": 41.32
+      }
+    },
+    {
+      "name": "General__Cloudflare",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/General__Cloudflare.points.json",
+      "referencePngPath": "images/General/Cloudflare_last_10800.png",
+      "upperLimitMs": 1.5992004,
+      "locked": {
+        "mismatchPct": 16.93,
+        "rmsDelta": 39.95
+      }
+    },
+    {
+      "name": "General__Google",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/General__Google.points.json",
+      "referencePngPath": "images/General/Google_last_10800.png",
+      "upperLimitMs": 2.28,
+      "locked": {
+        "mismatchPct": 25.97,
+        "rmsDelta": 46.99
+      }
+    },
+    {
+      "name": "Hetzner__S3-fsn1",
+      "anchorTs": 1776511583,
+      "pointsPath": "points/Hetzner__S3-fsn1.points.json",
+      "referencePngPath": "images/Hetzner/S3-fsn1_last_10800.png",
+      "upperLimitMs": 192,
+      "locked": {
+        "mismatchPct": 14.45,
+        "rmsDelta": 40.16
+      }
+    }
+  ]
+}

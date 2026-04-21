@@ -426,6 +426,7 @@ async function updateRollupsForTargets(
 
 export interface RunCollectorResult {
   failedTargetSlugs: string[]
+  failedRollupSlugs: string[]
 }
 
 export async function runCollector(
@@ -475,9 +476,15 @@ export async function runCollector(
     }
   })
 
-  await updateRollupsForTargets(nodeLabel, options, nowDate, false, logger)
+  const failedRollupSlugs = await updateRollupsForTargets(
+    nodeLabel,
+    options,
+    nowDate,
+    false,
+    logger,
+  )
 
-  return { failedTargetSlugs }
+  return { failedTargetSlugs, failedRollupSlugs }
 }
 
 export interface RefreshRollupsResult {

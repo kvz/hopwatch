@@ -134,11 +134,12 @@ export async function resolveServeFilePath(root: string, urlPath: string): Promi
 }
 
 async function serveFile(root: string, urlPath: string): Promise<Response> {
-  const resolved = safeResolve(root, urlPath)
-  if (resolved == null) {
-    return new Response('forbidden', { status: 403 })
-  }
-
+  // Collapse "lexically outside root" (was 403) and "not resolvable under root"
+  // (404) into a single 404 response. The split let a caller probing
+  // `/../etc/passwd` distinguish "existed but denied" (403) from
+  // "didn't exist" (404) — a minor oracle that leaked whether a given path
+  // was even on disk outside the data dir. 404 for every failure mode
+  // removes the signal without changing any legitimate response.
   const realFile = await resolveServeFilePath(root, urlPath)
   if (realFile == null) {
     return new Response('not found', { status: 404 })
@@ -164,7 +165,14 @@ export interface SchedulerHandle {
 }
 
 export interface SchedulerDependencies {
-  runCollectorFn?: (config: LoadedConfig, logger: Logger) => Promise<void>
+  runCollectorFn?: (
+    config: LoadedConfig,
+    logger: Logger,
+    // biome-ignore lint/suspicious/noConfusingVoidType: the `| void` variant is
+    // the ergonomic signature for vitest mocks (which default to Promise<void>)
+    // — switching to `| undefined` would force every test to spell out the full
+    // failed-slug shape just to satisfy the type checker.
+  ) => Promise<{ failedTargetSlugs: string[]; failedRollupSlugs: string[] } | void>
 }
 
 export function startScheduler(
@@ -199,11 +207,26 @@ export function startScheduler(
     const run = (async (): Promise<void> => {
       const started = Date.now()
       try {
-        await runCollectorFn(config, logger)
-        logger.info('cycle complete', {
-          elapsedMs: Date.now() - started,
-          targets: config.target.length,
-        })
+        const result = await runCollectorFn(config, logger)
+        const failedTargetSlugs = result?.failedTargetSlugs ?? []
+        const failedRollupSlugs = result?.failedRollupSlugs ?? []
+        // A "cycle complete" log on a partially-broken cycle (snapshot
+        // failures, rollup failures) is a lie that masks stale charts.
+        // Emit the same elapsed-ms context either way, but log at error
+        // severity with the failed slugs so operators notice.
+        if (failedTargetSlugs.length > 0 || failedRollupSlugs.length > 0) {
+          logger.error('cycle completed with failures', {
+            elapsedMs: Date.now() - started,
+            failedRollupSlugs,
+            failedTargetSlugs,
+            targets: config.target.length,
+          })
+        } else {
+          logger.info('cycle complete', {
+            elapsedMs: Date.now() - started,
+            targets: config.target.length,
+          })
+        }
       } catch (err) {
         if (!(err instanceof Error)) {
           throw new Error(`Was thrown a non-error: ${err}`)

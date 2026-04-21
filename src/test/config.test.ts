@@ -123,7 +123,7 @@ engine = "native"
     // safeResolve compares `resolved !== root && !resolved.startsWith(root + sep)`.
     // When `data_dir = "/var/lib/hopwatch/"` is preserved verbatim, the prefix check
     // never matches (the resolved path is `/var/lib/hopwatch/file`, not
-    // `/var/lib/hopwatch//file`), so every served file 403s. Normalize the value at
+    // `/var/lib/hopwatch//file`), so every served file 404s. Normalize the value at
     // config load time.
     const trailing = `${dir}/`
     const configPath = await writeConfig(`

@@ -295,20 +295,21 @@ export function diagnoseSnapshot(
     }
   }
 
-  // When the destination hop index is known, exclude strictly that hop
-  // (not "everything before the last index"). MTR sometimes emits a phantom
-  // trailing hop past the real destination; slicing by position would
-  // misclassify the real destination as an intermediate and misattribute
-  // "intermediate-only loss" diagnoses and suspect hops.
-  const intermediateHops =
+  // When the destination hop index is known, "intermediates" are the hops
+  // strictly before it — any hop at or after the destination index is either
+  // the destination itself or a phantom trailing hop MTR sometimes emits
+  // (same host, bumped TTL). Using `<` rather than `!==` excludes both, so
+  // the phantom can't be blamed as a suspect or diagnosis anchor.
+  let intermediateHops =
     destinationHopIndex != null
-      ? hops.filter((hop) => hop.index !== destinationHopIndex)
+      ? hops.filter((hop) => hop.index < destinationHopIndex)
       : hops.slice(0, -1)
-  if (intermediateHops.length === hops.length && hops.length > 0) {
-    // `destinationHopIndex` was supplied but no hop matches — fall back to
-    // the legacy "last hop is destination" assumption to stay consistent
-    // with the pre-fix behavior for unexpected shapes.
-    intermediateHops.pop()
+  if (destinationHopIndex != null && intermediateHops.length === hops.length && hops.length > 0) {
+    // `destinationHopIndex` was supplied but no hop's index is < it — the
+    // recorded hop indices are all at or past the destination, which isn't
+    // a shape we expect. Fall back to "last hop is destination" so we stay
+    // consistent with the pre-fix behavior on unusual inputs.
+    intermediateHops = hops.slice(0, -1)
   }
   const lossyIntermediateHops = intermediateHops.filter((hop) => hop.lossPct > 0)
   if (destinationLossPct === 0) {

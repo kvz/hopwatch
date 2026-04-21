@@ -52,9 +52,10 @@ class ProbeOnceCommand extends BaseCommand {
     const { config, logger } = await this.resolve()
     logger.info('probing once', { targets: config.target.length })
     const result = await runCollector(config, logger)
-    if (result.failedTargetSlugs.length > 0) {
+    if (result.failedTargetSlugs.length > 0 || result.failedRollupSlugs.length > 0) {
       logger.error('probe-once completed with failures', {
-        failed: result.failedTargetSlugs,
+        failedRollupSlugs: result.failedRollupSlugs,
+        failedTargetSlugs: result.failedTargetSlugs,
       })
       return 1
     }

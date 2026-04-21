@@ -52,25 +52,40 @@ const DEFAULTS = {
   probeIntervalMs: 25,
 } as const
 
-const libc = dlopen('libc.so.6', {
-  socket: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-  setsockopt: {
-    args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.u32],
-    returns: FFIType.i32,
-  },
-  sendto: {
-    args: [FFIType.i32, FFIType.ptr, FFIType.u64, FFIType.i32, FFIType.ptr, FFIType.u32],
-    returns: FFIType.i64,
-  },
-  recvfrom: {
-    args: [FFIType.i32, FFIType.ptr, FFIType.u64, FFIType.i32, FFIType.ptr, FFIType.ptr],
-    returns: FFIType.i64,
-  },
-  close: { args: [FFIType.i32], returns: FFIType.i32 },
-  __errno_location: { args: [], returns: FFIType.ptr },
-})
+// Lazy-load libc on first probe call. Loading at module top-level means
+// `import('./prober-native.ts')` fails with an opaque FFI error on musl
+// (Alpine, distroless) and macOS — which short-circuits the collector's
+// deliberate platform-check in collector.ts that emits a clear
+// "engine=native requires glibc Linux" message. Deferring until the first
+// probe call lets that check fire first.
+function openLibc() {
+  return dlopen('libc.so.6', {
+    socket: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+    setsockopt: {
+      args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.u32],
+      returns: FFIType.i32,
+    },
+    sendto: {
+      args: [FFIType.i32, FFIType.ptr, FFIType.u64, FFIType.i32, FFIType.ptr, FFIType.u32],
+      returns: FFIType.i64,
+    },
+    recvfrom: {
+      args: [FFIType.i32, FFIType.ptr, FFIType.u64, FFIType.i32, FFIType.ptr, FFIType.ptr],
+      returns: FFIType.i64,
+    },
+    close: { args: [FFIType.i32], returns: FFIType.i32 },
+    __errno_location: { args: [], returns: FFIType.ptr },
+  })
+}
 
-function errno(): number {
+let cachedLibc: ReturnType<typeof openLibc> | null = null
+function getLibc(): ReturnType<typeof openLibc> {
+  if (cachedLibc != null) return cachedLibc
+  cachedLibc = openLibc()
+  return cachedLibc
+}
+
+function errno(libc: ReturnType<typeof openLibc>): number {
   const p = libc.symbols.__errno_location()
   if (p == null) return -1
   return read.i32(p)
@@ -97,9 +112,10 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
   const targetBytes = parseIpv4(options.hostIp)
   const targetSa = buildSockaddrIn(targetBytes, 0)
 
+  const libc = getLibc()
   const sock = libc.symbols.socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)
   if (sock < 0) {
-    throw new Error(`socket(AF_INET, SOCK_RAW, IPPROTO_ICMP) failed, errno=${errno()}`)
+    throw new Error(`socket(AF_INET, SOCK_RAW, IPPROTO_ICMP) failed, errno=${errno(libc)}`)
   }
 
   // Monotonic 16-bit identifier per call — not `process.pid & 0xffff`, not
@@ -157,9 +173,17 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     return true
   }
 
+  // Budget the whole probe — send loop included — against timeoutMs. Before
+  // this, the deadline only started ticking after every (cycle × ttl) send
+  // had been issued, so a probe with packets=2048 × 25ms pacing × 30 hops
+  // could hog a collector slot for more than 25 minutes before the timeout
+  // logic even began. Aborting mid-send is fine: partial event streams are
+  // still meaningful, and the collector caps probe time separately anyway.
+  const deadlineNs = Bun.nanoseconds() + timeoutMs * 1_000_000
   try {
-    for (let cycle = 0; cycle < packets; cycle += 1) {
+    outer: for (let cycle = 0; cycle < packets; cycle += 1) {
       for (let ttl = 1; ttl <= maxHops; ttl += 1) {
+        if (Bun.nanoseconds() >= deadlineNs) break outer
         // Stop sending past the destination once we know where it is — saves
         // ~5ms * (maxHops - destHop) per cycle on short paths.
         if (destHopIndex != null && ttl - 1 > destHopIndex) break
@@ -167,7 +191,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
         const ttlBuf = new Int32Array([ttl])
         const rc = libc.symbols.setsockopt(sock, IPPROTO_IP, IP_TTL, ptr(ttlBuf), 4)
         if (rc < 0) {
-          throw new Error(`setsockopt(IP_TTL=${ttl}) failed, errno=${errno()}`)
+          throw new Error(`setsockopt(IP_TTL=${ttl}) failed, errno=${errno(libc)}`)
         }
 
         const seq = encodeSeq(cycle, ttl, maxHops)
@@ -190,13 +214,12 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
         // a real sleep (not a spin) gives the kernel time to accept incoming
         // Time Exceeded packets and lets destHopIndex settle before cycle N+1.
         const nextSendAtNs = Bun.nanoseconds() + probeIntervalMs * 1_000_000
-        while (Bun.nanoseconds() < nextSendAtNs) {
+        while (Bun.nanoseconds() < nextSendAtNs && Bun.nanoseconds() < deadlineNs) {
           if (!drainOnce()) await Bun.sleep(2)
         }
       }
     }
 
-    const deadlineNs = Bun.nanoseconds() + timeoutMs * 1_000_000
     while (Bun.nanoseconds() < deadlineNs) {
       if (!drainOnce()) await Bun.sleep(5)
     }

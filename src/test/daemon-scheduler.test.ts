@@ -193,6 +193,20 @@ describe('resolveServeFilePath', () => {
   test('returns null for a missing path', async () => {
     expect(await resolveServeFilePath(rootDir, '/nope.txt')).toBeNull()
   })
+
+  test('returns null for a lexically-escaping path so serveFile answers 404 (not 403)', async () => {
+    // serveFile used to return 403 when safeResolve rejected lexically and 404
+    // when resolveServeFilePath rejected after realpath. That split let a
+    // prober distinguish "existed outside the root" from "did not exist",
+    // which is a small information leak. Both failure modes now collapse to
+    // 404 — resolveServeFilePath must therefore return null on the lexical
+    // escape just like it does on missing files.
+    expect(await resolveServeFilePath(rootDir, '/../etc/passwd')).toBeNull()
+  })
+
+  test('returns null for a malformed percent-encoding (decodeURIComponent throws)', async () => {
+    expect(await resolveServeFilePath(rootDir, '/%E0%A4')).toBeNull()
+  })
 })
 
 describe('resolveTargetDirPath', () => {

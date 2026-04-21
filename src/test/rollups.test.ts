@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
-import { aggregateSnapshotsToRollupBuckets, updateTargetRollups } from '../lib/rollups.ts'
+import {
+  aggregateSnapshotsToRollupBuckets,
+  mtrRollupFileSchema,
+  updateTargetRollups,
+} from '../lib/rollups.ts'
 
 function snap(collectedAt: string, rawEvents: RawMtrEvent[]): StoredRawSnapshot {
   return {
@@ -118,6 +122,116 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
     expect(overflow?.count).toBe(1)
     const totalBinned = bucket.histogram.reduce((sum, h) => sum + h.count, 0)
     expect(totalBinned).toBe(4)
+  })
+
+  test('hourly bucket aggregates per-hop stats keyed by host', () => {
+    const pathEvents = (rttsByHop: Record<number, number[]>, hosts: Record<number, string>) => {
+      const events: RawMtrEvent[] = []
+      for (const [idxStr, host] of Object.entries(hosts)) {
+        events.push({ kind: 'host', hopIndex: Number(idxStr), host })
+      }
+      for (const [idxStr, rtts] of Object.entries(rttsByHop)) {
+        const idx = Number(idxStr)
+        for (let i = 0; i < rtts.length; i += 1) {
+          events.push({ kind: 'sent', hopIndex: idx, probeId: i })
+          events.push({ kind: 'reply', hopIndex: idx, probeId: i, rttUs: rtts[i] })
+        }
+      }
+      return events
+    }
+    const snaps = [
+      snap(
+        '20260420T100500Z',
+        pathEvents(
+          { 0: [1000], 1: [2000, 3000], 2: [5000] },
+          { 0: 'router-a', 1: 'router-b', 2: 'dest' },
+        ),
+      ),
+      snap(
+        '20260420T103000Z',
+        pathEvents(
+          { 0: [1500], 1: [2500], 2: [4000, 4500] },
+          { 0: 'router-a', 1: 'router-b', 2: 'dest' },
+        ),
+      ),
+    ]
+    const [bucket] = aggregateSnapshotsToRollupBuckets(snaps, 'hour')
+    expect(bucket.hops).toHaveLength(3)
+    const routerA = bucket.hops.find((h) => h.host === 'router-a')
+    expect(routerA).toBeDefined()
+    expect(routerA?.hopIndexes).toEqual([0])
+    expect(routerA?.representativeHopIndex).toBe(0)
+    expect(routerA?.snapshotCount).toBe(2)
+    expect(routerA?.sentCount).toBe(2)
+    expect(routerA?.replyCount).toBe(2)
+    expect(routerA?.rttAvgMs).toBeCloseTo(1.25, 6)
+    const routerB = bucket.hops.find((h) => h.host === 'router-b')
+    expect(routerB?.sentCount).toBe(3)
+    expect(routerB?.replyCount).toBe(3)
+    const dest = bucket.hops.find((h) => h.host === 'dest')
+    expect(dest?.representativeHopIndex).toBe(2)
+  })
+
+  test('ECMP: same host at two TTLs collapses into one hop entry with both hopIndexes', () => {
+    const events: RawMtrEvent[] = [
+      { kind: 'host', hopIndex: 5, host: 'edge-router' },
+      { kind: 'host', hopIndex: 6, host: 'edge-router' },
+      { kind: 'host', hopIndex: 7, host: 'dest' },
+      { kind: 'sent', hopIndex: 5, probeId: 0 },
+      { kind: 'reply', hopIndex: 5, probeId: 0, rttUs: 5000 },
+      { kind: 'sent', hopIndex: 6, probeId: 1 },
+      { kind: 'reply', hopIndex: 6, probeId: 1, rttUs: 6000 },
+      { kind: 'sent', hopIndex: 7, probeId: 2 },
+      { kind: 'reply', hopIndex: 7, probeId: 2, rttUs: 10000 },
+    ]
+    const [bucket] = aggregateSnapshotsToRollupBuckets([snap('20260420T100000Z', events)], 'hour')
+    const edge = bucket.hops.find((h) => h.host === 'edge-router')
+    expect(edge).toBeDefined()
+    expect(edge?.hopIndexes).toEqual([5, 6])
+    expect(edge?.sentCount).toBe(2)
+    expect(edge?.replyCount).toBe(2)
+  })
+
+  test('v1 rollup files still parse and get normalized hops:[] per bucket', () => {
+    const v1File = {
+      buckets: [
+        {
+          bucketStart: '2026-04-20T10:00:00.000Z',
+          destinationLossPct: 0,
+          destinationReplyCount: 4,
+          destinationSentCount: 4,
+          histogram: [{ count: 4, upperBoundMs: 10 }],
+          rttAvgMs: 5,
+          rttMaxMs: 5,
+          rttMinMs: 5,
+          rttP50Ms: 5,
+          rttP90Ms: 5,
+          rttP99Ms: 5,
+          snapshotCount: 4,
+        },
+      ],
+      generatedAt: '2026-04-20T11:00:00.000Z',
+      granularity: 'hour' as const,
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default' as const,
+      schemaVersion: 1 as const,
+      target: 'example.com',
+    }
+    const parsed = mtrRollupFileSchema.parse(v1File)
+    expect(parsed.schemaVersion).toBe(1)
+    expect(parsed.buckets[0].hops).toEqual([])
+  })
+
+  test('daily rollup keeps hops:[] even when snapshots contain hop events', () => {
+    const events: RawMtrEvent[] = [
+      { kind: 'host', hopIndex: 0, host: 'dest' },
+      { kind: 'sent', hopIndex: 0, probeId: 0 },
+      { kind: 'reply', hopIndex: 0, probeId: 0, rttUs: 5000 },
+    ]
+    const [bucket] = aggregateSnapshotsToRollupBuckets([snap('20260420T100000Z', events)], 'day')
+    expect(bucket.hops).toEqual([])
   })
 })
 

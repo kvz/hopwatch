@@ -137,7 +137,13 @@ export async function renderTargetIndex(
   const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
   const lastDay = summarizeSnapshots(lastDaySnapshots)
   const lastWeek = summarizeSnapshots(lastWeekSnapshots)
-  const hopIssues = summarizeHopIssues(lastWeekSnapshots).slice(0, 5)
+  // Exclude anonymized (???) hops from the top-5 "Recurring problematic hops"
+  // table — they almost always represent routers that rate-limit ICMP reply,
+  // so elevating them above real suspects is misleading. The hint under the
+  // diagnosis explains the convention.
+  const hopIssues = summarizeHopIssues(lastWeekSnapshots)
+    .filter((hop) => hop.host !== '???')
+    .slice(0, 5)
   const charts = await loadChartDefinitions(targetDir, snapshots, now)
 
   const html = renderDocument(

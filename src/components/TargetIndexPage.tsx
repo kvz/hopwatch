@@ -50,6 +50,16 @@ export function TargetIndexPage({
   targetSlug,
 }: TargetIndexPageProps): ReactNode {
   const [mainChart, ...secondaryCharts] = charts
+  const hasAnonymizedHop = latestSnapshot.hops.some((hop) => hop.host === '???')
+  const relativeLatestCollectedAt = formatRelativeCollectedAt(latestSnapshot.collectedAt, now)
+  const absoluteLatestCollectedAt = formatAbsoluteCollectedAt(latestSnapshot.collectedAt)
+  const probeIsNetns = latestSnapshot.probeMode === 'netns'
+  // Strip a trailing "(hostname)" from the display target — the hostname is
+  // already rendered in the intro line, and the parenthetical makes the H1
+  // wrap awkwardly on narrow viewports.
+  const headingText = latestSnapshot.target
+    .replace(new RegExp(`\\s*\\(${latestSnapshot.host.replaceAll('.', '\\.')}\\)\\s*$`), '')
+    .trim()
 
   return (
     <Layout title={`MTR History for ${latestSnapshot.target}`}>
@@ -71,11 +81,18 @@ export function TargetIndexPage({
         ]}
         title={latestSnapshot.target}
       />
-      <h1>{latestSnapshot.target}</h1>
+      <h1>{headingText}</h1>
       <p className="lede target-meta">
-        Probing <code>{latestSnapshot.host}</code> via <code>{latestSnapshot.probeMode}</code>.
+        Probing <code>{latestSnapshot.host}</code>
+        {probeIsNetns ? <> from a Linux network namespace</> : null} with ICMP traceroute.
         Destination loss counts only the final hop; worst-hop loss may include intermediate router
         reply rate-limiting and is shown muted for that reason.
+      </p>
+      <p className="freshness">
+        Last probe cycle: <strong>{relativeLatestCollectedAt}</strong>{' '}
+        <span className="cell-subtle" title={absoluteLatestCollectedAt}>
+          ({absoluteLatestCollectedAt})
+        </span>
       </p>
 
       <section className="panel" id="summary">
@@ -86,6 +103,9 @@ export function TargetIndexPage({
             <span className={`loss ${getDiagnosisClass(latestSnapshot.diagnosis)}`}>
               {latestSnapshot.diagnosis.label}
             </span>
+            <div className="cell-subtle" title={absoluteLatestCollectedAt}>
+              {relativeLatestCollectedAt}
+            </div>
           </div>
           <div className="summary-card">
             <strong>Last 24 hours</strong>
@@ -125,9 +145,12 @@ export function TargetIndexPage({
         <h2>Latest raw output</h2>
         <p className="panel-hint">
           Reconstructed <code>mtr --report</code> view of the newest snapshot. The full per-probe
-          event stream is stored as JSON. Expand below or grab the file.
+          event stream is stored as JSON.
         </p>
-        <pre className="scroll-x">{latestSnapshot.rawText}</pre>
+        <details>
+          <summary>Show raw mtr-report output</summary>
+          <pre className="scroll-x">{latestSnapshot.rawText}</pre>
+        </details>
         <p className="panel-hint">
           Download the full JSON snapshot:{' '}
           <a href={`./${encodeURIComponent(latestSnapshot.fileName)}`}>{latestSnapshot.fileName}</a>
@@ -144,6 +167,13 @@ export function TargetIndexPage({
         <p>
           <DiagnosisSummary summary={latestSnapshot.diagnosis.summary} hops={latestSnapshot.hops} />
         </p>
+        {hasAnonymizedHop ? (
+          <p className="panel-hint">
+            Hops labelled <code>???</code> didn't reply with a name or IP. That usually means the
+            router drops or rate-limits ICMP — it doesn't mean the probe failed. 100% loss on a{' '}
+            <code>???</code> row in the hop table below is normal and can be ignored.
+          </p>
+        ) : null}
       </section>
 
       <section className="panel" id="problematic-hops">
@@ -169,7 +199,11 @@ export function TargetIndexPage({
             <tbody>
               {hopIssues.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No recurring intermediate-hop loss in the last 7 days.</td>
+                  <td colSpan={5}>
+                    No recurring intermediate-hop loss in the last 7 days (anonymous{' '}
+                    <code>???</code> hops are excluded because 100% loss there is normally just ICMP
+                    rate-limiting).
+                  </td>
                 </tr>
               ) : (
                 hopIssues.map((hopIssue) => (

@@ -76,9 +76,8 @@ export function RootIndexPage({
       />
       <h1>hopwatch</h1>
       <p className="lede">
-        Node: <code>{selfLabel}</code>. Click a target to browse archived snapshots. Destination
-        loss below is the 7-day average. Raw JSON snapshots are retained for {keepDays} days, then
-        rolled up into coarser historical buckets.
+        Destination loss below is the 7-day average. Raw JSON snapshots are kept for {keepDays}{' '}
+        days, then rolled up into coarser historical buckets.
       </p>
       {freshnessRelative != null && freshnessAbsolute != null ? (
         <p className="freshness">

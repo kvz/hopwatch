@@ -364,16 +364,17 @@ export function renderChartSvg(
         return `<text x="${numRightX}" y="${y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333" text-anchor="end">${value}</text><text x="${tailX}" y="${y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333">${unit} ${labels[index]}</text>`
       })
       .join('')
-  const statsTitle1 = `<text x="${statsLabelRightX}" y="${statsLine1Y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" font-weight="bold" fill="#333" text-anchor="end">median rtt:</text>`
+  const statsTitle1 = `<text x="${statsLabelRightX}" y="${statsLine1Y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" font-weight="bold" fill="#333" text-anchor="end">latency:</text>`
   const statsLine1 = mkStatsCols(
     [stats.rttAvg, stats.rttMax, stats.rttMin, stats.rttNow, stats.rttSd],
     'ms',
     ['avg', 'max', 'min', 'now', 'sd'],
     statsLine1Y,
   )
-  const amPerSNumRightX = padding.left + 476
-  const amPerSUnitX = padding.left + 514
-  const statsLine1AmPerS = `<text x="${amPerSNumRightX}" y="${statsLine1Y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333" text-anchor="end">${stats.rttAmPerS}</text><text x="${amPerSUnitX}" y="${statsLine1Y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333">am/s</text>`
+  // am/s (SmokePing's "average ms per second" ratio) was previously shown in
+  // the top-right of the stats block but is confusing to non-SmokePing users
+  // and duplicates information already in the sd column, so we dropped it.
+  const statsLine1AmPerS = ''
   const statsTitle2 = `<text x="${statsLabelRightX}" y="${statsLine2Y}" font-size="${statsFontSize}" font-family="${statsFontFamily}" font-weight="bold" fill="#333" text-anchor="end">packet loss:</text>`
   const statsLine2 = mkStatsCols(
     [stats.lossAvg, stats.lossMax, stats.lossMin, stats.lossNow],
@@ -388,7 +389,7 @@ export function renderChartSvg(
   const probeLineText =
     maxProbes === 0
       ? ''
-      : `<text x="${legendStartX}" y="${probeLineY}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333">${maxProbes} ICMP Echo Pings (56 Bytes) every ${Math.round(avgGapMs / 1000)}s</text>`
+      : `<text x="${legendStartX}" y="${probeLineY}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333">${maxProbes} ICMP pings (56 B) every ${Math.round(avgGapMs / 1000)}s</text>`
   const renderStamp = formatSmokeDate(new Date(now))
   const renderStampText = `<text x="${width - padding.right}" y="${probeLineY}" font-size="${statsFontSize}" font-family="${statsFontFamily}" fill="#333" text-anchor="end">${renderStamp}</text>`
 

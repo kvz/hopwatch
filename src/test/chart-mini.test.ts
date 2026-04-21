@@ -55,12 +55,11 @@ describe('renderChartSvg in mini mode', () => {
     )
     const svg = renderChartSvg(points, miniOptions())
 
-    expect(svg).not.toContain('median rtt:')
+    expect(svg).not.toContain('latency:')
     expect(svg).not.toContain('packet loss:')
     expect(svg).not.toContain('loss color:')
     expect(svg).not.toContain('Latency')
     expect(svg).not.toContain('RRDTOOL')
-    expect(svg).not.toContain('am/s')
     // No grid lines (pink dashed major or minor gray)
     expect(svg).not.toContain('stroke="#f3bfbf"')
   })

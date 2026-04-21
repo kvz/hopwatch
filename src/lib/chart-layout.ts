@@ -24,12 +24,12 @@ export interface LossLegendEntry {
   label: string
 }
 
-// Convert the percent-based buckets into integer "lost N of pings" labels
-// for a given probes-per-sample count. For pings=20 this reproduces the
-// canonical SmokePing labels (0, 1, 2, 3, 4-5, 6-10, 11-19, 20/20) so
-// fixture parity is preserved. For smaller pings counts, empty buckets
-// (e.g. pings=10 where a single lost packet is already 10%) are dropped
-// so the legend stays coherent.
+// Convert the percent-based buckets into "lost N/PINGS" labels so readers can
+// see at a glance how many dropped probes produce each color. For pings=20 the
+// canonical SmokePing sequence becomes (0/20, 1/20, 2/20, 3-4/20, 5-10/20,
+// 11-19/20, 20/20). For smaller pings counts, empty buckets (e.g. pings=10
+// where a single lost packet is already 10%) are dropped so the legend stays
+// coherent.
 export function buildLossLegendLabels(pings: number): LossLegendEntry[] {
   const entries: LossLegendEntry[] = []
   let prev = -1
@@ -38,12 +38,10 @@ export function buildLossLegendLabels(pings: number): LossLegendEntry[] {
       bucket.maxLossPct >= 100 ? pings : Math.floor((bucket.maxLossPct / 100) * pings)
     if (threshold <= prev) continue
     let label: string
-    if (threshold === pings && bucket.maxLossPct >= 100) {
-      label = `${pings}/${pings}`
-    } else if (threshold === prev + 1) {
-      label = `${threshold}`
+    if (threshold === prev + 1) {
+      label = `${threshold}/${pings}`
     } else {
-      label = `${prev + 1}-${threshold}`
+      label = `${prev + 1}-${threshold}/${pings}`
     }
     entries.push({ color: bucket.color, label })
     prev = threshold

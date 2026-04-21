@@ -61,18 +61,27 @@ describe('lossColorFor', () => {
 })
 
 describe('buildLossLegendLabels', () => {
-  test('reproduces the canonical SmokePing labels at pings=20', () => {
+  test('carries the /pings denominator so each swatch is self-explanatory', () => {
     const labels = buildLossLegendLabels(20).map((e) => e.label)
-    expect(labels).toEqual(['0', '1', '2', '3', '4-5', '6-10', '11-19', '20/20'])
+    expect(labels).toEqual([
+      '0/20',
+      '1/20',
+      '2/20',
+      '3/20',
+      '4-5/20',
+      '6-10/20',
+      '11-19/20',
+      '20/20',
+    ])
   })
 
   test('drops empty buckets at small pings counts', () => {
     // At pings=10, a single lost packet is already 10% — buckets whose
     // integer threshold does not advance past the previous one are skipped.
     const labels = buildLossLegendLabels(10).map((e) => e.label)
-    expect(labels[0]).toBe('0')
+    expect(labels[0]).toBe('0/10')
     expect(labels[labels.length - 1]).toBe('10/10')
-    expect(labels).not.toContain('0-0')
+    expect(labels).not.toContain('0-0/10')
   })
 })
 

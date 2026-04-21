@@ -43,8 +43,8 @@ function splitOn(tokens: Token[], needle: string, buildMatch: (id: string) => Re
 }
 
 // Tokenize the plain diagnosis summary into runs of text, inline <code> for
-// recognized hop hosts, and the unknown-host dfn for "???". Longer hosts are
-// matched first so a substring host does not eat a longer one.
+// recognized hop hosts, and the unknown-host marker for "???". Longer hosts
+// are matched first so a substring host does not eat a longer one.
 export function DiagnosisSummary({ summary, hops }: DiagnosisSummaryProps): ReactNode {
   const hostTokens = [
     ...new Set(hops.map((hop) => hop.host).filter((host) => host.trim() !== '' && host !== '???')),

@@ -1,10 +1,11 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import type { ChartDefinition } from '../lib/chart.ts'
 import type { PeerConfig } from '../lib/config.ts'
 import {
   formatAbsoluteCollectedAt,
   formatLoss,
   formatRelativeCollectedAt,
+  formatSnapshotDay,
   getDiagnosisClass,
   getLossClass,
   type SnapshotSummary,
@@ -307,45 +308,55 @@ export function TargetIndexPage({
                   prev != null &&
                   prev.diagnosis.label === snapshot.diagnosis.label &&
                   prev.diagnosis.summary === snapshot.diagnosis.summary
+                const dayKey = snapshot.collectedAt.slice(0, 10)
+                const prevDayKey = prev?.collectedAt.slice(0, 10)
+                const dayChanged = dayKey !== prevDayKey
                 return (
-                  <tr key={snapshot.collectedAt}>
-                    <td data-sort-value={snapshot.collectedAt}>
-                      <time dateTime={snapshot.collectedAt} title={snapshot.collectedAt}>
-                        {formatRelativeCollectedAt(snapshot.collectedAt, now)}
-                      </time>
-                      <div className="cell-subtle">{absoluteCollectedAt}</div>
-                    </td>
-                    <td>
-                      <span className={`loss ${getLossClass(snapshot.destinationLossPct)}`}>
-                        {formatLoss(snapshot.destinationLossPct)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`loss ${getLossClass(snapshot.worstHopLossPct)}`}>
-                        {formatLoss(snapshot.worstHopLossPct)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`loss ${getDiagnosisClass(snapshot.diagnosis)}`}>
-                        {snapshot.diagnosis.label}
-                      </span>
-                      {sameAsPrev ? null : (
-                        <>
-                          <br />
-                          <span>
-                            <DiagnosisSummary
-                              summary={snapshot.diagnosis.summary}
-                              hops={snapshot.hops}
-                            />
-                          </span>
-                        </>
-                      )}
-                    </td>
-                    <td>{snapshot.hopCount}</td>
-                    <td>
-                      <a href={`./${encodeURIComponent(snapshot.fileName)}`}>json</a>
-                    </td>
-                  </tr>
+                  <Fragment key={snapshot.collectedAt}>
+                    {dayChanged ? (
+                      <tr className="snapshot-day" data-row-kind="separator">
+                        <td colSpan={6}>{formatSnapshotDay(snapshot.collectedAt)}</td>
+                      </tr>
+                    ) : null}
+                    <tr>
+                      <td data-sort-value={snapshot.collectedAt}>
+                        <time dateTime={snapshot.collectedAt} title={snapshot.collectedAt}>
+                          {formatRelativeCollectedAt(snapshot.collectedAt, now)}
+                        </time>
+                        <div className="cell-subtle">{absoluteCollectedAt}</div>
+                      </td>
+                      <td>
+                        <span className={`loss ${getLossClass(snapshot.destinationLossPct)}`}>
+                          {formatLoss(snapshot.destinationLossPct)}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`loss ${getLossClass(snapshot.worstHopLossPct)}`}>
+                          {formatLoss(snapshot.worstHopLossPct)}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`loss ${getDiagnosisClass(snapshot.diagnosis)}`}>
+                          {snapshot.diagnosis.label}
+                        </span>
+                        {sameAsPrev ? null : (
+                          <>
+                            <br />
+                            <span>
+                              <DiagnosisSummary
+                                summary={snapshot.diagnosis.summary}
+                                hops={snapshot.hops}
+                              />
+                            </span>
+                          </>
+                        )}
+                      </td>
+                      <td>{snapshot.hopCount}</td>
+                      <td>
+                        <a href={`./${encodeURIComponent(snapshot.fileName)}`}>json</a>
+                      </td>
+                    </tr>
+                  </Fragment>
                 )
               })}
             </tbody>

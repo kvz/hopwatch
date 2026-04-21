@@ -69,7 +69,9 @@ a { color: var(--accent); }
 }
 a.topnav-title:hover { color: var(--accent); }
 
-dfn { font-style: normal; cursor: help; border-bottom: 1px dotted var(--muted); }
+/* ??? rows in the hop table are rendered as plain <code> — the explainer
+   under "Latest diagnosis" covers the semantics, so a hover-only tooltip
+   (unreachable on mobile) would just add noise. */
 
 .topnav-back {
   display: inline-flex;
@@ -222,7 +224,25 @@ dfn { font-style: normal; cursor: help; border-bottom: 1px dotted var(--muted); 
   border-radius: 6px;
 }
 
+.snapshot-day td {
+  background: #f3f3ed;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
 .graph-caption { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.graph-card--empty {
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.graph-empty { color: var(--muted); font-size: 13px; margin: 0; }
 .target-meta { margin-bottom: 18px; }
 time[datetime] { white-space: nowrap; }
 
@@ -258,7 +278,7 @@ th.is-sortable::after {
   content: '↕';
   margin-left: 6px;
   font-size: 0.9em;
-  opacity: 0.4;
+  opacity: 0.6;
 }
 th.is-sortable[aria-sort="ascending"]::after,
 th.is-sortable[aria-sort="descending"]::after {
@@ -309,5 +329,14 @@ details.raw-events > summary { cursor: pointer; color: var(--accent); font-size:
   h1 { font-size: 26px; overflow-wrap: anywhere; }
   th, td { padding: 8px 6px; }
   pre { font-size: 11px; padding: 10px; }
+}
+
+@media (max-width: 560px) {
+  /* At phone widths the right "On this page" dropdown pushes the breadcrumb
+     off-screen. The page has visible h2 section headings, so a link list on
+     top of that is redundant here. */
+  .topnav-dropdown--right { display: none; }
+  .topnav-back { padding: 6px 6px; }
+  .topnav-back-label { display: none; }
 }
 `

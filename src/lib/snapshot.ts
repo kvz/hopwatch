@@ -565,6 +565,20 @@ export function formatAbsoluteCollectedAt(value: string): string {
   return new Date(timestamp).toISOString().replace('.000Z', ' UTC').replace('T', ' ')
 }
 
+const DAY_LABEL_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  timeZone: 'UTC',
+})
+
+export function formatSnapshotDay(value: string): string {
+  const timestamp = parseCollectedAt(value)
+  if (timestamp == null) return value.slice(0, 10)
+  return DAY_LABEL_FORMATTER.format(new Date(timestamp))
+}
+
 export function formatRelativeCollectedAt(value: string, now: number): string {
   const timestamp = parseCollectedAt(value)
   if (timestamp == null) {

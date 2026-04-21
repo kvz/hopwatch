@@ -57,11 +57,11 @@ export function TopNav({
           </div>
         </details>
         {backHref != null ? (
-          <a className="topnav-back" href={backHref}>
+          <a className="topnav-back" href={backHref} aria-label={backLabel ?? 'Back'}>
             <span className="topnav-back-arrow" aria-hidden="true">
               ←
             </span>{' '}
-            {backLabel ?? 'Back'}
+            <span className="topnav-back-label">{backLabel ?? 'Back'}</span>
           </a>
         ) : null}
       </div>

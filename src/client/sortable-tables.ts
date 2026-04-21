@@ -62,6 +62,14 @@ function readCellValue(cell: HTMLTableCellElement, kind: SortKind): SortValue {
   return parseSortValue(cell.textContent ?? '', kind)
 }
 
+// Visual-only rows (e.g. day separators between snapshot runs) carry
+// data-row-kind="separator" so they render in the default chronological order
+// but stay out of the sort machinery entirely — they'd otherwise pollute the
+// comparator and end up in arbitrary positions once a user clicks a header.
+function isSortableRow(row: HTMLTableRowElement): boolean {
+  return row.getAttribute('data-row-kind') !== 'separator'
+}
+
 function sortBody(
   body: HTMLTableSectionElement,
   columnIndex: number,
@@ -69,7 +77,9 @@ function sortBody(
   direction: SortDirection,
   originalOrder: HTMLTableRowElement[],
 ): void {
-  const rows = Array.from(body.querySelectorAll<HTMLTableRowElement>(':scope > tr'))
+  const rows = Array.from(body.querySelectorAll<HTMLTableRowElement>(':scope > tr')).filter(
+    isSortableRow,
+  )
   rows.sort((rowA, rowB) => {
     const cellA = rowA.cells[columnIndex]
     const cellB = rowB.cells[columnIndex]
@@ -80,6 +90,12 @@ function sortBody(
     // Stable tie-break: original row order.
     return originalOrder.indexOf(rowA) - originalOrder.indexOf(rowB)
   })
+  // When a sort is active, separators are meaningless — hide them, keep the
+  // sortable rows contiguous. restoreOriginalOrder will un-hide them.
+  const allRows = Array.from(body.querySelectorAll<HTMLTableRowElement>(':scope > tr'))
+  for (const row of allRows) {
+    if (!isSortableRow(row)) row.hidden = true
+  }
   for (const row of rows) body.appendChild(row)
 }
 
@@ -87,7 +103,10 @@ function restoreOriginalOrder(
   body: HTMLTableSectionElement,
   originalOrder: HTMLTableRowElement[],
 ): void {
-  for (const row of originalOrder) body.appendChild(row)
+  for (const row of originalOrder) {
+    row.hidden = false
+    body.appendChild(row)
+  }
 }
 
 export function enhanceTable(table: HTMLTableElement): void {

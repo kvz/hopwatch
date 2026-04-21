@@ -106,14 +106,14 @@ export function RootIndexPage({
                 <th data-sort="text">Status now</th>
                 <th data-sort="number">Hops now</th>
                 <th data-sort="number">Severity (7d)</th>
-                <th data-sort="loss">Destination loss (7d avg)</th>
+                <th data-sort="loss">Dest. loss (7d avg)</th>
                 <th
                   aria-sort="descending"
                   className="is-sortable"
                   data-sort="number"
                   data-sort-default="desc"
                 >
-                  Destination-loss snapshots (7d)
+                  Loss snapshots (7d)
                 </th>
                 <th data-sort="text">Most suspicious hop (7d)</th>
                 <th>

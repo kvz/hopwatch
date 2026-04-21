@@ -1,10 +1,12 @@
-# Real SmokePing fixtures from AP observer
+# SmokePing pixel-parity fixtures
 
-Harvested from `/srv/shared/smokeping/` on `observer1-ap-southeast-1-production` on 2026-04-19, before it was migrated to the native MTR history renderer. These are authentic SmokePing outputs used as ground-truth targets for pixel-parity diffing.
+Harvested from `/srv/shared/smokeping/` on `observer1-ap-southeast-1-production` on 2026-04-19, before it was migrated to the native MTR history renderer. These are authentic SmokePing outputs used as ground-truth targets for pixel-parity diffing by `src/test/chart-parity.test.ts`.
 
 ## Layout
 
+- `fixtures.json` — manifest consumed by the parity test. Pairs each fixture (`points/*.points.json` + `images/*.png`) with a locked `mismatchPct` / `rmsDelta`. Relock with `UPDATE_PARITY_BASELINE=1 bun run test -- chart-parity`. Regenerate points from RRDs with `bun run scripts/update-smokeping-fixtures.ts`.
 - `xml/<category>__<target>.xml.gz` — rrdtool-dumped RRDs for a focused subset of targets (portable, small; restore with `rrdtool restore`). The live AP observer had 26 RRDs in total; this subset picks 7 varied profiles.
+- `points/<category>__<target>.points.json` — extracted ChartPoint arrays that drive the renderer during parity tests.
 - `images/<category>/<target>_last_<seconds>.png` — SmokePing's own rendered PNGs for all 26 targets across 4 time windows (3h/30h/10d/360d) plus mini thumbnails. Each `_last_10800.png` pairs with the corresponding `xml/<category>__<target>.xml.gz` when that RRD is present.
 
 ## Restore a single RRD

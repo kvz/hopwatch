@@ -144,4 +144,5 @@ bin-build/
 test-artifacts/
 .hopwatch-data/
 hopwatch-data/
-src/test/fixtures/mtr-fixtures/real-ap/diff-snapshots/
+src/test/fixtures/smokeping/diff-snapshots/
+.*.bun-build

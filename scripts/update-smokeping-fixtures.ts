@@ -8,11 +8,35 @@ import type { ChartPoint } from '../src/lib/core.ts'
 import { quantile as sharedQuantile } from '../src/lib/raw.ts'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
-const FIXTURE_DIR = path.join(REPO_ROOT, 'src', 'test', 'fixtures', 'mtr-fixtures', 'real-ap')
+const FIXTURE_DIR = path.join(REPO_ROOT, 'src', 'test', 'fixtures', 'smokeping')
+const MANIFEST_PATH = path.join(FIXTURE_DIR, 'fixtures.json')
 const XML_DIR = path.join(FIXTURE_DIR, 'xml')
 const IMAGES_DIR = path.join(FIXTURE_DIR, 'images')
 const OUT_DIR = path.join(FIXTURE_DIR, 'points')
 const RANGE_HOURS = 3
+
+interface LockedParity {
+  mismatchPct: number
+  rmsDelta: number
+}
+
+interface ManifestFixtureEntry {
+  anchorTs: number
+  locked: LockedParity
+  name: string
+  pointsPath: string
+  referencePngPath: string
+  upperLimitMs: number | null
+}
+
+interface FixturesManifest {
+  description: string
+  fixtures: ManifestFixtureEntry[]
+  pixelThreshold: number
+  rangeHours: number
+  toleranceRms: number
+  tolerancePct: number
+}
 
 interface ExtractedFixture {
   anchorTs: number
@@ -158,32 +182,34 @@ async function readMaxheightAsync(fixtureName: string): Promise<number | null> {
   return Math.max(...values) * 1000
 }
 
+async function loadManifest(): Promise<FixturesManifest> {
+  return JSON.parse(await readFile(MANIFEST_PATH, 'utf8')) as FixturesManifest
+}
+
 async function run(): Promise<void> {
   await execa('mkdir', ['-p', OUT_DIR])
   const tmpRoot = await mkdtemp(path.join(tmpdir(), 'hopwatch-extract-'))
+  const existing = await loadManifest()
   const entries = (await readdir(XML_DIR))
     .filter((name) => name.endsWith('.xml.gz'))
     .map((name) => path.join(XML_DIR, name))
     .sort()
 
-  const index: Array<{
-    anchorTs: number
-    name: string
-    pointsPath: string
-    referencePngPath: string
-    upperLimitMs: number | null
-  }> = []
-
+  const nextFixtures: ManifestFixtureEntry[] = []
   for (const xmlPath of entries) {
     const fixture = await extractFixture(xmlPath, tmpRoot)
-    if (fixture == null) {
-      continue
-    }
+    if (fixture == null) continue
 
     const outPath = path.join(OUT_DIR, `${fixture.name}.points.json`)
     await writeFile(outPath, `${JSON.stringify({ points: fixture.points }, null, 2)}\n`)
-    index.push({
+    // Preserve the locked parity numbers across regenerations. A relock only
+    // happens via `UPDATE_PARITY_BASELINE=1 bun run test -- chart-parity`, so
+    // that the lock always reflects a measured run. New fixtures start at
+    // zero so they fail loudly until intentionally locked.
+    const prior = existing.fixtures.find((entry) => entry.name === fixture.name)
+    nextFixtures.push({
       anchorTs: fixture.anchorTs,
+      locked: prior?.locked ?? { mismatchPct: 0, rmsDelta: 0 },
       name: fixture.name,
       pointsPath: path.relative(FIXTURE_DIR, outPath),
       referencePngPath: fixture.referencePngPath,
@@ -192,11 +218,13 @@ async function run(): Promise<void> {
     process.stdout.write(`extracted ${fixture.name} (${fixture.points.length} points)\n`)
   }
 
-  await writeFile(
-    path.join(FIXTURE_DIR, 'index.json'),
-    `${JSON.stringify({ rangeHours: RANGE_HOURS, fixtures: index }, null, 2)}\n`,
-  )
-  process.stdout.write(`wrote ${path.join(FIXTURE_DIR, 'index.json')}\n`)
+  const manifest: FixturesManifest = {
+    ...existing,
+    rangeHours: RANGE_HOURS,
+    fixtures: nextFixtures,
+  }
+  await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`)
+  process.stdout.write(`wrote ${MANIFEST_PATH}\n`)
 }
 
 run().catch((err: unknown) => {

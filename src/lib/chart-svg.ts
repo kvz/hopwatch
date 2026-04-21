@@ -349,7 +349,7 @@ export function renderChartSvg(
       .join('') + probeCountLabel
 
   // Column positions measured against rrdtool/SmokePing reference PNGs at 697×297.
-  // See docs/mtr-fixtures/real-ap/images/General/Cloudflare_last_10800.png.
+  // See src/test/fixtures/smokeping/images/General/Cloudflare_last_10800.png.
   const statsLabelRightX = padding.left + 23
   const statsColStart = padding.left + 32
   const statsColWidth = 86

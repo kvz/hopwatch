@@ -220,19 +220,24 @@ bun run build    # cross-compile bin-build/hopwatch-{target}
 
 ## Visual regression testing
 
-We pin pixel-output parity against SmokePing reference PNGs (stored under
-`src/test/fixtures/real-ap/`) with a per-fixture mismatch budget in
-`src/test/parity-baseline.json`. Tests run inside a Docker image with a
-pinned DejaVu font set so results are reproducible across CI and
-workstations:
+We pin pixel-output parity against SmokePing reference PNGs stored under
+`src/test/fixtures/smokeping/`. Each fixture's locked `mismatchPct` and
+`rmsDelta` live in `fixtures.json` alongside the points + reference PNG
+that produced them. The vendored DejaVu Mono font under `vendor/fonts/`
+keeps rasterization reproducible across CI and workstations:
 
 ```bash
-bun run test             # bare-metal, fast loop
-bun run test:docker      # parity with CI
+bun run test                                         # normal run (CI + local)
+bun run test:docker                                  # parity with CI
+UPDATE_PARITY_BASELINE=1 bun run test -- chart-parity # relock after an intentional change
+bun run scripts/update-smokeping-fixtures.ts          # regenerate points from RRDs
 ```
 
-CI fails if any fixture drifts more than the tolerated mismatch or RMS delta.
-On failure the rendered vs reference diff PNGs are uploaded as CI artifacts.
+CI fails if any fixture's mismatchPct or rmsDelta drifts outside the
+per-manifest `tolerancePct` / `toleranceRms` of its locked value — in
+either direction, so improvements must be re-locked explicitly rather
+than silently banked. On failure the rendered vs reference diff PNGs are
+uploaded as CI artifacts.
 
 ## hopwatch vs SmokePing
 

@@ -49,6 +49,6 @@ jobs:
         with:
           name: visual-diffs
           path: |
-            src/test/fixtures/mtr-fixtures/real-ap/diff-snapshots/
+            src/test/fixtures/smokeping/diff-snapshots/
           retention-days: 7
           if-no-files-found: ignore

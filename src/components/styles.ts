@@ -249,11 +249,18 @@ th.is-sortable:focus-visible { outline: 2px solid var(--accent); outline-offset:
 th.is-sortable::after {
   content: '↕';
   margin-left: 6px;
-  font-size: 11px;
-  opacity: 0.35;
+  font-size: 0.9em;
+  opacity: 0.4;
 }
-th.is-sortable[aria-sort="ascending"]::after { content: '▲'; opacity: 1; color: var(--accent); }
-th.is-sortable[aria-sort="descending"]::after { content: '▼'; opacity: 1; color: var(--accent); }
+th.is-sortable[aria-sort="ascending"]::after,
+th.is-sortable[aria-sort="descending"]::after {
+  opacity: 1;
+  color: var(--accent);
+  font-size: 1em;
+  font-weight: 700;
+}
+th.is-sortable[aria-sort="ascending"]::after { content: ' ▲'; }
+th.is-sortable[aria-sort="descending"]::after { content: ' ▼'; }
 
 code, pre { font-family: ui-monospace, SFMono-Regular, monospace; }
 pre {

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -121,6 +121,45 @@ describe('runCollector', () => {
 
     expect(errorSpy).toHaveBeenCalled()
     expect(result.failedTargetSlugs).toEqual(['bad.example'])
+  })
+
+  test('one target with an unrollable snapshot does not abort rollups for other targets', async () => {
+    // Seeds target "bad.example" with a snapshot whose collectedAt passes the
+    // Zod schema but fails getCollectedAtDate's strict format check. Before the
+    // fix, the resulting throw inside aggregateSnapshotsToRollupBuckets
+    // propagated out of updateRollupsForTargets and turned the whole collector
+    // cycle into a failure, even though "good.example" had succeeded.
+    const config = buildConfig(dataDir, ['bad.example', 'good.example'])
+    const logger = createLogger({ level: 'error', pretty: false })
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+    const badDir = path.join(dataDir, 'bad.example')
+    await mkdir(badDir, { recursive: true })
+    const malformedSnapshot = {
+      collectedAt: 'not-a-real-timestamp',
+      fileName: 'legacy.json',
+      host: 'bad.example',
+      label: 'bad.example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      rawEvents: [{ kind: 'host', hopIndex: 0, host: 'final.example' }],
+      schemaVersion: 2,
+      target: 'bad.example',
+    }
+    await writeFile(path.join(badDir, 'legacy.json'), JSON.stringify(malformedSnapshot))
+
+    const runCommand = async (): Promise<{ stderr: string; stdout: string }> => ({
+      stdout: MTR_OUTPUT,
+      stderr: '',
+    })
+
+    await expect(runCollector(config, logger, { runCommand })).resolves.toBeDefined()
+
+    const goodEntries = await readdir(path.join(dataDir, 'good.example'))
+    expect(goodEntries).toContain('hourly.rollup.json')
+    expect(goodEntries).toContain('daily.rollup.json')
+
+    expect(errorSpy).toHaveBeenCalled()
   })
 
   test('returns an empty failedTargetSlugs list when every target succeeds', async () => {

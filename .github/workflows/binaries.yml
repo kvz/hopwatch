@@ -8,10 +8,20 @@ on:
       tag:
         description: "Release tag to build binaries for (e.g. v0.1.0)"
         required: true
+  # Called by release.yml after changesets publishes a GitHub release.
+  # Events emitted by GITHUB_TOKEN (including `release.published` from
+  # changesets/action) do not start downstream workflow runs, so we rely on an
+  # explicit workflow_call to kick this pipeline off.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build binaries for"
+        required: true
+        type: string
 
 concurrency:
   cancel-in-progress: false
-  group: binaries-${{ github.event.release.tag_name || github.event.inputs.tag }}
+  group: binaries-${{ inputs.tag || github.event.release.tag_name || github.event.inputs.tag }}
 
 permissions:
   contents: write
@@ -35,12 +45,31 @@ jobs:
     steps:
       - name: Resolve tag
         id: tag
+        # Free-form `workflow_dispatch.inputs.tag` and downstream release names
+        # should never be interpolated straight into shell. A tag like
+        # `"; rm -rf /` would otherwise execute on the release runner with
+        # `contents: write`. Pass each candidate through `env:` and quote the
+        # shell expansion so the value is always treated as data.
+        env:
+          CALL_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${{ github.event.release.tag_name }}" ]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$CALL_TAG" ]; then
+            resolved="$CALL_TAG"
+          elif [ -n "$RELEASE_TAG" ]; then
+            resolved="$RELEASE_TAG"
           else
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            resolved="$DISPATCH_TAG"
           fi
+          # Defence in depth: only allow the SemVer-ish tag characters we
+          # actually emit via changesets (digits, dots, letters, hyphen, plus,
+          # underscore, leading `v`). Anything else is refused up-front.
+          if ! printf '%s' "$resolved" | grep -Eq '^[A-Za-z0-9._+-]+$'; then
+            echo "refusing tag with unexpected characters: $resolved" >&2
+            exit 1
+          fi
+          echo "tag=$resolved" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
@@ -55,14 +84,19 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build binary
+        env:
+          BUN_TARGET: ${{ matrix.target }}
+          ASSET_NAME: ${{ matrix.asset }}
         run: |
           mkdir -p bin-build
           bun build ./src/bin/hopwatch.ts \
             --compile \
-            --target=${{ matrix.target }} \
-            --outfile ./bin-build/${{ matrix.asset }}
+            --target="$BUN_TARGET" \
+            --outfile "./bin-build/$ASSET_NAME"
 
       - name: Package
+        env:
+          ASSET_NAME: ${{ matrix.asset }}
         run: |
           cd bin-build
           # The release asset keeps its platform suffix (for disambiguation on
@@ -70,15 +104,17 @@ jobs:
           # binary `hopwatch`. That way the install commands in README.md —
           # `tar -xz -C /usr/local/bin` followed by `./hopwatch` — work without
           # a post-extract rename.
-          cp ${{ matrix.asset }} hopwatch
-          tar -czf ${{ matrix.asset }}.tar.gz hopwatch
-          sha256sum ${{ matrix.asset }}.tar.gz > ${{ matrix.asset }}.tar.gz.sha256
+          cp "$ASSET_NAME" hopwatch
+          tar -czf "$ASSET_NAME.tar.gz" hopwatch
+          sha256sum "$ASSET_NAME.tar.gz" > "$ASSET_NAME.tar.gz.sha256"
 
       - name: Attach to GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          ASSET_NAME: ${{ matrix.asset }}
         run: |
-          gh release upload "${{ steps.tag.outputs.tag }}" \
-            bin-build/${{ matrix.asset }}.tar.gz \
-            bin-build/${{ matrix.asset }}.tar.gz.sha256 \
+          gh release upload "$RELEASE_TAG" \
+            "bin-build/$ASSET_NAME.tar.gz" \
+            "bin-build/$ASSET_NAME.tar.gz.sha256" \
             --clobber

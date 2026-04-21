@@ -289,4 +289,136 @@ describe('updateTargetRollups daily RTT fidelity', () => {
     // The 08:00 and 08:15 snapshots must NOT be reparsed on this incremental run.
     expect(filesRead).toEqual(['20260420T090000Z.json'])
   })
+
+  test('daily bucket keeps growing as new hourly snapshots arrive within the same day', async () => {
+    // Regression: the incremental `sinceFileName` was derived only from the latest
+    // hourly bucket, so once the current hour advanced past the day's first hour
+    // the regenerated daily bucket covered fewer snapshots than the stored one.
+    // mergeRollupBuckets' snapshotCount guard then kept the stale daily bucket
+    // and the long-range chart stopped updating until a full rebuild.
+    const existingHourly = {
+      buckets: [
+        {
+          bucketStart: '2026-04-20T09:00:00.000Z',
+          destinationLossPct: 0,
+          destinationReplyCount: 4,
+          destinationSentCount: 4,
+          histogram: [{ count: 4, upperBoundMs: 10 }],
+          rttAvgMs: 5,
+          rttMaxMs: 5,
+          rttMinMs: 5,
+          rttP50Ms: 5,
+          rttP90Ms: 5,
+          rttP99Ms: 5,
+          snapshotCount: 4,
+        },
+        {
+          bucketStart: '2026-04-20T10:00:00.000Z',
+          destinationLossPct: 0,
+          destinationReplyCount: 4,
+          destinationSentCount: 4,
+          histogram: [{ count: 4, upperBoundMs: 10 }],
+          rttAvgMs: 5,
+          rttMaxMs: 5,
+          rttMinMs: 5,
+          rttP50Ms: 5,
+          rttP90Ms: 5,
+          rttP99Ms: 5,
+          snapshotCount: 4,
+        },
+      ],
+      generatedAt: '2026-04-20T10:45:00.000Z',
+      granularity: 'hour',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      schemaVersion: 1,
+      target: 'example.com',
+    }
+    const existingDaily = {
+      buckets: [
+        {
+          bucketStart: '2026-04-20T00:00:00.000Z',
+          destinationLossPct: 0,
+          destinationReplyCount: 8,
+          destinationSentCount: 8,
+          histogram: [{ count: 8, upperBoundMs: 10 }],
+          rttAvgMs: 5,
+          rttMaxMs: 5,
+          rttMinMs: 5,
+          rttP50Ms: 5,
+          rttP90Ms: 5,
+          rttP99Ms: 5,
+          snapshotCount: 8,
+        },
+      ],
+      generatedAt: '2026-04-20T10:45:00.000Z',
+      granularity: 'day',
+      host: 'example.com',
+      label: 'example',
+      observer: 'test-observer',
+      probeMode: 'default',
+      schemaVersion: 1,
+      target: 'example.com',
+    }
+    await writeFile(
+      path.join(targetDir, 'hourly.rollup.json'),
+      JSON.stringify(existingHourly, null, 2),
+    )
+    await writeFile(
+      path.join(targetDir, 'daily.rollup.json'),
+      JSON.stringify(existingDaily, null, 2),
+    )
+
+    // The raw snapshots that backed the stored rollups are still on disk (pruning
+    // has not yet run), plus one new snapshot at 11:00.
+    const snapshotStamps = [
+      '20260420T090000Z',
+      '20260420T091500Z',
+      '20260420T093000Z',
+      '20260420T094500Z',
+      '20260420T100000Z',
+      '20260420T101500Z',
+      '20260420T103000Z',
+      '20260420T104500Z',
+      '20260420T110000Z',
+    ]
+    for (const stamp of snapshotStamps) {
+      await writeFile(
+        path.join(targetDir, `${stamp}.json`),
+        JSON.stringify({
+          collectedAt: stamp,
+          fileName: `${stamp}.json`,
+          host: 'example.com',
+          label: 'example',
+          observer: 'test-observer',
+          probeMode: 'default',
+          rawEvents: destinationEvents(1, [5000]),
+          schemaVersion: 2,
+          target: 'example.com',
+        }),
+      )
+    }
+
+    await updateTargetRollups(
+      targetDir,
+      {
+        host: 'example.com',
+        label: 'example',
+        observer: 'test-observer',
+        probeMode: 'default',
+        target: 'example.com',
+      },
+      new Date('2026-04-20T11:15:00Z'),
+    )
+
+    const daily = JSON.parse(await readFile(path.join(targetDir, 'daily.rollup.json'), 'utf8'))
+    const todayBucket = daily.buckets.find(
+      (b: { bucketStart: string }) => b.bucketStart === '2026-04-20T00:00:00.000Z',
+    )
+    expect(todayBucket).toBeDefined()
+    expect(todayBucket.snapshotCount).toBe(9)
+    expect(todayBucket.destinationSentCount).toBe(9)
+  })
 })

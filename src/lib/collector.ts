@@ -166,9 +166,14 @@ export async function removeOldSnapshots(
 }
 
 async function updateLatestSymlink(outputFile: string, latestFile: string): Promise<void> {
+  // Point at the snapshot by its basename so the link stays valid if the
+  // whole data directory is moved or restored under a different absolute path
+  // (e.g. `/var/lib/hopwatch` → `/mnt/backup/hopwatch`). Using the absolute
+  // `outputFile` here worked in place but broke after relocation.
+  const relativeTarget = path.basename(outputFile)
   try {
     const existingTarget = await readlink(latestFile)
-    if (existingTarget === outputFile) {
+    if (existingTarget === relativeTarget) {
       return
     }
   } catch {
@@ -181,7 +186,7 @@ async function updateLatestSymlink(outputFile: string, latestFile: string): Prom
   // replaces the old inode atomically on the same filesystem.
   const stagingFile = `${latestFile}.new.${process.pid}.${Date.now()}`
   await rm(stagingFile, { force: true })
-  await symlink(outputFile, stagingFile)
+  await symlink(relativeTarget, stagingFile)
   await rename(stagingFile, latestFile)
 }
 
@@ -385,22 +390,34 @@ async function updateRollupsForTargets(
   options: CollectorOptions,
   nowDate: Date,
   fullRebuild = false,
+  logger?: Logger,
 ): Promise<void> {
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
-    const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
-    await updateTargetRollups(
-      targetDir,
-      {
-        host: target.host,
-        label: target.label,
-        observer: nodeLabel,
-        probeMode: target.probeMode,
-        target: target.host,
-      },
-      nowDate,
-      undefined,
-      { fullRebuild },
-    )
+    try {
+      const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
+      await updateTargetRollups(
+        targetDir,
+        {
+          host: target.host,
+          label: target.label,
+          observer: nodeLabel,
+          probeMode: target.probeMode,
+          target: target.host,
+        },
+        nowDate,
+        undefined,
+        { fullRebuild },
+      )
+    } catch (err) {
+      // Isolate rollup failures per-target. Without this a single unparseable
+      // snapshot or transient write error aborted the rollup phase for every
+      // remaining target and turned the whole collector cycle into a failure,
+      // even when fresh raw snapshots had already been persisted.
+      if (!(err instanceof Error)) {
+        throw new Error(`Was thrown a non-error: ${err}`)
+      }
+      logger?.error('rollup failed', { error: err.message, target: target.slug })
+    }
   })
 }
 
@@ -455,7 +472,7 @@ export async function runCollector(
     }
   })
 
-  await updateRollupsForTargets(nodeLabel, options, nowDate)
+  await updateRollupsForTargets(nodeLabel, options, nowDate, false, logger)
 
   return { failedTargetSlugs }
 }

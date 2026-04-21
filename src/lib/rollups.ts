@@ -369,13 +369,30 @@ export async function updateTargetRollups(
   const existingDaily = await readRollupFile(dailyRollupPath, 'day')
 
   let sinceFileName: string | undefined
-  if (!hooks.fullRebuild && existingHourly != null && existingHourly.buckets.length > 0) {
-    const latestBucketStart = existingHourly.buckets
+  if (!hooks.fullRebuild) {
+    // Use the earlier of (latest hourly bucket start, latest daily bucket start)
+    // as the incremental cutoff. Deriving it from only the hourly rollup freezes
+    // the daily rollup: once the current hour advances past the day's first hour,
+    // the regenerated daily bucket for today covers fewer snapshots than the
+    // stored one, and mergeRollupBuckets' snapshotCount guard (which exists so
+    // that raw-retention pruning doesn't silently erase fuller historical
+    // buckets) keeps the stale daily bucket. The daily bucket start is always
+    // at or before the latest hourly bucket start, so using it as the floor
+    // regenerates both current buckets with a complete view.
+    const latestHourlyStart = existingHourly?.buckets
       .map((bucket) => bucket.bucketStart)
       .sort()
       .at(-1)
-    if (latestBucketStart != null) {
-      const converted = isoBucketStartToFileName(latestBucketStart)
+    const latestDailyStart = existingDaily?.buckets
+      .map((bucket) => bucket.bucketStart)
+      .sort()
+      .at(-1)
+    const candidates: string[] = []
+    if (latestHourlyStart != null) candidates.push(latestHourlyStart)
+    if (latestDailyStart != null) candidates.push(latestDailyStart)
+    if (candidates.length > 0) {
+      const earliest = candidates.sort()[0]
+      const converted = isoBucketStartToFileName(earliest)
       if (converted != null) sinceFileName = converted
     }
   }

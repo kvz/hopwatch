@@ -135,6 +135,15 @@ describe('parseListenAddress', () => {
   test('rejects out-of-range ports', () => {
     expect(() => parseListenAddress(':70000')).toThrow(/Invalid listen port/)
   })
+
+  test('rejects empty port values instead of coercing to ephemeral port 0', () => {
+    // `Number("")` is 0 in JS; without an explicit empty-string check, a
+    // misconfigured `listen = "127.0.0.1:"` would silently bind to a random
+    // ephemeral port instead of surfacing the typo.
+    expect(() => parseListenAddress('127.0.0.1:')).toThrow(/Invalid listen port/)
+    expect(() => parseListenAddress(':')).toThrow(/Invalid listen port/)
+    expect(() => parseListenAddress('[::1]:')).toThrow(/Invalid listen address|Invalid listen port/)
+  })
 })
 
 describe('resolveServeFilePath', () => {

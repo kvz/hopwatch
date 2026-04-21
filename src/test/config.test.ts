@@ -119,6 +119,27 @@ engine = "native"
     await expect(loadConfig(configPath)).rejects.toThrow(/IPv6/)
   })
 
+  test('strips a trailing slash from an absolute data_dir so safeResolve still accepts served paths', async () => {
+    // safeResolve compares `resolved !== root && !resolved.startsWith(root + sep)`.
+    // When `data_dir = "/var/lib/hopwatch/"` is preserved verbatim, the prefix check
+    // never matches (the resolved path is `/var/lib/hopwatch/file`, not
+    // `/var/lib/hopwatch//file`), so every served file 403s. Normalize the value at
+    // config load time.
+    const trailing = `${dir}/`
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${trailing}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.resolvedDataDir).toBe(dir)
+  })
+
   test('rejects engine="native" combined with probe_mode="netns"', async () => {
     const configPath = await writeConfig(`
 [server]

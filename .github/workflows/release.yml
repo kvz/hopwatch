@@ -17,6 +17,9 @@ jobs:
   release:
     name: changesets
     runs-on: ubuntu-24.04
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
+      publishedPackages: ${{ steps.changesets.outputs.publishedPackages }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,6 +34,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Create Release Pull Request or GitHub Release
+        id: changesets
         uses: changesets/action@v1
         with:
           title: "chore: release"
@@ -39,3 +43,24 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The `release.published` event emitted by changesets/action running under
+  # GITHUB_TOKEN does not trigger binaries.yml's own `release` listener
+  # (GitHub intentionally suppresses workflow chaining from the default token
+  # to prevent loops). Calling binaries.yml via `workflow_call` is therefore
+  # the only way to publish tarballs automatically for a changesets release;
+  # without this, tagged releases would land on the Releases page with the
+  # README install commands pointing at a 404.
+  binaries:
+    name: build binaries
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.release.outputs.publishedPackages) }}
+    uses: ./.github/workflows/binaries.yml
+    with:
+      tag: v${{ matrix.package.version }}

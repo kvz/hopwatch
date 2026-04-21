@@ -223,8 +223,13 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
     peerIds.add(peer.id)
   }
 
+  // `path.resolve()` normalizes both absolute and relative data_dir values —
+  // in particular it strips trailing separators. safeResolve() later compares
+  // `resolved.startsWith(root + sep)`, and a stored `/var/lib/hopwatch/` would
+  // otherwise fail every prefix check because the resolved target is
+  // `/var/lib/hopwatch/file`, not `/var/lib/hopwatch//file`.
   const resolvedDataDir = path.isAbsolute(config.server.data_dir)
-    ? config.server.data_dir
+    ? path.resolve(config.server.data_dir)
     : path.resolve(path.dirname(absolute), config.server.data_dir)
 
   return { ...config, sourcePath: absolute, resolvedDataDir }

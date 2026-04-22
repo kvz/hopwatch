@@ -10,6 +10,7 @@ import {
   loadChartDefinitions,
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
+import { readRollupFile } from './rollups.ts'
 import {
   listSnapshotFileNames,
   parseCollectedAt,
@@ -145,11 +146,13 @@ export async function renderTargetIndex(
     .filter((hop) => hop.host !== '???')
     .slice(0, 5)
   const charts = await loadChartDefinitions(targetDir, snapshots, now)
+  const hourlyRollup = await readRollupFile(path.join(targetDir, 'hourly.rollup.json'), 'hour')
 
   const html = renderDocument(
     <TargetIndexPage
       charts={charts}
       hopIssues={hopIssues}
+      hourlyBuckets={hourlyRollup?.buckets ?? []}
       lastDay={lastDay}
       lastWeek={lastWeek}
       latestSnapshot={latestSnapshot}

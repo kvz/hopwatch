@@ -247,6 +247,12 @@ code dfn, dfn code { border-bottom: 0; }
 }
 
 .graph-caption { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.hop-heatmap-card { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.hop-heatmap-svg { display: block; height: auto; max-width: 100%; }
+.loss-funnel-card { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.loss-funnel-svg { display: block; height: auto; max-width: 100%; }
+.event-timeline-card { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.event-timeline-svg { display: block; height: auto; max-width: 100%; }
 .graph-card--empty {
   min-height: 120px;
   display: flex;

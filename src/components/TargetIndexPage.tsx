@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from 'react'
 import type { ChartDefinition } from '../lib/chart.ts'
 import type { PeerConfig } from '../lib/config.ts'
+import type { MtrRollupBucket } from '../lib/rollups.ts'
 import {
   formatAbsoluteCollectedAt,
   formatLoss,
@@ -12,14 +13,22 @@ import {
 import type { HopAggregate } from '../lib/snapshot-aggregate.ts'
 import { ChartCard } from './ChartCard.tsx'
 import { DiagnosisSummary } from './DiagnosisSummary.tsx'
+import { EventTimeline } from './EventTimeline.tsx'
+import { HopHeatmap } from './HopHeatmap.tsx'
 import { HopHost } from './HopHost.tsx'
 import { Layout } from './Layout.tsx'
+import { LossFunnel } from './LossFunnel.tsx'
 import { RelativeTime } from './RelativeTime.tsx'
 import { TopNav } from './TopNav.tsx'
+
+const HEATMAP_RANGE_MS = 30 * 60 * 60 * 1000
+const FUNNEL_RANGE_MS = 7 * 24 * 60 * 60 * 1000
+const TIMELINE_RANGE_MS = 10 * 24 * 60 * 60 * 1000
 
 interface TargetIndexPageProps {
   charts: ChartDefinition[]
   hopIssues: HopAggregate[]
+  hourlyBuckets: MtrRollupBucket[]
   lastDay: { averageDestinationLossPct: number | null; sampleCount: number }
   lastWeek: {
     averageDestinationLossPct: number | null
@@ -39,6 +48,7 @@ interface TargetIndexPageProps {
 export function TargetIndexPage({
   charts,
   hopIssues,
+  hourlyBuckets,
   lastDay,
   lastWeek,
   latestSnapshot,
@@ -72,6 +82,9 @@ export function TargetIndexPage({
         sections={[
           { href: '#summary', label: 'Summary' },
           { href: '#history', label: 'Latency & loss history' },
+          { href: '#hop-heatmap', label: 'Per-hop heatmap' },
+          { href: '#loss-funnel', label: 'Loss funnel' },
+          { href: '#event-timeline', label: 'Event timeline' },
           { href: '#raw', label: 'Latest raw output' },
           { href: '#diagnosis', label: 'Latest diagnosis' },
           { href: '#problematic-hops', label: 'Problematic hops (7d)' },
@@ -141,6 +154,39 @@ export function TargetIndexPage({
             ))}
           </div>
         </div>
+      </section>
+
+      <section className="panel" id="hop-heatmap">
+        <h2>Per-hop heatmap (30h)</h2>
+        <p className="panel-hint">
+          Color-coded per-hop loss across the last 30 hourly rollup buckets. Rows are routers
+          observed in the traceroute path (ordered by average hop index); columns are hours. Useful
+          for spotting where loss first appears and whether it moves between hops over time.
+        </p>
+        <HopHeatmap buckets={hourlyBuckets} now={now} rangeLabel="30h" rangeMs={HEATMAP_RANGE_MS} />
+      </section>
+
+      <section className="panel" id="loss-funnel">
+        <h2>Loss funnel (7d)</h2>
+        <p className="panel-hint">
+          Weighted average reply-loss per router seen in the traceroute, ordered by path position.
+          The first sharp rise from left to right is usually where real loss starts to accumulate.
+        </p>
+        <LossFunnel buckets={hourlyBuckets} now={now} rangeLabel="7d" rangeMs={FUNNEL_RANGE_MS} />
+      </section>
+
+      <section className="panel" id="event-timeline">
+        <h2>Event timeline (10d)</h2>
+        <p className="panel-hint">
+          Notable events derived from the hourly rollup stream: severe destination loss, path
+          changes, and new hops appearing along the traceroute.
+        </p>
+        <EventTimeline
+          buckets={hourlyBuckets}
+          now={now}
+          rangeLabel="10d"
+          rangeMs={TIMELINE_RANGE_MS}
+        />
       </section>
 
       <section className="panel" id="raw">

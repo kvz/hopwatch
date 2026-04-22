@@ -137,3 +137,12 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+
+# hopwatch
+bin-build/
+test-artifacts/
+.hopwatch-data/
+hopwatch-data/
+src/test/fixtures/smokeping/diff-snapshots/
+.*.bun-build

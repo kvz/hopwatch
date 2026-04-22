@@ -1,0 +1,55 @@
+[server]
+# Loopback-only by default — hop topology + reverse-DNS is sensitive and
+# hopwatch ships without auth. Front with nginx (see README) or set
+# `listen = "0.0.0.0:8080"` explicitly to expose on every interface.
+listen     = "127.0.0.1:8080"
+data_dir   = "./hopwatch-data"
+node_label = "dev"
+
+[probe]
+interval_seconds = 900
+packets          = 20
+ip_version       = 4
+mtr_bin          = "mtr"
+concurrency      = 3
+keep_days        = 14
+jitter_seconds   = 30
+# For targets with probe_mode = "netns", hopwatch runs:
+#   nsenter --mount=<namespace_dir>/<target.netns>/mnt/ns \
+#           --net=<namespace_dir>/<target.netns>/net/ns <mtr_bin> …
+# Leave empty unless you run probes from Linux network namespaces.
+namespace_dir    = ""
+
+[chart]
+# Rotated signature rendered along the right edge of every chart.
+# Defaults to "RRDTOOL / TOBI OETIKER" as attribution to Tobi Oetiker,
+# whose SmokePing/rrdtool work inspired hopwatch. Set to "" to hide.
+signature = "RRDTOOL / TOBI OETIKER"
+
+[[target]]
+id    = "cloudflare"
+label = "Cloudflare public"
+host  = "cloudflare.com"
+
+[[target]]
+id    = "google-dns"
+label = "Google DNS"
+host  = "8.8.8.8"
+
+# Example netns target (requires probe.namespace_dir set to the host ns root):
+# [[target]]
+# id         = "google-via-allow-external"
+# label      = "Google (via allow-external ns)"
+# host       = "google.com"
+# probe_mode = "netns"
+# netns      = "allow-external"
+
+[[peer]]
+id    = "eu"
+url   = "https://hopwatch-eu.example.com"
+label = "EU"
+
+[[peer]]
+id    = "us"
+url   = "https://hopwatch-us.example.com"
+label = "US"

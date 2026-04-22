@@ -1,0 +1,38 @@
+hopwatch
+Copyright (c) 2026 Kevin van Zonneveld
+
+Licensed under the MIT License. See LICENSE.
+
+==============================================================================
+ACKNOWLEDGEMENTS
+==============================================================================
+
+hopwatch is a ground-up TypeScript re-implementation of a SmokePing-style
+network latency and packet-loss visualization tool. Its visual output
+deliberately matches SmokePing's so that operators familiar with SmokePing
+can read hopwatch charts without retraining.
+
+No SmokePing or rrdtool source code has been copied into this project.
+Algorithmic references that informed hopwatch's renderer:
+
+- SmokePing's `smokecol()` grayscale band mapping
+  (Smokeping.pm, author: Tobi Oetiker -- https://oss.oetiker.ch/smokeping/)
+
+- rrdtool's AREA+STACK rendering approach for stacked loss-tinted median
+  markers, and its axis/grid/dashing conventions
+  (rrdtool, author: Tobi Oetiker -- https://oss.oetiker.ch/rrdtool/)
+
+The short rotated signature rendered along the right edge of every
+chart -- by default "RRDTOOL / TOBI OETIKER" -- is retained as
+attribution and homage to Tobi Oetiker, whose work inspired hopwatch.
+The text is configurable via `[chart] signature` in hopwatch.toml (or
+the HOPWATCH_CHART_SIGNATURE environment variable); operators who
+customize it are encouraged to keep an attribution to Tobi Oetiker.
+
+hopwatch is not affiliated with, endorsed by, or sponsored by Tobi Oetiker,
+SmokePing, or rrdtool. It is an independent project.
+
+Where fixture reference PNGs are included for visual-regression testing
+purposes, they were produced by running SmokePing against public Internet
+endpoints; no copyrighted SmokePing imagery or assets are distributed
+beyond what operators of SmokePing would produce themselves.

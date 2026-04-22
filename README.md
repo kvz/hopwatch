@@ -192,6 +192,23 @@ loss-colored median markers, pink major grid, dashed minor grid, and the
 rotated `RRDTOOL / TOBI OETIKER` signature on the right edge (kept as
 [attribution](./NOTICE)).
 
+Per-target pages add three SmokePing-can't-do-this panels on top of the
+per-hop rollup (hourly MTR aggregates, 90d retention):
+
+- **Per-hop heatmap (30h).** One row per unique router hostname (sorted
+  by traceroute position), one column per hourly bucket. Cell fill uses
+  the SmokePing loss palette; a neutral gray fills `(host × bucket)`
+  pairs where that router wasn't observed. ECMP siblings collapse into
+  one row with a `[5–6]` hop-index range label. Makes it obvious which
+  hop is flapping without eyeballing every mini-chart.
+- **Loss funnel (7d).** One bar per hop in path order, colored by
+  weighted loss (aggregated sent/reply across the window, not an average
+  of averages). Tells you at a glance whether loss is introduced by the
+  first-mile CPE, a transit peer, or only the destination.
+- **Event timeline (10d).** Ticks for severe destination loss (≥50%),
+  path changes (host set shifted between buckets), and first-sighting
+  new hops. Three lanes so the kinds stay visually distinct.
+
 ## Architecture
 
 - **Single daemon.** `hopwatch daemon` runs probes on an internal scheduler

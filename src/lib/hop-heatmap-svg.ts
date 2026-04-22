@@ -124,15 +124,14 @@ export function renderHopHeatmapSvg(
     }
   }
 
-  const rowBackgrounds: string[] = []
+  // Fill the entire plot area with the "no data" color so any (host × bucket)
+  // cell that lacks a rollup entry reads as a distinct neutral gray. Colored
+  // cells render on top, so real data never gets hidden.
+  const noDataBackground = `<rect x="${padding.left}" y="${padding.top}" width="${chartWidth}" height="${chartHeight}" fill="#eeeeee" shape-rendering="crispEdges" />`
+
   const rowLabels: string[] = []
   for (let i = 0; i < hosts.length; i += 1) {
     const y = padding.top + i * rowHeight
-    if (i % 2 === 1) {
-      rowBackgrounds.push(
-        `<rect x="${padding.left}" y="${y}" width="${chartWidth}" height="${rowHeight - 1}" fill="#f7f7f2" shape-rendering="crispEdges" />`,
-      )
-    }
     const label = shortenHost(hosts[i].host, 28)
     const hopRange = formatHopIndexRange(hosts[i].hopIndexes)
     rowLabels.push(
@@ -175,11 +174,13 @@ export function renderHopHeatmapSvg(
       return `<rect x="${x}" y="${legendY - 9}" width="${legendSwatchWidth}" height="10" fill="${entry.color}" shape-rendering="crispEdges" /><text x="${x + legendSwatchWidth + legendLabelGap}" y="${legendY - 1}" font-size="9" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#333">${label}</text>`
     })
     .join('')
+  const noDataSwatchX = legendStartX + legendEntries.length * legendEntryWidth + 12
+  const noDataSwatch = `<rect x="${noDataSwatchX}" y="${legendY - 9}" width="${legendSwatchWidth}" height="10" fill="#eeeeee" shape-rendering="crispEdges" /><text x="${noDataSwatchX + legendSwatchWidth + legendLabelGap}" y="${legendY - 1}" font-size="9" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" fill="#333">no data</text>`
   const legendLabel = `<text x="${padding.left - 8}" y="${legendY - 1}" font-size="10" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" font-weight="bold" fill="#333" text-anchor="end">loss:</text>`
 
   return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.title)}" class="hop-heatmap-svg" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace">
   <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />
-  ${rowBackgrounds.join('')}
+  ${noDataBackground}
   ${xGridLines.join('')}
   ${cellRects.join('')}
   ${plotBorder}
@@ -188,6 +189,7 @@ export function renderHopHeatmapSvg(
   ${xLabels.join('')}
   ${legendLabel}
   ${legendSvg}
+  ${noDataSwatch}
 </svg>`
 }
 

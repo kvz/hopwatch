@@ -235,6 +235,69 @@ bun run dev      # run against ./hopwatch.example.toml
 bun run build    # cross-compile bin-build/hopwatch-{target}
 ```
 
+## Contributing
+
+### Proposing a change
+
+1. Branch from `main` and commit your work.
+2. Add a changeset describing the user-visible effect — `bun run changeset`
+   (interactive) or drop a `.changeset/<slug>.md` file like:
+
+   ```markdown
+   ---
+   "hopwatch": patch
+   ---
+
+   One-line summary of the change that belongs in the release notes.
+   ```
+
+   Pick `patch` for fixes, `minor` for additive features, `major` for
+   breaking changes. No changeset is needed for doc-only or infra-only
+   PRs; the release workflow simply won't open a Version Packages PR for
+   them.
+3. Run `bun run check` locally and open the PR. CI runs format, lint,
+   typecheck, and vitest (including SmokePing pixel-parity fixtures).
+4. Squash-merge once green. Commit history on `main` stays linear.
+
+### Cutting a release
+
+Releases are fully automated via [changesets](https://github.com/changesets/changesets)
+and GitHub Actions. You do not touch `package.json#version` or git tags by
+hand.
+
+1. **Merge a PR with a changeset into `main`.** The `release` workflow
+   (`.github/workflows/release.yml`) opens (or updates) a pull request
+   titled `chore: release` that bumps `package.json#version` and folds
+   the pending `.changeset/*.md` entries into `CHANGELOG.md`.
+2. **Review and merge the `chore: release` PR.** On merge, the same
+   workflow runs `changeset tag` (creates the `vX.Y.Z` git tag),
+   publishes a GitHub Release with the generated changelog, and then
+   calls the `binaries` workflow via `workflow_call`.
+3. **`binaries.yml` cross-compiles the matrix** —
+   `linux-{x64,arm64}` and `darwin-{x64,arm64}` — using
+   `bun build --compile --target=bun-<target>` and attaches each
+   `hopwatch-<os>-<arch>.tar.gz` plus its `.sha256` to the release.
+4. **Verify the release.** The install commands in the [Quick start](#quick-start)
+   and [Production install](#production-install-on-ubuntu) sections pull
+   from `releases/latest/download/...`, so a healthy release makes both
+   recipes work without edits.
+
+If the `binaries` job fails after the release is already tagged, fix
+the workflow and re-run it via
+`gh workflow run binaries.yml -f tag=vX.Y.Z` — the job uploads with
+`--clobber` so re-running is idempotent. If the release itself is bad
+(e.g. wrong changelog, wrong version), delete the tag and release in the
+GitHub UI, revert the `chore: release` commit, and start over from a
+fresh Version Packages PR.
+
+### Local release dry run
+
+```bash
+bun run changeset:version   # simulate the version bump locally
+git diff                    # inspect package.json + CHANGELOG.md
+git checkout -- .           # discard; let CI do the real thing
+```
+
 ## Visual regression testing
 
 We pin pixel-output parity against SmokePing reference PNGs stored under

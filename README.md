@@ -259,6 +259,24 @@ bun run build    # cross-compile bin-build/hopwatch-{target}
    typecheck, and vitest (including SmokePing pixel-parity fixtures).
 4. Squash-merge once green. Commit history on `main` stays linear.
 
+### One-time repo setup
+
+The release pipeline requires two non-default repo settings. A fork or
+a freshly-created clone needs these flipped before the first release
+will land — without them the `release` workflow fails at "Create Release
+Pull Request" with `HttpError: GitHub Actions is not permitted to create
+or approve pull requests`:
+
+```bash
+gh api --method PUT repos/<owner>/<repo>/actions/permissions/workflow \
+  -f default_workflow_permissions=write \
+  -F can_approve_pull_request_reviews=true
+```
+
+(or in the UI: **Settings → Actions → General → Workflow permissions →
+Read and write permissions** *and* check **Allow GitHub Actions to
+create and approve pull requests**).
+
 ### Cutting a release
 
 Releases are fully automated via [changesets](https://github.com/changesets/changesets)
@@ -280,7 +298,27 @@ hand.
 4. **Verify the release.** The install commands in the [Quick start](#quick-start)
    and [Production install](#production-install-on-ubuntu) sections pull
    from `releases/latest/download/...`, so a healthy release makes both
-   recipes work without edits.
+   recipes work without edits. A quick end-to-end check:
+
+   ```bash
+   # Pick the asset matching your machine, e.g. hopwatch-linux-x64.
+   asset="hopwatch-darwin-arm64"
+   base="https://github.com/<owner>/<repo>/releases/latest/download/${asset}.tar.gz"
+   tmp=$(mktemp -d) && cd "$tmp"
+   curl -fsSL -O "${base}" && curl -fsSL -O "${base}.sha256"
+   shasum -a 256 -c "${asset}.tar.gz.sha256"   # "OK"
+   tar -xzf "${asset}.tar.gz" && ./hopwatch --version
+   ```
+
+   The printed version should match the tag you just released.
+
+> **Note — the `chore: release` PR has no CI checks.** The
+> changesets-created PR is authored by `GITHUB_TOKEN`, and GitHub
+> intentionally does not trigger downstream workflows for events emitted
+> by that token (otherwise workflows could loop). This means `check.yml`
+> never runs on the Version Packages PR. That's safe here because the
+> PR only mutates `package.json#version` and `CHANGELOG.md` — CI
+> already ran green on the source PR before it hit `main`.
 
 If the `binaries` job fails after the release is already tagged, fix
 the workflow and re-run it via

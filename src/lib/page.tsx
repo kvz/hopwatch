@@ -10,7 +10,7 @@ import {
   loadChartDefinitions,
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
-import { readRollupFile } from './rollups.ts'
+import { type MtrRollupBucket, readRollupFile } from './rollups.ts'
 import {
   listSnapshotFileNames,
   parseCollectedAt,
@@ -197,6 +197,7 @@ export async function renderRootIndex(
     aggregate: SnapshotAggregate
     diagnosisAggregate: DiagnosisAggregate
     hopIssues: HopAggregate[]
+    hourlyBuckets: MtrRollupBucket[]
     lastWeekSnapshots: SnapshotSummary[]
     summary: SnapshotSummary
     targetSlug: string
@@ -210,10 +211,20 @@ export async function renderRootIndex(
     }
 
     const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
+    // The cross-target diagnosis needs per-hop bucket history so it can
+    // compute "degraded since" for the suspect hop. Missing or unparseable
+    // rollups are treated as no history rather than fatal — the root page
+    // should still render for fresh installs that have not accumulated a
+    // full hour yet.
+    const hourlyRollup = await readRollupFile(
+      path.join(targetDir, 'hourly.rollup.json'),
+      'hour',
+    ).catch(() => null)
     targetSummaries.push({
       aggregate: summarizeSnapshots(lastWeekSnapshots),
       diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots),
       hopIssues: summarizeHopIssues(lastWeekSnapshots),
+      hourlyBuckets: hourlyRollup?.buckets ?? [],
       lastWeekSnapshots,
       summary: snapshots[0],
       targetSlug,
@@ -276,7 +287,17 @@ export async function renderRootIndex(
       target: entry.summary.target,
     })),
   )
-  const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats)
+  const rollupBucketsByTarget = targetSummaries.map((entry) => entry.hourlyBuckets)
+  const perTargetSnapshots = targetSummaries.map((entry) => ({
+    protocol: entry.summary.protocol,
+    snapshots: entry.lastWeekSnapshots,
+    target: entry.summary.target,
+  }))
+  const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
+    now,
+    perTargetSnapshots,
+    rollupBucketsByTarget,
+  })
 
   const latestCollectedAt = rows.reduce<string | null>((acc, row) => {
     const rowTs = parseCollectedAt(row.summary.collectedAt) ?? 0

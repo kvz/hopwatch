@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'vitest'
 import type { ProbeProtocol } from '../lib/config.ts'
+import type { MtrRollupBucket } from '../lib/rollups.ts'
 import type { SnapshotSummary } from '../lib/snapshot.ts'
 import {
   type CrossTargetHopIssue,
   classifyCrossTargetShape,
+  computeHopDegradedSince,
+  findRichestHopDisplayName,
+  findUnaffectedSiblingDestinations,
   getCrossTargetDiagnosis,
   getHistoricalSeverityBadge,
   getRootSuspectHop,
@@ -695,5 +699,197 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(cross[0].tcpAverageLossPct).toBe(50)
     expect(cross[0].icmpTargetCount).toBe(1)
     expect(cross[0].tcpTargetCount).toBe(1)
+  })
+})
+
+describe('computeHopDegradedSince', () => {
+  function bucket(bucketStart: string, hopHost: string, lossPct: number): MtrRollupBucket {
+    return {
+      bucketStart,
+      destinationLossPct: 0,
+      destinationReplyCount: 10,
+      destinationSentCount: 10,
+      histogram: [],
+      hops: [
+        {
+          host: hopHost,
+          hopIndexes: [5],
+          lossPct,
+          replyCount: 10,
+          representativeHopIndex: 5,
+          rttAvgMs: null,
+          rttMaxMs: null,
+          rttMinMs: null,
+          rttP50Ms: null,
+          rttP90Ms: null,
+          rttP99Ms: null,
+          sentCount: 10,
+          snapshotCount: 1,
+        },
+      ],
+      rttAvgMs: null,
+      rttMaxMs: null,
+      rttMinMs: null,
+      rttP50Ms: null,
+      rttP90Ms: null,
+      rttP99Ms: null,
+      snapshotCount: 1,
+    }
+  }
+
+  const now = Date.UTC(2026, 3, 23, 12, 0, 0)
+
+  test('returns null when the latest bucket is already clean', () => {
+    const buckets = [
+      bucket('2026-04-22T10:00:00.000Z', 'router', 50),
+      bucket('2026-04-22T11:00:00.000Z', 'router', 50),
+      bucket('2026-04-23T11:00:00.000Z', 'router', 2),
+    ]
+    expect(computeHopDegradedSince('router', [buckets], now)).toBeNull()
+  })
+
+  test('finds the leading edge of the current uninterrupted degraded run', () => {
+    // Old spike (degraded, then recovered), then fresh degradation —
+    // "degraded since" should report the fresh run's start, not the old
+    // one, because the run was interrupted by a clean bucket.
+    const buckets = [
+      bucket('2026-04-22T08:00:00.000Z', 'router', 40),
+      bucket('2026-04-22T09:00:00.000Z', 'router', 0),
+      bucket('2026-04-23T10:00:00.000Z', 'router', 45),
+      bucket('2026-04-23T11:00:00.000Z', 'router', 50),
+    ]
+    const timeline = computeHopDegradedSince('router', [buckets], now)
+    expect(timeline?.firstDegradedAt).toBe('2026-04-23T10:00:00.000Z')
+    expect(timeline?.durationHours).toBe(2)
+  })
+
+  test('takes the max loss across targets so a single lossy target starts the run', () => {
+    // One target sees the hop as clean while another sees it as lossy in
+    // the same bucket — the classifier cares about ANY target reporting
+    // loss at this hop, so the max wins.
+    const cleanTarget = [bucket('2026-04-23T11:00:00.000Z', 'router', 0)]
+    const lossyTarget = [bucket('2026-04-23T11:00:00.000Z', 'router', 50)]
+    expect(
+      computeHopDegradedSince('router', [cleanTarget, lossyTarget], now)?.firstDegradedAt,
+    ).toBe('2026-04-23T11:00:00.000Z')
+  })
+
+  test('returns null when no target has seen the hop', () => {
+    const buckets = [bucket('2026-04-23T11:00:00.000Z', 'different-router', 50)]
+    expect(computeHopDegradedSince('router', [buckets], now)).toBeNull()
+  })
+})
+
+describe('findRichestHopDisplayName', () => {
+  function bucketWithHops(hopHosts: string[]): MtrRollupBucket {
+    return {
+      bucketStart: '2026-04-23T11:00:00.000Z',
+      destinationLossPct: 0,
+      destinationReplyCount: 10,
+      destinationSentCount: 10,
+      histogram: [],
+      hops: hopHosts.map((host) => ({
+        host,
+        hopIndexes: [5],
+        lossPct: 0,
+        replyCount: 10,
+        representativeHopIndex: 5,
+        rttAvgMs: null,
+        rttMaxMs: null,
+        rttMinMs: null,
+        rttP50Ms: null,
+        rttP90Ms: null,
+        rttP99Ms: null,
+        sentCount: 10,
+        snapshotCount: 1,
+      })),
+      rttAvgMs: null,
+      rttMaxMs: null,
+      rttMinMs: null,
+      rttP50Ms: null,
+      rttP90Ms: null,
+      rttP99Ms: null,
+      snapshotCount: 1,
+    }
+  }
+
+  test('upgrades a bare-IP display to the richer "ptr (ip)" form when seen in another bucket', () => {
+    const buckets = [bucketWithHops(['fnet117.vqbn.com.sg (132.147.112.101)'])]
+    expect(findRichestHopDisplayName('132.147.112.101', [buckets])).toBe(
+      'fnet117.vqbn.com.sg (132.147.112.101)',
+    )
+  })
+
+  test('leaves the display alone when no richer variant is present', () => {
+    const buckets = [bucketWithHops(['132.147.112.101'])]
+    expect(findRichestHopDisplayName('132.147.112.101', [buckets])).toBe('132.147.112.101')
+  })
+})
+
+describe('findUnaffectedSiblingDestinations', () => {
+  function snapshotWith(host: string, hopHost: string, lossPct: number): SnapshotSummary {
+    return snapshot({
+      collectedAt: '20260423T110000Z',
+      destinationHopIndex: 99,
+      host,
+      hops: [
+        {
+          asn: null,
+          avgMs: null,
+          bestMs: null,
+          host: hopHost,
+          index: 5,
+          lastMs: null,
+          lossPct,
+          sent: null,
+          stdevMs: null,
+          worstMs: null,
+        },
+      ],
+    })
+  }
+
+  test('lists destinations that traverse the hop cleanly and are not already affected', () => {
+    const siblings = findUnaffectedSiblingDestinations(
+      'router',
+      ['affected.example'],
+      [
+        {
+          protocol: 'icmp',
+          snapshots: [snapshotWith('clean-a.example', 'router', 0)],
+          target: 'a',
+        },
+        {
+          protocol: 'icmp',
+          snapshots: [snapshotWith('clean-b.example', 'router', 0)],
+          target: 'b',
+        },
+        // Already in the affected list — should not appear in siblings.
+        {
+          protocol: 'tcp',
+          snapshots: [snapshotWith('affected.example', 'router', 50)],
+          target: 'c',
+        },
+      ],
+    )
+    expect(siblings).toEqual(['clean-a.example', 'clean-b.example'])
+  })
+
+  test('drops destinations that see ANY lossy traversal, not just clean ones', () => {
+    const siblings = findUnaffectedSiblingDestinations(
+      'router',
+      [],
+      [
+        {
+          protocol: 'icmp',
+          snapshots: [
+            snapshotWith('sometimes-lossy.example', 'router', 0),
+            snapshotWith('sometimes-lossy.example', 'router', 40),
+          ],
+          target: 'a',
+        },
+      ],
+    )
+    expect(siblings).toEqual([])
   })
 })

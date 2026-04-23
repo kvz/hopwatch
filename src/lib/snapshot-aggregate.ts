@@ -1,5 +1,6 @@
 import type { ProbeProtocol } from './config.ts'
 import { average } from './raw.ts'
+import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 
 export interface SnapshotAggregate {
@@ -455,6 +456,143 @@ export function summarizeCrossTargetHopIssues(
 // signal we've seen on SIN -> us-west-2, so it separates real protocol
 // asymmetry from noise without hiding mid-severity cases.
 const PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT = 30
+// Per-hop loss above which a bucket counts as "still degraded" for the
+// purpose of the "degraded since" timeline. Low enough to not declare
+// recovery on minor variance, high enough to close the run on genuine
+// clean periods.
+const DEGRADED_BUCKET_HOP_LOSS_PCT = 10
+
+export interface HopDegradedTimeline {
+  firstDegradedAt: string
+  durationHours: number
+}
+
+// Returns the richest-known display name for a hop IP, reading across the
+// entire 7d bucket history. Per-snapshot rDNS is flaky (mtr's PTR lookup
+// times out under load), so individual snapshots may report a bare IP
+// even for hops that resolve cleanly in other snapshots. Merging across
+// the window recovers the best-known name and keeps the panel from
+// flip-flopping between "132.147.112.101" and
+// "fnet117-f60-60-access.vqbn.com.sg (132.147.112.101)".
+export function findRichestHopDisplayName(
+  hopHost: string,
+  rollupBucketsByTarget: MtrRollupBucket[][],
+): string {
+  // The hop.host field in our rollups is already in the merged
+  // "dns (ip)" form (or bare IP when rDNS failed). Scan for any entry
+  // whose host string both starts with the current hop display AND is
+  // longer — meaning it carries additional info (typically the PTR).
+  let best = hopHost
+  for (const buckets of rollupBucketsByTarget) {
+    for (const bucket of buckets) {
+      for (const hop of bucket.hops) {
+        if (hop.host === best) continue
+        // Match when the two strings name the same IP endpoint but the
+        // candidate has more content (usually a resolved PTR). Checking
+        // both "X in Y" and "Y in X" is cheap and handles either order
+        // of which snapshot had rDNS.
+        if (hop.host.includes(hopHost) && hop.host.length > best.length) {
+          best = hop.host
+        } else if (best.includes(hop.host) && best.length < hop.host.length) {
+          best = hop.host
+        }
+      }
+    }
+  }
+  return best
+}
+
+// Destinations that traverse this hop CLEANLY in the window — i.e.
+// the hop appears in their snapshot hops with loss below the
+// DEGRADED_BUCKET_HOP_LOSS_PCT floor. Useful counterpoint to the
+// "affected destinations" list: showing that N other destinations go
+// through the same hop and stay healthy proves the problem is
+// prefix-specific, not a general-purpose router failure.
+export function findUnaffectedSiblingDestinations(
+  hopHost: string,
+  affectedDestinations: readonly string[],
+  perTarget: PerTargetSnapshots[],
+): string[] {
+  const affectedSet = new Set(affectedDestinations)
+  const cleanDestinations = new Set<string>()
+  const anyLossDestinations = new Set<string>()
+  for (const entry of perTarget) {
+    if (affectedSet.has(entry.snapshots[0]?.host ?? '')) continue
+    let traversedClean = false
+    let traversedLossy = false
+    for (const snap of entry.snapshots) {
+      const destIndex = snap.destinationHopIndex ?? Number.POSITIVE_INFINITY
+      for (const hop of snap.hops) {
+        if (hop.host !== hopHost) continue
+        if (hop.index >= destIndex) continue
+        if (hop.lossPct < DEGRADED_BUCKET_HOP_LOSS_PCT) {
+          traversedClean = true
+        } else {
+          traversedLossy = true
+        }
+      }
+    }
+    const destinationHost = entry.snapshots[0]?.host
+    if (destinationHost == null || destinationHost === '') continue
+    if (traversedClean) cleanDestinations.add(destinationHost)
+    if (traversedLossy) anyLossDestinations.add(destinationHost)
+  }
+  // A destination that sometimes sees loss at this hop is not "clean" —
+  // drop any that also appear in anyLossDestinations so the sibling list
+  // really is "traversal was clean every time we saw it".
+  for (const lossy of anyLossDestinations) cleanDestinations.delete(lossy)
+  return [...cleanDestinations].sort()
+}
+
+// Walk backward from the most recent bucket across every target's hourly
+// rollup and return the start of the latest uninterrupted run of buckets
+// in which this hop's loss stayed above DEGRADED_BUCKET_HOP_LOSS_PCT.
+// Returns null if the most recent bucket is already clean — the hop is
+// not in a degraded state right now, so there is no active timeline.
+export function computeHopDegradedSince(
+  hopHost: string,
+  rollupBucketsByTarget: MtrRollupBucket[][],
+  now: number = Date.now(),
+): HopDegradedTimeline | null {
+  // Collapse to one loss value per bucket start: max across every target
+  // that saw this hop. Taking the max means a single target showing loss
+  // is enough to count the bucket as degraded, which matches operator
+  // intuition ("is the hop broken right now?") better than averaging
+  // across paths that may not all probe TCP.
+  const maxHopLossByBucket = new Map<string, number>()
+  for (const buckets of rollupBucketsByTarget) {
+    for (const bucket of buckets) {
+      const hopEntry = bucket.hops.find((entry) => entry.host === hopHost)
+      if (hopEntry == null) continue
+      const previous = maxHopLossByBucket.get(bucket.bucketStart) ?? 0
+      if (hopEntry.lossPct > previous) {
+        maxHopLossByBucket.set(bucket.bucketStart, hopEntry.lossPct)
+      } else if (!maxHopLossByBucket.has(bucket.bucketStart)) {
+        maxHopLossByBucket.set(bucket.bucketStart, hopEntry.lossPct)
+      }
+    }
+  }
+  if (maxHopLossByBucket.size === 0) return null
+
+  const sorted = [...maxHopLossByBucket.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )
+  const [, latestLoss] = sorted[sorted.length - 1]
+  if (latestLoss < DEGRADED_BUCKET_HOP_LOSS_PCT) return null
+
+  let firstDegradedAt = sorted[sorted.length - 1][0]
+  for (let i = sorted.length - 2; i >= 0; i -= 1) {
+    const [bucketStart, lossPct] = sorted[i]
+    if (lossPct < DEGRADED_BUCKET_HOP_LOSS_PCT) break
+    firstDegradedAt = bucketStart
+  }
+
+  const startMs = Date.parse(firstDegradedAt)
+  const durationHours = Number.isFinite(startMs)
+    ? Math.max(0, Math.round((now - startMs) / (60 * 60 * 1000)))
+    : 0
+  return { firstDegradedAt, durationHours }
+}
 // Floor for ICMP loss before we consider the hop "ICMP-clean" for the
 // purpose of the protocol-selective check. Some routers return ICMP only
 // when overloaded even on healthy paths; don't let a 2-3% ICMP baseline
@@ -526,10 +664,25 @@ export function classifyCrossTargetShape(
   return { kind: 'downstream_from_hop', hop: primary }
 }
 
+export interface CrossTargetDiagnosisContext {
+  // Per-target hourly rollup buckets. Enables "Degraded since" timeline
+  // and PTR discovery for the suspect hop.
+  rollupBucketsByTarget?: MtrRollupBucket[][]
+  // Per-target snapshot window (7d typically). Enables the
+  // unaffected-siblings count, which proves the problem is
+  // prefix-specific instead of a generic router failure.
+  perTargetSnapshots?: PerTargetSnapshots[]
+  now?: number
+}
+
 export function getCrossTargetDiagnosis(
   crossIssues: CrossTargetHopIssue[],
   hopProtocolStats?: Map<string, Map<ProbeProtocol, HopProtocolStat>>,
+  context: CrossTargetDiagnosisContext = {},
 ): CrossTargetDiagnosis {
+  const rollupBucketsByTarget = context.rollupBucketsByTarget
+  const perTargetSnapshots = context.perTargetSnapshots
+  const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
     return {
@@ -559,6 +712,45 @@ export function getCrossTargetDiagnosis(
       ? `${primary.targetCount} probe ${primary.targetCount === 1 ? 'path' : 'paths'}`
       : `${primary.targetCount} probe paths across ${destinationCount} ${destinationNoun}`
   const severe = primary.totalDownstreamLoss >= 10
+  // Upgrade the hop display string with any richer PTR-bearing form seen
+  // across the full 7d history. Per-snapshot rDNS is flaky, so the
+  // current-cycle primary.host may be the bare IP even when other
+  // snapshots resolved it. Falls back cleanly when no rollups given.
+  const hopDisplay =
+    rollupBucketsByTarget == null
+      ? primary.host
+      : findRichestHopDisplayName(primary.host, rollupBucketsByTarget)
+  const timeline =
+    rollupBucketsByTarget == null
+      ? null
+      : computeHopDegradedSince(primary.host, rollupBucketsByTarget, now)
+  // "Degraded since ..." sentence appended when we have rollup history.
+  // <1h rounds to "just flagged" so we do not claim a degraded run the
+  // data does not actually support; 1h+ is the normal case.
+  const timelineSuffix =
+    timeline == null
+      ? ''
+      : timeline.durationHours < 1
+        ? ` Degraded since ${timeline.firstDegradedAt} (just flagged).`
+        : ` Degraded since ${timeline.firstDegradedAt} (continuous ${timeline.durationHours}h).`
+  const unaffectedSiblings =
+    perTargetSnapshots == null
+      ? []
+      : findUnaffectedSiblingDestinations(
+          primary.host,
+          primary.affectedDestinations,
+          perTargetSnapshots,
+        )
+  // "N sibling destinations through this hop are unaffected" sentence —
+  // evidence the problem is prefix-specific rather than a broken router.
+  // Shown only when we actually observed at least one clean sibling, so
+  // the panel stays quiet when there is no evidence either way.
+  const siblingsSuffix =
+    unaffectedSiblings.length === 0
+      ? ''
+      : ` ${unaffectedSiblings.length} sibling ${
+          unaffectedSiblings.length === 1 ? 'destination' : 'destinations'
+        } through this hop (${unaffectedSiblings.slice(0, 3).join(', ')}${unaffectedSiblings.length > 3 ? ', …' : ''}) are unaffected, so the problem is prefix-specific, not a generic router failure.`
 
   if (shape.kind === 'protocol_selective') {
     const icmpPct = primary.icmpAverageLossPct ?? 0
@@ -567,7 +759,7 @@ export function getCrossTargetDiagnosis(
       className: 'bad',
       label: 'Protocol-selective loss',
       shape,
-      summary: `Hop ${primary.host}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis — not plain capacity — so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.`,
+      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis — not plain capacity — so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.${timelineSuffix}${siblingsSuffix}`,
       suspect: primary,
     }
   }
@@ -578,7 +770,7 @@ export function getCrossTargetDiagnosis(
     className: severe ? 'bad' : 'warn',
     label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
     shape,
-    summary: `Hop ${primary.host}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} — consider escalating with the upstream network.`,
+    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} — consider escalating with the upstream network.${timelineSuffix}${siblingsSuffix}`,
     suspect: primary,
   }
 }

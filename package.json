@@ -1,7 +1,7 @@
 {
   "name": "hopwatch",
   "description": "SmokePing-style network latency and packet-loss monitoring. Native TypeScript, single binary, TOML configured, systemd-ready.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "packageManager": "bun@1.3.2",
   "license": "MIT",

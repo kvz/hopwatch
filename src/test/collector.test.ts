@@ -78,7 +78,9 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
       host,
       id: host,
       label: host,
+      port: 443,
       probe_mode: 'default',
+      protocol: 'icmp',
     })),
   }
 }
@@ -172,6 +174,48 @@ describe('runCollector', () => {
 
     const result = await runCollector(config, logger, { runCommand })
     expect(result.failedTargetSlugs).toEqual([])
+  })
+
+  test('passes --tcp -P <port> to mtr when the target uses protocol="tcp"', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    config.target[0].protocol = 'tcp'
+    config.target[0].port = 8443
+    const logger = createLogger({ level: 'error', pretty: false })
+    let capturedArgs: string[] = []
+    const runCommand = async (
+      _file: string,
+      args: string[],
+    ): Promise<{ stderr: string; stdout: string }> => {
+      capturedArgs = args
+      return { stdout: MTR_OUTPUT, stderr: '' }
+    }
+
+    await runCollector(config, logger, { runCommand })
+
+    expect(capturedArgs).toContain('--tcp')
+    const portIndex = capturedArgs.indexOf('-P')
+    expect(portIndex).toBeGreaterThanOrEqual(0)
+    expect(capturedArgs[portIndex + 1]).toBe('8443')
+    // The target host must come last so it isn't parsed as an option arg.
+    expect(capturedArgs[capturedArgs.length - 1]).toBe('good.example')
+  })
+
+  test('omits --tcp and -P when the target uses the default protocol="icmp"', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    const logger = createLogger({ level: 'error', pretty: false })
+    let capturedArgs: string[] = []
+    const runCommand = async (
+      _file: string,
+      args: string[],
+    ): Promise<{ stderr: string; stdout: string }> => {
+      capturedArgs = args
+      return { stdout: MTR_OUTPUT, stderr: '' }
+    }
+
+    await runCollector(config, logger, { runCommand })
+
+    expect(capturedArgs).not.toContain('--tcp')
+    expect(capturedArgs).not.toContain('-P')
   })
 
   test('rejects engine="native" with a clear error when the FFI warmup fails (e.g. musl)', async () => {

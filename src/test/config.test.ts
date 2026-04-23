@@ -101,6 +101,58 @@ engine = "native"
     expect(config.target[0].engine).toBe('native')
   })
 
+  test('defaults protocol to "icmp" and port to 443', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.target[0].protocol).toBe('icmp')
+    expect(config.target[0].port).toBe(443)
+  })
+
+  test('accepts protocol="tcp" with a custom port', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+protocol = "tcp"
+port = 8443
+`)
+    const config = await loadConfig(configPath)
+    expect(config.target[0].protocol).toBe('tcp')
+    expect(config.target[0].port).toBe(8443)
+  })
+
+  test('rejects protocol="tcp" combined with ip_version=6 (not yet supported)', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[probe]
+ip_version = 6
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+protocol = "tcp"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/IPv6 TCP/)
+  })
+
   test('rejects engine="native" combined with ip_version=6', async () => {
     const configPath = await writeConfig(`
 [server]

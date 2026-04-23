@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- f30f667: fix: mini chart sparkline no longer clips in narrow table columns — the thumbnail now scales responsively and anchors left via `preserveAspectRatio="xMinYMid meet"`.
+- f30f667: fix: mini chart sparkline no longer clips in narrow table columns - the thumbnail now scales responsively and anchors left via `preserveAspectRatio="xMinYMid meet"`.
 
 ## 0.1.0
 

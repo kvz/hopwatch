@@ -47,7 +47,7 @@ function collectEvents(buckets: MtrRollupBucket[], now: number, rangeMs: number)
       const prev = prevHostSet
       const added = [...hostSet].filter((h) => !prev.has(h))
       const removed = [...prev].filter((h) => !hostSet.has(h))
-      // Only flag a path change when the symmetric difference is non-trivial —
+      // Only flag a path change when the symmetric difference is non-trivial -
       // a single ECMP flip adds and removes one host, so require at least one
       // host on either side (i.e. the set actually moved).
       if (added.length > 0 || removed.length > 0) {

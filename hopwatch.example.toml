@@ -1,5 +1,5 @@
 [server]
-# Loopback-only by default — hop topology + reverse-DNS is sensitive and
+# Loopback-only by default - hop topology + reverse-DNS is sensitive and
 # hopwatch ships without auth. Front with nginx (see README) or set
 # `listen = "0.0.0.0:8080"` explicitly to expose on every interface.
 listen     = "127.0.0.1:8080"
@@ -45,10 +45,10 @@ host  = "8.8.8.8"
 # netns      = "allow-external"
 
 # Example TCP target. Use `protocol = "tcp"` when the production workload is
-# HTTPS/TCP — ICMP and TCP loss can diverge by tens of percentage points on
+# HTTPS/TCP - ICMP and TCP loss can diverge by tens of percentage points on
 # paths where a router rate-limits one protocol but forwards the other.
 # Works with engine="mtr" (via `mtr --tcp -P <port>`) or engine="native" (via
-# the built-in Bun FFI tracer — no external mtr process required).
+# the built-in Bun FFI tracer - no external mtr process required).
 # [[target]]
 # id       = "s3-us-west-2-tcp"
 # label    = "Amazon S3 us-west-2 (TCP 443)"

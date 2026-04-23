@@ -107,7 +107,7 @@ describe('renderChartSvg in mini mode', () => {
     const svg = renderChartSvg(points, miniOptions())
 
     // #a00000 = 100% loss bucket color. SmokePing draws no marker without a
-    // median — we match that, so the bucket color must not appear.
+    // median - we match that, so the bucket color must not appear.
     expect(svg).not.toContain('#a00000')
   })
 })

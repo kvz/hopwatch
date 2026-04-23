@@ -160,8 +160,8 @@ export function pickXGridStepMs(rangeMs: number): number {
 
 // Each sample's bar extends backward from its timestamp by up to
 // `2 * barHalfMs` (≈ the median inter-sample gap). When the actual gap to
-// the previous sample is smaller than that — e.g. cluster of retries or
-// backfilled snapshots — the default width would overlap the neighbor's
+// the previous sample is smaller than that - e.g. cluster of retries or
+// backfilled snapshots - the default width would overlap the neighbor's
 // bar, drowning the chart in stacked greens and smokes. Clamp each bar's
 // left edge at the previous sample's timestamp so adjacent bars meet
 // cleanly regardless of local cadence.

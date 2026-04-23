@@ -1,6 +1,6 @@
 // Linux-only native TCP-SYN prober. Drives kernel TCP sockets with
 // non-blocking connect() while varying IP_TTL per socket, and captures
-// ICMP Time Exceeded from a separate raw IPPROTO_ICMP socket — the same
+// ICMP Time Exceeded from a separate raw IPPROTO_ICMP socket - the same
 // approach `mtr --tcp` uses, implemented here in Bun FFI so hopwatch ships
 // as a single binary with no external mtr dependency for the TCP path.
 //
@@ -25,7 +25,7 @@
 //     port we assigned. Looking that port up reveals which hop the reply
 //     belongs to.
 //   - Destination: poll(POLLOUT) on each TCP fd. POLLOUT + SO_ERROR==0
-//     means the kernel saw SYN-ACK — the destination responded. We emit
+//     means the kernel saw SYN-ACK - the destination responded. We emit
 //     a reply at that hop index with the RTT measured from our own
 //     sendTimeNs to the moment poll() reported the completion.
 //
@@ -228,7 +228,7 @@ export async function probeTargetNativeTcp(options: NativeTcpProbeOptions): Prom
       const probe = pending[i]
       // SO_ERROR==0 with POLLOUT means connect() succeeded: SYN-ACK was
       // received from the destination. Any other value means the kernel
-      // aborted the connect — could be ECONNREFUSED (destination replied
+      // aborted the connect - could be ECONNREFUSED (destination replied
       // with RST), EHOSTUNREACH / ENETUNREACH (ICMP dest-unreach already
       // surfaced via drainIcmp), or ETIMEDOUT (kernel gave up after
       // TCP_SYNCNT retries). We only emit a reply for the clean success
@@ -247,7 +247,7 @@ export async function probeTargetNativeTcp(options: NativeTcpProbeOptions): Prom
           destHopIndex = hopIndex
         }
       } else {
-        // ECONNREFUSED (111) — the destination replied immediately with RST;
+        // ECONNREFUSED (111) - the destination replied immediately with RST;
         // for TCP-reachability purposes that still counts as "the
         // destination is on the network" even though it's not accepting on
         // the port. We don't emit a reply to avoid inflating success on

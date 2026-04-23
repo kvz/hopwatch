@@ -4,7 +4,7 @@ import { parseIcmpTcpReply } from '../lib/tcp.ts'
 // Build a synthetic ICMP Time Exceeded packet as the kernel delivers it on a
 // raw IPPROTO_ICMP socket: outer IP header, ICMP header (type/code/cksum +
 // 4 unused bytes), inner IP header of our original packet, inner TCP header
-// (first 8 bytes — src/dst port + seq — is what RFC 792 guarantees routers
+// (first 8 bytes - src/dst port + seq - is what RFC 792 guarantees routers
 // copy back). We only care about the fields parseIcmpTcpReply actually
 // reads, so everything else is zeroed.
 function buildTimeExceededWithTcp(innerSrcPort: number, innerProto = 6): Uint8Array {
@@ -63,7 +63,7 @@ describe('parseIcmpTcpReply', () => {
 
   test('returns null for unrelated ICMP types (Echo Reply)', () => {
     const packet = buildTimeExceededWithTcp(12345)
-    packet[20] = 0 // ICMP type = Echo Reply — not something we care about here
+    packet[20] = 0 // ICMP type = Echo Reply - not something we care about here
     const parsed = parseIcmpTcpReply(packet, new Uint8Array([10, 0, 0, 1]))
     expect(parsed).toBeNull()
   })

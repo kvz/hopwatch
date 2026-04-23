@@ -1,7 +1,7 @@
 // Linux-only native traceroute prober. Opens SOCK_RAW IPPROTO_ICMP via Bun
 // FFI + libc, sends ICMP Echo Requests with varying IP_TTL, parses Time
 // Exceeded / Echo Reply responses, reverse-resolves hop IPs, and returns a
-// `RawMtrEvent[]` stream in the same shape the mtr adapter produces — so the
+// `RawMtrEvent[]` stream in the same shape the mtr adapter produces - so the
 // collector can swap engines without touching downstream rollup/render code.
 //
 // Requires CAP_NET_RAW (observer systemd unit grants it; locally: sudo). Does
@@ -54,7 +54,7 @@ const DEFAULTS = {
 
 // Lazy-load libc on first probe call. Loading at module top-level means
 // `import('./prober-native.ts')` fails with an opaque FFI error on musl
-// (Alpine, distroless) and macOS — which short-circuits the collector's
+// (Alpine, distroless) and macOS - which short-circuits the collector's
 // deliberate platform-check in collector.ts that emits a clear
 // "engine=native requires glibc Linux" message. Deferring until the first
 // probe call lets that check fire first.
@@ -128,7 +128,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     throw new Error(`socket(AF_INET, SOCK_RAW, IPPROTO_ICMP) failed, errno=${errno(libc)}`)
   }
 
-  // Monotonic 16-bit identifier per call — not `process.pid & 0xffff`, not
+  // Monotonic 16-bit identifier per call - not `process.pid & 0xffff`, not
   // Math.random(). Two concurrent probes on the same host share the raw
   // socket's incoming queue (the kernel delivers every ICMP reply to every
   // open raw ICMP socket); if both calls used the same identifier, probe A
@@ -177,7 +177,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     }
     // Destination Unreachable is a failure signal, not a successful hop.
     // Keep the host event so the dashboard surfaces which router rejected
-    // the probe, but do NOT emit a `reply` — counting it as a reply made
+    // the probe, but do NOT emit a `reply` - counting it as a reply made
     // firewalled/blocked destinations render as healthy low-loss paths.
     if (parsed.kind === 'dest_unreachable') {
       return true
@@ -190,7 +190,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     return true
   }
 
-  // Budget the whole probe — send loop included — against timeoutMs. Before
+  // Budget the whole probe - send loop included - against timeoutMs. Before
   // this, the deadline only started ticking after every (cycle × ttl) send
   // had been issued, so a probe with packets=2048 × 25ms pacing × 30 hops
   // could hog a collector slot for more than 25 minutes before the timeout
@@ -201,7 +201,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     outer: for (let cycle = 0; cycle < packets; cycle += 1) {
       for (let ttl = 1; ttl <= maxHops; ttl += 1) {
         if (Bun.nanoseconds() >= deadlineNs) break outer
-        // Stop sending past the destination once we know where it is — saves
+        // Stop sending past the destination once we know where it is - saves
         // ~5ms * (maxHops - destHop) per cycle on short paths.
         if (destHopIndex != null && ttl - 1 > destHopIndex) break
 
@@ -251,7 +251,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
     }
     // The same IP can legitimately appear on multiple hops (asymmetric paths,
     // ICMP-RESP from a routing loop, etc.). Map each IP to every hop index
-    // that saw it so each hop receives its own `dns` event — the renderer
+    // that saw it so each hop receives its own `dns` event - the renderer
     // shows the reverse name next to each occurrence of the hop, and
     // deduplicating to the first hop hides that information on later ones.
     const hopIndicesByHost = new Map<string, number[]>()
@@ -266,7 +266,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
       }
     }
     // Bound the rDNS phase so a slow resolver cannot keep a collector slot busy
-    // past the caller's `timeoutMs` deadline — Node's reverse() does not honor
+    // past the caller's `timeoutMs` deadline - Node's reverse() does not honor
     // AbortSignal, so we wall-clock it with Promise.race. 2s per IP is
     // generous (typical PTR lookups are <100ms) and caps the whole phase at
     // 2s even if every hop's IP is sunk into /dev/null.

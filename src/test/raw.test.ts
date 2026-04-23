@@ -88,10 +88,10 @@ describe('resolveDestinationHopIndex', () => {
   test('picks the full-probe-cycle hop over trailing partial-probe tail (TCP mtr)', () => {
     // `mtr --tcp -c 10` emits the full 10-probe cycle at the real destination
     // (hop 12 here) and then a few "extra probes" at deeper TTLs that echo
-    // the same destination IP back — 3 probes at hop 13, 1 each at hops 14-16.
+    // the same destination IP back - 3 probes at hop 13, 1 each at hops 14-16.
     // Before the fix, resolveDestinationHopIndex compared reply counts and
     // saw hop 16 (reply=1) == hop 15 (reply=1), so it bailed out at the tail
-    // and classified the 1-reply trailing slot as the destination — which
+    // and classified the 1-reply trailing slot as the destination - which
     // hides real destination loss (reply=2 out of sent=10 here) under a fake
     // 0% loss summary.
     const events: RawMtrEvent[] = []

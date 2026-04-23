@@ -10,7 +10,7 @@ export type ProbeMode = z.infer<typeof probeModeSchema>
 export const probeEngineSchema = z.enum(['mtr', 'native'])
 export type ProbeEngine = z.infer<typeof probeEngineSchema>
 
-// `icmp` sends ICMP Echo Requests (or the mtr equivalent) — the default, and
+// `icmp` sends ICMP Echo Requests (or the mtr equivalent) - the default, and
 // what hopwatch has always done. `tcp` sends TCP SYN probes to the target's
 // port. The two can disagree by tens of percentage points on the same path:
 // some transit routers rate-limit ICMP but forward TCP normally (or vice
@@ -27,7 +27,7 @@ const targetSchema = z.object({
   label: z.string().min(1),
   // `host` lands in `mtr`/`nsenter` argv untouched. A host that starts with `-`
   // (e.g. `-h`, `--report-cycles=1`) would be parsed as an option instead of a
-  // destination and make the probe wildly misbehave — reject at config time so
+  // destination and make the probe wildly misbehave - reject at config time so
   // this can't sneak in via a typo or a hostile config file.
   host: z
     .string()
@@ -90,7 +90,7 @@ export type PeerConfig = z.infer<typeof peerSchema>
 
 const serverSchema = z.object({
   // Loopback by default. Hop topology + reverse-DNS for every target is
-  // sensitive enough that we'd rather operators opt into exposing the UI —
+  // sensitive enough that we'd rather operators opt into exposing the UI -
   // front with nginx (README shows the proxy recipe) or set
   // `listen = "0.0.0.0:8080"` explicitly. Before this, fresh installs bound
   // on every interface with no authentication shipped.
@@ -288,7 +288,7 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
     peerIds.add(peer.id)
   }
 
-  // `path.resolve()` normalizes both absolute and relative data_dir values —
+  // `path.resolve()` normalizes both absolute and relative data_dir values -
   // in particular it strips trailing separators. safeResolve() later compares
   // `resolved.startsWith(root + sep)`, and a stored `/var/lib/hopwatch/` would
   // otherwise fail every prefix check because the resolved target is

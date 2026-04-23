@@ -63,7 +63,7 @@ export function TargetIndexPage({
   const [mainChart, ...secondaryCharts] = charts
   const absoluteLatestCollectedAt = formatAbsoluteCollectedAt(latestSnapshot.collectedAt)
   const probeIsNetns = latestSnapshot.probeMode === 'netns'
-  // Strip a trailing "(hostname)" from the display target — the hostname is
+  // Strip a trailing "(hostname)" from the display target - the hostname is
   // already rendered in the intro line, and the parenthetical makes the H1
   // wrap awkwardly on narrow viewports.
   const headingText = latestSnapshot.target
@@ -139,7 +139,7 @@ export function TargetIndexPage({
           <div className="summary-card">
             <strong>Worst intermediate non-reply</strong>
             <span className="loss muted">{formatLoss(lastWeek.averageWorstHopLossPct)}</span>
-            <div>7-day avg — often ICMP rate limiting, not real loss</div>
+            <div>7-day avg - often ICMP rate limiting, not real loss</div>
           </div>
         </div>
       </section>

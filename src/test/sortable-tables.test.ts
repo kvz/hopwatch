@@ -16,7 +16,7 @@ describe('parseSortValue', () => {
   test('number: n/a and empty are missing', () => {
     expect(parseSortValue('n/a', 'number')).toBe(null)
     expect(parseSortValue('', 'number')).toBe(null)
-    expect(parseSortValue('—', 'number')).toBe(null)
+    expect(parseSortValue('-', 'number')).toBe(null)
   })
 
   test('loss: treats the loss % display format (including "unknown") as numeric', () => {

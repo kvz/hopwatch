@@ -12,8 +12,8 @@ import { type ChartPoint, renderChartSvg } from '../lib/core.ts'
 //
 // The manifest stores a *locked* mismatchPct and rmsDelta per fixture. Tests
 // fail if either value drifts outside ± tolerance of the locked value, in
-// either direction. Relocking — whether parity improved or we intentionally
-// changed the renderer — requires `UPDATE_PARITY_BASELINE=1 bun run test`.
+// either direction. Relocking - whether parity improved or we intentionally
+// changed the renderer - requires `UPDATE_PARITY_BASELINE=1 bun run test`.
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 const FIXTURES_DIR = path.join(REPO_ROOT, 'src', 'test', 'fixtures', 'smokeping')

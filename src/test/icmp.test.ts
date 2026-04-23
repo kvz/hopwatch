@@ -18,7 +18,7 @@ import {
 } from '../lib/icmp.ts'
 
 // Builds a minimal IPv4 header (20 bytes, IHL=5, no options). Checksum left
-// zero because parseReply ignores it — nothing we do validates IP checksums.
+// zero because parseReply ignores it - nothing we do validates IP checksums.
 function buildIpv4Header(
   payloadLen: number,
   protocol: number,
@@ -199,7 +199,7 @@ describe('parseReply', () => {
   })
 
   test('returns null when the embedded inner ICMP is not our Echo Request', () => {
-    // Router quoted something that wasn't our probe — we can't attribute it, drop it.
+    // Router quoted something that wasn't our probe - we can't attribute it, drop it.
     const innerIcmp = buildIcmpEchoHeader(ICMP_ECHO_REPLY, 0x1111, 0x2222, new Uint8Array(0))
     const innerIp = buildIpv4Header(innerIcmp.length, 1, [10, 0, 0, 2], [8, 8, 8, 8])
     const outerIcmp = concat(
@@ -244,7 +244,7 @@ describe('encodeSeq / decodeSeq', () => {
 
   test('adjacent cycles never collide on seq', () => {
     // If a cycle-N reply arrives late, in the middle of cycle N+1, decodeSeq
-    // must still attribute it to cycle N — the stride ensures no overlap.
+    // must still attribute it to cycle N - the stride ensures no overlap.
     const maxHops = 30
     const seqsCycle0 = new Set<number>()
     for (let ttl = 1; ttl <= maxHops; ttl += 1) seqsCycle0.add(encodeSeq(0, ttl, maxHops))
@@ -255,7 +255,7 @@ describe('encodeSeq / decodeSeq', () => {
 
   test('stays within 16 bits for typical parameters', () => {
     // ICMP seq is a 16-bit field. packets=10, maxHops=30 gives max seq
-    // 9 * 60 + 30 = 570 — well under 65535.
+    // 9 * 60 + 30 = 570 - well under 65535.
     const maxHops = 30
     const maxSeq = encodeSeq(9, maxHops, maxHops)
     expect(maxSeq).toBeLessThan(0x10000)
@@ -296,7 +296,7 @@ describe('encodeSeq / decodeSeq', () => {
 
 function buildCmsg(level: number, type: number, data: Uint8Array): Uint8Array {
   // CMSG_LEN = header (16 bytes) + data length. No tail padding on the
-  // encoded message itself — readScmTimestampNs handles alignment to the
+  // encoded message itself - readScmTimestampNs handles alignment to the
   // next cmsghdr, but for a single cmsg the un-padded length is enough.
   const header = 16
   const buf = new Uint8Array(header + data.length)
@@ -334,7 +334,7 @@ describe('readScmTimestampNs', () => {
   })
 
   test('skips foreign cmsg and finds timestamp on next iteration with 8-byte alignment', () => {
-    // First cmsg is 20 bytes (16-byte header + 4 bytes data) — not aligned.
+    // First cmsg is 20 bytes (16-byte header + 4 bytes data) - not aligned.
     // Next cmsghdr must start at 24 (next 8-byte boundary).
     const first = buildCmsg(999, 999, new Uint8Array([1, 2, 3, 4]))
     const ts = buildTimespec(42n, 7n)

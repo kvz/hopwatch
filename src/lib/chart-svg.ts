@@ -196,7 +196,7 @@ export function renderChartSvg(
 
   // Intentionally no LINE1:median#202020. SmokePing.pm does reference a
   // `LINE1:median#202020` but in the rrdtool-rasterized reference PNGs this
-  // line is not visibly rendered across adjacent bins — each bin's 2 px
+  // line is not visibly rendered across adjacent bins - each bin's 2 px
   // colored AREA strip ends up adjacent to the next bin's strip without a
   // diagonal connector. Adding a diagonal `<line>` diverges from the
   // reference (raises fixture-diff mismatch by several percentage points),
@@ -223,7 +223,7 @@ export function renderChartSvg(
     const lossPct = point.destinationLossPct
     // Under near-total loss (≥95%, i.e. 19/20+ probes dropped) any surviving
     // median is a one- or two-sample artefact. Anchoring a 2px-wide strip at
-    // that value — in our widest loss colour, no less — gives the chart a
+    // that value - in our widest loss colour, no less - gives the chart a
     // long red line on the baseline that SmokePing deliberately avoids. Match
     // SmokePing's behaviour: treat those bins as gaps, not as dots at rtt≈0.
     const nearTotalLoss = lossPct != null && lossPct >= 95
@@ -238,7 +238,7 @@ export function renderChartSvg(
   const medianMarkersSvg = medianMarkers.join('')
 
   if (mini) {
-    // No axes, grid, ticks, legend, stats, signature or arrows — just the
+    // No axes, grid, ticks, legend, stats, signature or arrows - just the
     // white rect, smoke bands, loss-colored medians, and a thin outline so
     // the thumbnail can read "is this target healthy" at a glance.
     const miniBorder = `<rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" fill="none" stroke="#d9ddcf" stroke-width="1" shape-rendering="crispEdges" />`
@@ -335,7 +335,7 @@ export function renderChartSvg(
   const statsFontFamily = 'DejaVu Sans Mono,Menlo,Consolas,monospace'
   // Use smokePings (maxProbes rounded down to even, or 20 fallback) so the
   // legend keeps the full SmokePing color range even on 3h/30h charts where
-  // a single raw snapshot may carry only one RTT sample — `buildLossLegendLabels(1)`
+  // a single raw snapshot may carry only one RTT sample - `buildLossLegendLabels(1)`
   // collapses to just 0/1 and 1/1 swatches, which wipes out the color legend.
   const lossSwatches = buildLossLegendLabels(smokePings)
   const legendY = padding.top + chartHeight + 58

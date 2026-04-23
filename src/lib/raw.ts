@@ -272,7 +272,7 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
   const replyCountByHop = new Map<number, number>()
   const sentCountByHop = new Map<number, number>()
   const hostsByHop = new Map<number, Set<string>>()
-  // The deepest hop with any `reply` or `host` event — not the deepest `sent`.
+  // The deepest hop with any `reply` or `host` event - not the deepest `sent`.
   // Black-holed traces emit a `sent` per TTL up to maxHops with no replies; if
   // maxHopIndex followed those, an unreachable path would look like the
   // destination is at hop `maxHops - 1` and corrupt every downstream aggregate
@@ -303,7 +303,7 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
 
   // Partial blackhole: we sent probes well past the last responding hop.
   // This means the packets stopped getting replies somewhere in the middle,
-  // and the deepest responder is almost certainly NOT the destination — it's
+  // and the deepest responder is almost certainly NOT the destination - it's
   // just the last hop that answered before the path went dark. Returning it
   // as the destination would make the trace look healthy (100% at "dest")
   // when the real destination never responded. Threshold of 3 matches the
@@ -327,7 +327,7 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
     if (!sharesHost) break
     // Walk back using SENT counts, not reply counts. For ICMP mtr every hop
     // in the shared-host tail has the same sent count (probe.packets), so
-    // walking back picks up the shallowest occurrence — the real dest. For
+    // walking back picks up the shallowest occurrence - the real dest. For
     // TCP mtr, the "extra probes" past the destination have sent=1..3 while
     // the main probe cycle at the real destination has sent=probe.packets.
     // Comparing replies there picked the wrong hop: the deepest tail slot

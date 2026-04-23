@@ -38,7 +38,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000
 // Parsed snapshot summaries are cached by absolute path. Snapshot files are
 // immutable once written (timestamped filenames, never updated in place), so
 // a never-invalidated cache is safe _per file_. Without this, every `/` render
-// reparses the entire retention window (keep_days * 96 files per target) — at
+// reparses the entire retention window (keep_days * 96 files per target) - at
 // the default 15-minute cadence and 14-day retention that is ~1,344 parses
 // per target per request, which makes the open HTTP server trivial to exhaust
 // with repeat GETs.
@@ -94,7 +94,7 @@ export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSu
       snapshots.push(summary)
     } catch (err) {
       // A single corrupt snapshot must not kill the dashboard for an entire
-      // target. Log to stderr so operators can triage — the rollup rebuilder
+      // target. Log to stderr so operators can triage - the rollup rebuilder
       // does the same with listStoredRawSnapshots.
       const reason = err instanceof Error ? err.message : String(err)
       process.stderr.write(`hopwatch: skipping unreadable snapshot ${cacheKey}: ${reason}\n`)
@@ -140,7 +140,7 @@ export async function renderTargetIndex(
   const lastDay = summarizeSnapshots(lastDaySnapshots)
   const lastWeek = summarizeSnapshots(lastWeekSnapshots)
   // Exclude anonymized (???) hops from the top-5 "Recurring problematic hops"
-  // table — they almost always represent routers that rate-limit ICMP reply,
+  // table - they almost always represent routers that rate-limit ICMP reply,
   // so elevating them above real suspects is misleading. The hint under the
   // diagnosis explains the convention.
   const hopIssues = summarizeHopIssues(lastWeekSnapshots)
@@ -213,7 +213,7 @@ export async function renderRootIndex(
     const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
     // The cross-target diagnosis needs per-hop bucket history so it can
     // compute "degraded since" for the suspect hop. Missing or unparseable
-    // rollups are treated as no history rather than fatal — the root page
+    // rollups are treated as no history rather than fatal - the root page
     // should still render for fresh installs that have not accumulated a
     // full hour yet.
     const hourlyRollup = await readRollupFile(
@@ -278,7 +278,7 @@ export async function renderRootIndex(
   // All-traversals stats (including clean hops) feed the shape classifier
   // so it can see that ICMP probes cross the suspect hop with 0% loss
   // even when those probes never appear in the lossy-only cross-issue
-  // aggregate — the signal that distinguishes protocol_selective from a
+  // aggregate - the signal that distinguishes protocol_selective from a
   // generic "upstream path degraded".
   const hopProtocolStats = summarizeHopProtocolStats(
     targetSummaries.map((entry) => ({

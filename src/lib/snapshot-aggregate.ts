@@ -46,7 +46,7 @@ export function selectSnapshotsInWindow(
 }
 
 // summarize* helpers expect snapshots already restricted to the window of
-// interest — pass through selectSnapshotsInWindow() first. Letting the caller
+// interest - pass through selectSnapshotsInWindow() first. Letting the caller
 // pre-filter once and reuse the slice for multiple aggregates (as page.tsx
 // does) avoids redoing the cutoff walk per helper.
 export function summarizeSnapshots(snapshotsInWindow: SnapshotSummary[]): SnapshotAggregate {
@@ -213,7 +213,7 @@ export function getRootSuspectHop(hopIssues: HopAggregate[]): HopAggregate | nul
 
 // One hop host that shows downstream-loss on multiple targets, with enough
 // volume to be worth escalating to the upstream network. Derived deterministically
-// from per-target HopAggregates — no new probes needed.
+// from per-target HopAggregates - no new probes needed.
 export interface CrossTargetHopIssue {
   // Deduped destination host names reached through this hop with
   // downstream loss. Separate from `targets`, which lists probe paths
@@ -224,7 +224,7 @@ export interface CrossTargetHopIssue {
   averageLossPct: number | null
   host: string
   // Per-protocol loss at this hop, so the shape classifier can spot
-  // protocol-selective loss (same router, ICMP clean, TCP lossy) — that
+  // protocol-selective loss (same router, ICMP clean, TCP lossy) - that
   // pattern is where ICMP-only monitoring silently under-reports
   // reachability of real HTTPS traffic.
   icmpAverageLossPct: number | null
@@ -246,7 +246,7 @@ export interface CrossTargetHopIssue {
 // Shapes currently implemented:
 //   - `none`: no shared hop across ≥2 targets. No pattern to surface.
 //   - `protocol_selective`: one hop shows ≥30pp more loss for TCP probes
-//     than for ICMP probes on the same destination — points to a
+//     than for ICMP probes on the same destination - points to a
 //     middlebox policer or asymmetric ECMP, not capacity.
 //   - `downstream_from_hop`: one hop coincides with destination loss on
 //     multiple targets (the existing "upstream path degraded" shape),
@@ -274,7 +274,7 @@ export interface CrossTargetDiagnosis {
 
 interface PerTargetHopInput {
   asnByHost: Map<string, string | null>
-  // The target's destination host (snapshot.host) — the actual service
+  // The target's destination host (snapshot.host) - the actual service
   // name being probed, independent of which probe path (slug) reaches it.
   // Used to dedupe the "N affected destinations" count so 3 probe paths
   // to s3.us-west-2 do not read as "3 destinations are broken".
@@ -404,7 +404,7 @@ export function summarizeCrossTargetHopIssues(
       existing.totalSampleCount += hop.sampleCount
       existing.averageLossPct =
         existing.totalSampleCount === 0 ? null : weightedLoss / existing.totalSampleCount
-      // Last ASN wins — good enough for the diagnosis line, and skips the
+      // Last ASN wins - good enough for the diagnosis line, and skips the
       // bookkeeping of tracking "which target reported which ASN".
       existing.asn = entry.asnByHost.get(hop.host) ?? existing.asn
       byHost.set(hop.host, existing)
@@ -481,7 +481,7 @@ export function findRichestHopDisplayName(
   // The hop.host field in our rollups is already in the merged
   // "dns (ip)" form (or bare IP when rDNS failed). Scan for any entry
   // whose host string both starts with the current hop display AND is
-  // longer — meaning it carries additional info (typically the PTR).
+  // longer - meaning it carries additional info (typically the PTR).
   let best = hopHost
   for (const buckets of rollupBucketsByTarget) {
     for (const bucket of buckets) {
@@ -502,7 +502,7 @@ export function findRichestHopDisplayName(
   return best
 }
 
-// Destinations that traverse this hop CLEANLY in the window — i.e.
+// Destinations that traverse this hop CLEANLY in the window - i.e.
 // the hop appears in their snapshot hops with loss below the
 // DEGRADED_BUCKET_HOP_LOSS_PCT floor. Useful counterpoint to the
 // "affected destinations" list: showing that N other destinations go
@@ -537,7 +537,7 @@ export function findUnaffectedSiblingDestinations(
     if (traversedClean) cleanDestinations.add(destinationHost)
     if (traversedLossy) anyLossDestinations.add(destinationHost)
   }
-  // A destination that sometimes sees loss at this hop is not "clean" —
+  // A destination that sometimes sees loss at this hop is not "clean" -
   // drop any that also appear in anyLossDestinations so the sibling list
   // really is "traversal was clean every time we saw it".
   for (const lossy of anyLossDestinations) cleanDestinations.delete(lossy)
@@ -547,7 +547,7 @@ export function findUnaffectedSiblingDestinations(
 // Walk backward from the most recent bucket across every target's hourly
 // rollup and return the start of the latest uninterrupted run of buckets
 // in which this hop's loss stayed above DEGRADED_BUCKET_HOP_LOSS_PCT.
-// Returns null if the most recent bucket is already clean — the hop is
+// Returns null if the most recent bucket is already clean - the hop is
 // not in a degraded state right now, so there is no active timeline.
 export function computeHopDegradedSince(
   hopHost: string,
@@ -603,7 +603,7 @@ export function classifyCrossTargetShape(
   crossIssues: CrossTargetHopIssue[],
   // Optional: per-hop per-protocol stats over ALL traversals (including
   // clean ones). When provided, takes precedence over the lossy-only
-  // per-protocol fields on the issue itself — a clean ICMP probe past
+  // per-protocol fields on the issue itself - a clean ICMP probe past
   // this hop contributes 0% to this map but leaves no trace in the
   // CrossTargetHopIssue (HopAggregate upstream filters out zero-loss
   // hops). That clean signal is what makes `protocol_selective`
@@ -643,7 +643,7 @@ export function classifyCrossTargetShape(
   // covering this same hop, ICMP loss is below the noise floor, and TCP
   // loss is substantially higher. That signature points to a middlebox
   // policer or asymmetric-ECMP flow selection rather than raw capacity
-  // loss — a qualitatively different failure mode from "sick router".
+  // loss - a qualitatively different failure mode from "sick router".
   if (
     icmpTargetCount >= 1 &&
     tcpTargetCount >= 1 &&
@@ -705,7 +705,7 @@ export function getCrossTargetDiagnosis(
       ? ` (+${primary.affectedDestinations.length - 3} more)`
       : ''
   // When probe paths and destinations are 1:1 there is no "M paths for N
-  // destinations" story to tell — collapse the phrase to "N probe path(s)"
+  // destinations" story to tell - collapse the phrase to "N probe path(s)"
   // so the reader is not counting twice.
   const probePathPhrase =
     primary.targetCount === destinationCount
@@ -741,7 +741,7 @@ export function getCrossTargetDiagnosis(
           primary.affectedDestinations,
           perTargetSnapshots,
         )
-  // "N sibling destinations through this hop are unaffected" sentence —
+  // "N sibling destinations through this hop are unaffected" sentence -
   // evidence the problem is prefix-specific rather than a broken router.
   // Shown only when we actually observed at least one clean sibling, so
   // the panel stays quiet when there is no evidence either way.
@@ -759,7 +759,7 @@ export function getCrossTargetDiagnosis(
       className: 'bad',
       label: 'Protocol-selective loss',
       shape,
-      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis — not plain capacity — so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.${timelineSuffix}${siblingsSuffix}`,
+      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.${timelineSuffix}${siblingsSuffix}`,
       suspect: primary,
     }
   }
@@ -770,7 +770,7 @@ export function getCrossTargetDiagnosis(
     className: severe ? 'bad' : 'warn',
     label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
     shape,
-    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} — consider escalating with the upstream network.${timelineSuffix}${siblingsSuffix}`,
+    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - consider escalating with the upstream network.${timelineSuffix}${siblingsSuffix}`,
     suspect: primary,
   }
 }

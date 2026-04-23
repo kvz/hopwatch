@@ -21,7 +21,7 @@ export interface ObserverRegionLink {
 // selfHost is the Host header of the current request (e.g.
 // "observer1-ap-southeast-1-production.transloadit.com"). We combine it with
 // the mount path borrowed from a remote peer (they all share the same
-// deployment layout) so the active row's subtitle matches the remote rows —
+// deployment layout) so the active row's subtitle matches the remote rows -
 // no more repeated label.
 export function getPeerNavLinks(
   selfLabel: string,

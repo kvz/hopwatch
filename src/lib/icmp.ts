@@ -1,11 +1,11 @@
 // Pure ICMPv4 helpers: protocol constants, packet building, checksum, and
-// reply parsing. No FFI, no sockets — lives here so it can be unit-tested
+// reply parsing. No FFI, no sockets - lives here so it can be unit-tested
 // under vitest/Node and reused by both the spike entrypoint and the real
 // probe worker.
 //
 // Wire format references:
-//   RFC 792  — ICMP
-//   RFC 4884 — ICMP extensions (we ignore these for now)
+//   RFC 792  - ICMP
+//   RFC 4884 - ICMP extensions (we ignore these for now)
 
 export const AF_INET = 2
 export const SOCK_RAW = 3
@@ -88,7 +88,7 @@ export function ipv4FromBytes(b: Uint8Array): string {
 // Sequence-number encoding we use for traceroute probes. We pack ttl into
 // the low 5 bits (supports maxHops up to 31) and the cycle into the high 11
 // bits. Keeping the ttl in a fixed bit range means that when the 16-bit wire
-// field wraps (2048 cycles in), the ttl bits continue to decode correctly —
+// field wraps (2048 cycles in), the ttl bits continue to decode correctly -
 // the older cycle-index encoding masked the composite value, so after wrap a
 // reply with wire seq 64 decoded to ttl=4 instead of the ttl that was sent,
 // silently misattributing replies to the wrong hop.
@@ -102,7 +102,7 @@ export function encodeSeq(cycle: number, ttl: number, maxHops: number): number {
     throw new Error(`encodeSeq: maxHops=${maxHops} exceeds the ${MAX_HOPS_SUPPORTED}-hop limit`)
   }
   // Cycle wraps at 2048 (11-bit cycle space). Late replies from a pre-wrap
-  // cycle would collide with a post-wrap cycle at the same ttl — same seq
+  // cycle would collide with a post-wrap cycle at the same ttl - same seq
   // key → same sendTimeNs slot → nonsense RTT. Fail fast instead of silently
   // misattributing; `probe.packets` should be capped at the config boundary
   // for engine='native' targets.

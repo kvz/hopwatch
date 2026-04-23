@@ -252,7 +252,7 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
   })
 
   test('latestHopIndex tracks the most recent snapshot regardless of input order', () => {
-    // Same hop host reported at different indices across snapshots — the UI
+    // Same hop host reported at different indices across snapshots - the UI
     // should surface the most recently observed index, so a routing change
     // (hop 2 → hop 5) is reflected in the "latest index" column even when
     // callers pass snapshots newest-first (as renderRootIndex does).
@@ -340,7 +340,7 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
     // MTR sometimes emits an extra hop past the real destination (same host,
     // TTL bumped by one). `resolveDestinationHopIndex` sets
     // `destinationHopIndex` to the real hop (index 3 here), but the phantom
-    // lives at index 4 — so `slice(0, -1)` would still include the real
+    // lives at index 4 - so `slice(0, -1)` would still include the real
     // destination in the intermediates tally and attribute its loss to it.
     const snap = snapshot({
       collectedAt: '20260420T120000Z',
@@ -399,7 +399,7 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
     })
     const issues = summarizeHopIssues(selectSnapshotsInWindow([snap], now, HOUR))
     // Only the phantom trailing hop should be considered "beyond" the real
-    // destination — i.e. the real destination (index 3) must not appear as
+    // destination - i.e. the real destination (index 3) must not appear as
     // an intermediate.
     expect(issues.find((issue) => issue.latestHopIndex === 3)).toBeUndefined()
   })
@@ -447,7 +447,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
   })
 
   test('deduplicates destination hosts so "3 probe paths to 1 destination" does not read as 3 outages', () => {
-    // Three probe paths, same destination host — the dashboard should tell
+    // Three probe paths, same destination host - the dashboard should tell
     // operators "1 destination affected" (with 3 paths' worth of evidence),
     // not "3 destinations are broken". Same-host dedup is how the shape
     // classifier's output turns from alarming-but-vague into actionable.
@@ -486,7 +486,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
 
   test('ignores hops that a per-target aggregate already rejected as not root-suspect', () => {
     // A hop with only isolated loss shouldn't be elevated to "cross-target
-    // escalation" just because it appears on many targets — that's usually
+    // escalation" just because it appears on many targets - that's usually
     // ICMP reply rate-limiting, not a real upstream issue.
     const cross = summarizeCrossTargetHopIssues([
       {
@@ -565,7 +565,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
   test('diagnosis classifies protocol-selective loss when TCP >> ICMP at the same hop', () => {
     // Mirrors the SIN -> us-west-2 incident: same router, ICMP clean, TCP
     // drops half the probes. The panel should say "protocol-selective",
-    // not the generic "upstream path degraded" — they point at different
+    // not the generic "upstream path degraded" - they point at different
     // remediations (fight the upstream ISP about a middlebox policy vs.
     // demand more link capacity).
     const protocolSelective = {
@@ -592,7 +592,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
   })
 
   test('does NOT flag protocol-selective when ICMP is also lossy (real capacity problem)', () => {
-    // Both protocols see substantial loss — that's not policy-driven, it's
+    // Both protocols see substantial loss - that's not policy-driven, it's
     // the classic "sick router drops packets" signature. Fall through to
     // the generic downstream_from_hop shape so the operator gets the
     // escalate-upstream message instead of the protocol-asymmetry one.
@@ -616,7 +616,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
 
   test('does NOT flag protocol-selective when only one protocol is represented', () => {
     // Classifier requires at least one ICMP and one TCP target at the same
-    // hop — a single protocol in the cluster can't establish asymmetry.
+    // hop - a single protocol in the cluster can't establish asymmetry.
     const onlyTcp = {
       affectedDestinations: ['tcp-dest.example'],
       asn: null,
@@ -639,7 +639,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     // The lossy-only CrossTargetHopIssue only sees a hop when lossPct > 0
     // (upstream summarizeHopIssues filters zeros out). In production, an
     // ICMP-clean + TCP-lossy hop therefore has icmpTargetCount=0 in the
-    // aggregate — classifyCrossTargetShape would fall back to
+    // aggregate - classifyCrossTargetShape would fall back to
     // downstream_from_hop without the sidecar. Feeding the sidecar unblocks
     // the protocol_selective classification that is the whole point.
     const tcpOnlyIssue: CrossTargetHopIssue = {
@@ -674,7 +674,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
 
   test('per-protocol averages are computed from the per-target hop inputs', () => {
     // Regression test for the summarizer's per-protocol accumulator: ICMP
-    // comes out near zero, TCP near 50%, and both target counts are 1 — the
+    // comes out near zero, TCP near 50%, and both target counts are 1 - the
     // exact inputs classifyCrossTargetShape needs to recognize the shape.
     const cross = summarizeCrossTargetHopIssues([
       {
@@ -749,7 +749,7 @@ describe('computeHopDegradedSince', () => {
   })
 
   test('finds the leading edge of the current uninterrupted degraded run', () => {
-    // Old spike (degraded, then recovered), then fresh degradation —
+    // Old spike (degraded, then recovered), then fresh degradation -
     // "degraded since" should report the fresh run's start, not the old
     // one, because the run was interrupted by a clean bucket.
     const buckets = [
@@ -765,7 +765,7 @@ describe('computeHopDegradedSince', () => {
 
   test('takes the max loss across targets so a single lossy target starts the run', () => {
     // One target sees the hop as clean while another sees it as lossy in
-    // the same bucket — the classifier cares about ANY target reporting
+    // the same bucket - the classifier cares about ANY target reporting
     // loss at this hop, so the max wins.
     const cleanTarget = [bucket('2026-04-23T11:00:00.000Z', 'router', 0)]
     const lossyTarget = [bucket('2026-04-23T11:00:00.000Z', 'router', 50)]
@@ -864,7 +864,7 @@ describe('findUnaffectedSiblingDestinations', () => {
           snapshots: [snapshotWith('clean-b.example', 'router', 0)],
           target: 'b',
         },
-        // Already in the affected list — should not appear in siblings.
+        // Already in the affected list - should not appear in siblings.
         {
           protocol: 'tcp',
           snapshots: [snapshotWith('affected.example', 'router', 50)],

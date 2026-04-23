@@ -98,7 +98,7 @@ describe('renderHopHeatmapSvg', () => {
 
   test('drops buckets outside the requested time window', () => {
     const buckets = [
-      // 48h before NOW — outside the 30h window.
+      // 48h before NOW - outside the 30h window.
       mkBucket('2026-04-18T12:00:00.000Z', [
         { host: 'stale.example', hopIndexes: [1], lossPct: 0 },
       ]),

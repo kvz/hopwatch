@@ -1,10 +1,10 @@
 // Pure TCP/IP wire-format helpers for the native TCP-SYN prober. No FFI,
-// no sockets — lives here so it can be unit-tested under vitest/Node and
+// no sockets - lives here so it can be unit-tested under vitest/Node and
 // reused by the FFI-backed prober in prober-native-tcp.ts.
 //
 // The only TCP bit we need in userspace is reading the src port out of
 // the inner TCP header that routers echo back inside ICMP Time Exceeded
-// / Destination Unreachable messages — that's how we correlate a mid-
+// / Destination Unreachable messages - that's how we correlate a mid-
 // path reply to the probe that triggered it.
 
 import { ICMP_DEST_UNREACH, ICMP_TIME_EXCEEDED, ipv4FromBytes } from './icmp.ts'

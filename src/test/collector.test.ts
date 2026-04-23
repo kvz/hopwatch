@@ -244,7 +244,7 @@ describe('runCollector', () => {
 
   test('treats an empty native probe result as a failed target instead of persisting an empty snapshot', async () => {
     // When every sendto() fails, the native prober returns an empty event
-    // list. Before this fix the collector persisted the snapshot anyway —
+    // list. Before this fix the collector persisted the snapshot anyway -
     // detail pages classified it as "unknown" (no events) while rollups saw
     // destinationSentCount=0 and rendered 100% loss, producing a dashboard
     // that disagreed with itself about the same probe.

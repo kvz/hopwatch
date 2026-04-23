@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     if (hop.rttsUs.length > 0) lastInterestingHop = hop.hopIndex
   }
   if (lastInterestingHop < 0) {
-    console.log('no replies received — destination unreachable or probes blocked')
+    console.log('no replies received - destination unreachable or probes blocked')
     return
   }
 

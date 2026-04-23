@@ -182,10 +182,12 @@ export function RootIndexPage({
                         </span>
                         <span> / {diagnosisAggregate.sampleCount}</span>
                       </td>
-                      <td data-sort-value={suspectHop?.host ?? ''}>
+                      <td className="suspect-hop-cell" data-sort-value={suspectHop?.host ?? ''}>
                         {suspectHop != null ? (
                           <>
-                            <code>{suspectHop.host}</code>
+                            <code className="suspect-hop-name" title={suspectHop.host}>
+                              {suspectHop.host}
+                            </code>
                             <br />
                             <span>
                               {suspectHop.downstreamLossCount} downstream /{' '}

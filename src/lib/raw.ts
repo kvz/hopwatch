@@ -266,6 +266,7 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
   }
 
   const replyCountByHop = new Map<number, number>()
+  const sentCountByHop = new Map<number, number>()
   const hostsByHop = new Map<number, Set<string>>()
   // The deepest hop with any `reply` or `host` event — not the deepest `sent`.
   // Black-holed traces emit a `sent` per TTL up to maxHops with no replies; if
@@ -286,8 +287,9 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
       }
       hosts.add(event.host)
       if (event.hopIndex > maxHopIndex) maxHopIndex = event.hopIndex
-    } else if (event.kind === 'sent' && event.hopIndex > maxSentHopIndex) {
-      maxSentHopIndex = event.hopIndex
+    } else if (event.kind === 'sent') {
+      sentCountByHop.set(event.hopIndex, (sentCountByHop.get(event.hopIndex) ?? 0) + 1)
+      if (event.hopIndex > maxSentHopIndex) maxSentHopIndex = event.hopIndex
     }
   }
 
@@ -319,9 +321,18 @@ export function resolveDestinationHopIndex(rawEvents: RawMtrEvent[]): number | n
       }
     }
     if (!sharesHost) break
-    const prevReplyCount = replyCountByHop.get(hopIndex) ?? 0
-    const currentReplyCount = replyCountByHop.get(destinationHopIndex) ?? 0
-    if (prevReplyCount <= currentReplyCount) break
+    // Walk back using SENT counts, not reply counts. For ICMP mtr every hop
+    // in the shared-host tail has the same sent count (probe.packets), so
+    // walking back picks up the shallowest occurrence — the real dest. For
+    // TCP mtr, the "extra probes" past the destination have sent=1..3 while
+    // the main probe cycle at the real destination has sent=probe.packets.
+    // Comparing replies there picked the wrong hop: the deepest tail slot
+    // had reply=1 equal to the prior tail slot, and the walk-back gave up
+    // before reaching the full-packets hop with real loss. Sent counts
+    // expose the main-cycle hop directly.
+    const prevSent = sentCountByHop.get(hopIndex) ?? 0
+    const currentSent = sentCountByHop.get(destinationHopIndex) ?? 0
+    if (prevSent < currentSent) break
     destinationHopIndex = hopIndex
   }
 

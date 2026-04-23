@@ -85,6 +85,43 @@ describe('resolveDestinationHopIndex', () => {
     expect(resolveDestinationHopIndex(events)).toBe(5)
   })
 
+  test('picks the full-probe-cycle hop over trailing partial-probe tail (TCP mtr)', () => {
+    // `mtr --tcp -c 10` emits the full 10-probe cycle at the real destination
+    // (hop 12 here) and then a few "extra probes" at deeper TTLs that echo
+    // the same destination IP back — 3 probes at hop 13, 1 each at hops 14-16.
+    // Before the fix, resolveDestinationHopIndex compared reply counts and
+    // saw hop 16 (reply=1) == hop 15 (reply=1), so it bailed out at the tail
+    // and classified the 1-reply trailing slot as the destination — which
+    // hides real destination loss (reply=2 out of sent=10 here) under a fake
+    // 0% loss summary.
+    const events: RawMtrEvent[] = []
+    // Main 10-probe cycle at the real destination (hop 12). Only 2 of 10
+    // probes get a SYN-ACK back; the rest are lost on the path, which is
+    // the whole reason we want to surface this hop.
+    for (let i = 1; i <= 10; i += 1) {
+      events.push({ kind: 'sent', hopIndex: 12, probeId: i })
+    }
+    events.push({ kind: 'host', hopIndex: 12, host: '52.92.0.1' })
+    events.push({ kind: 'reply', hopIndex: 12, probeId: 1, rttUs: 223000 })
+    events.push({ kind: 'reply', hopIndex: 12, probeId: 2, rttUs: 223000 })
+    // Trailing "extra probes" that mtr fires past the destination to verify
+    // TTL scope. Each further hop sends fewer probes.
+    const extras: [number, number][] = [
+      [13, 3],
+      [14, 1],
+      [15, 1],
+      [16, 1],
+    ]
+    for (const [hop, count] of extras) {
+      for (let i = 1; i <= count; i += 1) {
+        events.push({ kind: 'sent', hopIndex: hop, probeId: i })
+        events.push({ kind: 'reply', hopIndex: hop, probeId: i, rttUs: 223000 })
+      }
+      events.push({ kind: 'host', hopIndex: hop, host: '52.92.0.1' })
+    }
+    expect(resolveDestinationHopIndex(events)).toBe(12)
+  })
+
   test('does not walk back when the previous hop does not share a host', () => {
     const events: RawMtrEvent[] = [
       { kind: 'host', hopIndex: 4, host: 'isp.example' },

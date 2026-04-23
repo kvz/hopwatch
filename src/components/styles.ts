@@ -225,13 +225,13 @@ code dfn, dfn code { border-bottom: 0; }
 
 .chart-svg { display: block; width: 100%; height: auto; border-radius: 10px; }
 
-.thumb-link { display: block; min-width: 158px; }
+.thumb-link { display: block; min-width: 100px; }
 .thumb-link img { display: none; }
 .thumb-link svg {
   display: block;
-  width: 158px;
-  max-width: 100%;
-  height: 42px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 158 / 42;
   border-radius: 6px;
 }
 

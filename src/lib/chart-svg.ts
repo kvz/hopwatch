@@ -242,7 +242,7 @@ export function renderChartSvg(
     // white rect, smoke bands, loss-colored medians, and a thin outline so
     // the thumbnail can read "is this target healthy" at a glance.
     const miniBorder = `<rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" fill="none" stroke="#d9ddcf" stroke-width="1" shape-rendering="crispEdges" />`
-    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.title)}" class="chart-svg chart-svg--mini">
+    return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMid meet" role="img" aria-label="${escapeHtml(options.title)}" class="chart-svg chart-svg--mini">
   <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />
   ${smokeBandsSvg}
   ${medianMarkersSvg}

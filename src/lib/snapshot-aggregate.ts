@@ -1,3 +1,4 @@
+import type { ProbeProtocol } from './config.ts'
 import { average } from './raw.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 
@@ -216,6 +217,14 @@ export interface CrossTargetHopIssue {
   asn: string | null
   averageLossPct: number | null
   host: string
+  // Per-protocol loss at this hop, so the shape classifier can spot
+  // protocol-selective loss (same router, ICMP clean, TCP lossy) — that
+  // pattern is where ICMP-only monitoring silently under-reports
+  // reachability of real HTTPS traffic.
+  icmpAverageLossPct: number | null
+  icmpTargetCount: number
+  tcpAverageLossPct: number | null
+  tcpTargetCount: number
   targetCount: number
   targets: string[]
   totalDownstreamLoss: number
@@ -223,9 +232,36 @@ export interface CrossTargetHopIssue {
   totalSampleCount: number
 }
 
+// Shape classification for the cross-target diagnosis. Each kind describes
+// a signature in the probe data itself, so the panel sentence can say
+// WHAT kind of problem this is, not just "there is loss". All kinds are
+// derived deterministically from the aggregates we already compute.
+//
+// Shapes currently implemented:
+//   - `none`: no shared hop across ≥2 targets. No pattern to surface.
+//   - `protocol_selective`: one hop shows ≥30pp more loss for TCP probes
+//     than for ICMP probes on the same destination — points to a
+//     middlebox policer or asymmetric ECMP, not capacity.
+//   - `downstream_from_hop`: one hop coincides with destination loss on
+//     multiple targets (the existing "upstream path degraded" shape),
+//     with no protocol asymmetry. Generic network problem at or before
+//     that hop.
+//
+// Shapes left for follow-up (would need additional inputs to this function):
+//   - `destination_only`: destination drops despite clean intermediate
+//     hops. Needs per-target destination loss plumbed through.
+//   - `path_flap`, `topology_change`: need per-bucket host-set history.
+export type CrossTargetShapeKind = 'none' | 'protocol_selective' | 'downstream_from_hop'
+
+export interface CrossTargetShape {
+  kind: CrossTargetShapeKind
+  hop: CrossTargetHopIssue | null
+}
+
 export interface CrossTargetDiagnosis {
   className: 'good' | 'warn' | 'bad'
   label: string
+  shape: CrossTargetShape
   summary: string
   suspect: CrossTargetHopIssue | null
 }
@@ -233,13 +269,25 @@ export interface CrossTargetDiagnosis {
 interface PerTargetHopInput {
   asnByHost: Map<string, string | null>
   hopIssues: HopAggregate[]
+  protocol: ProbeProtocol
   target: string
+}
+
+interface PerProtocolAccumulator {
+  sampleCount: number
+  weightedLoss: number
+  targets: Set<string>
 }
 
 export function summarizeCrossTargetHopIssues(
   perTarget: PerTargetHopInput[],
 ): CrossTargetHopIssue[] {
   const byHost = new Map<string, CrossTargetHopIssue>()
+  // Per-hop / per-protocol running accumulators. Weighted-loss is kept raw
+  // (pct * sampleCount) so we can compute the final weighted average once
+  // at the end without accumulating rounding error in a running average.
+  const protocolByHost = new Map<string, Map<ProbeProtocol, PerProtocolAccumulator>>()
+
   for (const entry of perTarget) {
     for (const hop of entry.hopIssues) {
       // Non-surfaceable hops on a single target should stay non-surfaceable at
@@ -251,6 +299,10 @@ export function summarizeCrossTargetHopIssues(
         asn: null,
         averageLossPct: null,
         host: hop.host,
+        icmpAverageLossPct: null,
+        icmpTargetCount: 0,
+        tcpAverageLossPct: null,
+        tcpTargetCount: 0,
         targetCount: 0,
         targets: [],
         totalDownstreamLoss: 0,
@@ -273,6 +325,36 @@ export function summarizeCrossTargetHopIssues(
       // bookkeeping of tracking "which target reported which ASN".
       existing.asn = entry.asnByHost.get(hop.host) ?? existing.asn
       byHost.set(hop.host, existing)
+
+      let byProtocol = protocolByHost.get(hop.host)
+      if (byProtocol == null) {
+        byProtocol = new Map()
+        protocolByHost.set(hop.host, byProtocol)
+      }
+      let slot = byProtocol.get(entry.protocol)
+      if (slot == null) {
+        slot = { sampleCount: 0, weightedLoss: 0, targets: new Set() }
+        byProtocol.set(entry.protocol, slot)
+      }
+      slot.sampleCount += hop.sampleCount
+      slot.weightedLoss += (hop.averageLossPct ?? 0) * hop.sampleCount
+      slot.targets.add(entry.target)
+    }
+  }
+
+  // Finalize per-protocol averages once, after all input has been absorbed.
+  for (const [host, issue] of byHost.entries()) {
+    const byProtocol = protocolByHost.get(host)
+    if (byProtocol == null) continue
+    const icmp = byProtocol.get('icmp')
+    if (icmp != null && icmp.sampleCount > 0) {
+      issue.icmpAverageLossPct = icmp.weightedLoss / icmp.sampleCount
+      issue.icmpTargetCount = icmp.targets.size
+    }
+    const tcp = byProtocol.get('tcp')
+    if (tcp != null && tcp.sampleCount > 0) {
+      issue.tcpAverageLossPct = tcp.weightedLoss / tcp.sampleCount
+      issue.tcpTargetCount = tcp.targets.size
     }
   }
 
@@ -285,31 +367,85 @@ export function summarizeCrossTargetHopIssues(
   })
 }
 
-export function getCrossTargetDiagnosis(crossIssues: CrossTargetHopIssue[]): CrossTargetDiagnosis {
+// Minimum delta (percentage points) between TCP and ICMP loss at the same
+// hop for the shape to be classified as `protocol_selective`. 30pp is well
+// above day-to-day variance in either protocol and well below the ~50pp
+// signal we've seen on SIN -> us-west-2, so it separates real protocol
+// asymmetry from noise without hiding mid-severity cases.
+const PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT = 30
+// Floor for ICMP loss before we consider the hop "ICMP-clean" for the
+// purpose of the protocol-selective check. Some routers return ICMP only
+// when overloaded even on healthy paths; don't let a 2-3% ICMP baseline
+// disqualify an otherwise clear TCP-vs-ICMP split.
+const PROTOCOL_SELECTIVE_ICMP_CEILING_PCT = 10
+
+export function classifyCrossTargetShape(crossIssues: CrossTargetHopIssue[]): CrossTargetShape {
   // One shared hop across ≥2 targets is the escalation trigger. A single hop
   // hitting one target is already surfaced by that target's own "Most
-  // suspicious hop (7d)" column; this block is only worth adding when a hop
-  // is plausibly upstream infrastructure, not a single target's own network.
+  // suspicious hop (7d)" column; the cross-target panel only earns its space
+  // when a hop is plausibly upstream infrastructure, not a single target's
+  // own network.
   const primary = crossIssues.find((issue) => issue.targetCount >= 2) ?? null
   if (primary == null) {
+    return { kind: 'none', hop: null }
+  }
+
+  // Protocol-selective: we have at least one ICMP and one TCP target
+  // covering this same hop, ICMP loss is below the noise floor, and TCP
+  // loss is substantially higher. That signature points to a middlebox
+  // policer or asymmetric-ECMP flow selection rather than raw capacity
+  // loss — a qualitatively different failure mode from "sick router".
+  if (
+    primary.icmpTargetCount >= 1 &&
+    primary.tcpTargetCount >= 1 &&
+    primary.icmpAverageLossPct != null &&
+    primary.tcpAverageLossPct != null &&
+    primary.icmpAverageLossPct <= PROTOCOL_SELECTIVE_ICMP_CEILING_PCT &&
+    primary.tcpAverageLossPct - primary.icmpAverageLossPct >= PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT
+  ) {
+    return { kind: 'protocol_selective', hop: primary }
+  }
+
+  return { kind: 'downstream_from_hop', hop: primary }
+}
+
+export function getCrossTargetDiagnosis(crossIssues: CrossTargetHopIssue[]): CrossTargetDiagnosis {
+  const shape = classifyCrossTargetShape(crossIssues)
+  if (shape.kind === 'none' || shape.hop == null) {
     return {
       className: 'good',
       label: 'No cross-target pattern',
+      shape,
       summary:
         'No single hop is implicated in downstream destination loss across multiple targets in the last 7 days.',
       suspect: null,
     }
   }
 
+  const primary = shape.hop
   const asnLabel = primary.asn == null ? '' : ` (${primary.asn})`
-  const lossLabel =
-    primary.averageLossPct == null ? '' : ` at ~${primary.averageLossPct.toFixed(1)}% average loss`
   const targetList = primary.targets.slice(0, 5).join(', ')
   const moreTargets = primary.targets.length > 5 ? ` (+${primary.targets.length - 5} more)` : ''
   const severe = primary.totalDownstreamLoss >= 10
+
+  if (shape.kind === 'protocol_selective') {
+    const icmpPct = primary.icmpAverageLossPct ?? 0
+    const tcpPct = primary.tcpAverageLossPct ?? 0
+    return {
+      className: 'bad',
+      label: 'Protocol-selective loss',
+      shape,
+      summary: `Hop ${primary.host}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop, across ${primary.targetCount} targets (${targetList}${moreTargets}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis — not plain capacity — so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.`,
+      suspect: primary,
+    }
+  }
+
+  const lossLabel =
+    primary.averageLossPct == null ? '' : ` at ~${primary.averageLossPct.toFixed(1)}% average loss`
   return {
     className: severe ? 'bad' : 'warn',
     label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
+    shape,
     summary: `Hop ${primary.host}${asnLabel} sits on the path to ${primary.targetCount} targets (${targetList}${moreTargets}) and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} — consider escalating with the upstream network.`,
     suspect: primary,
   }

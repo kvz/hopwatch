@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import type { ProbeMode } from './config.ts'
+import type { ProbeMode, ProbeProtocol } from './config.ts'
 
 export interface RawHopRecord {
   asn: string | null
@@ -57,6 +57,10 @@ const storedRawSnapshotSchema = z.object({
   label: z.string().min(1),
   observer: z.string().min(1),
   probeMode: z.enum(['default', 'netns'] as const satisfies readonly ProbeMode[]),
+  // Default to 'icmp' so snapshots written before this field existed still
+  // parse. New writers always emit the explicit value; the default only
+  // kicks in for on-disk history from previous daemon versions.
+  protocol: z.enum(['icmp', 'tcp'] as const satisfies readonly ProbeProtocol[]).default('icmp'),
   rawEvents: z.array(rawMtrEventSchema),
   target: z.string().min(1),
 })

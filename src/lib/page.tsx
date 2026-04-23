@@ -252,6 +252,11 @@ export async function renderRootIndex(
         return {
           asnByHost,
           hopIssues: entry.hopIssues,
+          // Protocol was added to SnapshotSummary; use the target's most
+          // recent snapshot as the source of truth. A target cannot flip
+          // protocols without a config edit + rolling restart, so the
+          // latest snapshot is representative of the window.
+          protocol: entry.summary.protocol,
           target: entry.summary.target,
         }
       }),

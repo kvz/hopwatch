@@ -422,6 +422,7 @@ export async function collectSnapshot(
     label: target.label,
     observer: nodeLabel,
     probeMode: target.probeMode,
+    protocol: target.protocol,
     rawEvents,
     target: target.host,
   }

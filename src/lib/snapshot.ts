@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import type { ProbeMode } from './config.ts'
+import type { ProbeMode, ProbeProtocol } from './config.ts'
 import {
   deriveHopRecordsFromRawEvents,
   parseStoredRawSnapshot,
@@ -79,6 +79,7 @@ export interface SnapshotSummary {
   hopCount: number
   hops: HopRecord[]
   probeMode: ProbeMode
+  protocol: ProbeProtocol
   rawText: string
   target: string
   worstHopLossPct: number | null
@@ -206,6 +207,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
       hopCount: hops.length,
       hops,
       probeMode: rawSnapshot.probeMode,
+      protocol: rawSnapshot.protocol,
       rawText: renderSnapshotRawText(rawSnapshot, hops),
       target: rawSnapshot.label,
       worstHopLossPct,
@@ -231,6 +233,9 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     hopCount: legacy.hopCount,
     hops: legacy.hops,
     probeMode: legacy.probeMode,
+    // No stored protocol on legacy snapshots — they predate protocol-aware
+    // probing, so they were definitionally ICMP.
+    protocol: 'icmp' as const,
     rawText: legacy.rawText,
     target: legacy.target,
     worstHopLossPct: legacy.worstHopLossPct,
@@ -396,6 +401,8 @@ export function parseSnapshotSummary(fileName: string, rawText: string): Snapsho
     hopCount: hops.length,
     hops,
     probeMode: probeModeMatch?.[1] === 'netns' ? 'netns' : 'default',
+    // Legacy .txt snapshots predate protocol-aware probing; treat as ICMP.
+    protocol: 'icmp' as const,
     rawText,
     target: labelMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
     worstHopLossPct,

@@ -34,6 +34,7 @@ function snapshot(partial: Partial<SnapshotSummary> & { collectedAt: string }): 
     hopCount: 0,
     hops: [],
     probeMode: 'default',
+    protocol: 'icmp',
     rawText: '',
     target: 'example.com',
     worstHopLossPct: null,
@@ -413,6 +414,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'router.example', downstreamLossCount: 3, averageLossPct: 12 }),
         ],
+        protocol: 'icmp',
         target: 's3-us-east-1',
       },
       {
@@ -420,6 +422,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'router.example', downstreamLossCount: 4, averageLossPct: 18 }),
         ],
+        protocol: 'icmp',
         target: 's3-us-west-2',
       },
     ])
@@ -443,6 +446,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'rate-limited.example', downstreamLossCount: 0, isolatedLossCount: 5 }),
         ],
+        protocol: 'icmp',
         target: 'target-a',
       },
       {
@@ -450,6 +454,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'rate-limited.example', downstreamLossCount: 0, isolatedLossCount: 5 }),
         ],
+        protocol: 'icmp',
         target: 'target-b',
       },
     ])
@@ -462,6 +467,10 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         asn: null,
         averageLossPct: 5,
         host: 'isolated.example',
+        icmpAverageLossPct: null,
+        icmpTargetCount: 0,
+        tcpAverageLossPct: null,
+        tcpTargetCount: 0,
         targetCount: 1,
         targets: ['only-one'],
         totalDownstreamLoss: 3,
@@ -471,6 +480,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     ])
     expect(diagnosis.className).toBe('good')
     expect(diagnosis.suspect).toBeNull()
+    expect(diagnosis.shape.kind).toBe('none')
   })
 
   test('diagnosis flags bad vs warn based on total downstream-loss volume', () => {
@@ -478,6 +488,10 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       asn: 'AS24940',
       averageLossPct: 8,
       host: 'shared.example',
+      icmpAverageLossPct: 8,
+      icmpTargetCount: 2,
+      tcpAverageLossPct: null,
+      tcpTargetCount: 0,
       targetCount: 2,
       targets: ['a', 'b'],
       totalDownstreamLoss: 4,
@@ -485,6 +499,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       totalSampleCount: 10,
     }
     expect(getCrossTargetDiagnosis([mildBase]).className).toBe('warn')
+    expect(getCrossTargetDiagnosis([mildBase]).shape.kind).toBe('downstream_from_hop')
 
     const severe = { ...mildBase, totalDownstreamLoss: 12 }
     expect(getCrossTargetDiagnosis([severe]).className).toBe('bad')
@@ -493,5 +508,102 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(getCrossTargetDiagnosis([severe]).summary).toContain('shared.example')
     expect(getCrossTargetDiagnosis([severe]).summary).toContain('AS24940')
     expect(getCrossTargetDiagnosis([severe]).summary).toContain('escalating')
+  })
+
+  test('diagnosis classifies protocol-selective loss when TCP >> ICMP at the same hop', () => {
+    // Mirrors the SIN -> us-west-2 incident: same router, ICMP clean, TCP
+    // drops half the probes. The panel should say "protocol-selective",
+    // not the generic "upstream path degraded" — they point at different
+    // remediations (fight the upstream ISP about a middlebox policy vs.
+    // demand more link capacity).
+    const protocolSelective = {
+      asn: 'AS38093',
+      averageLossPct: 30,
+      host: 'vqbn-egress.example',
+      icmpAverageLossPct: 0.5,
+      icmpTargetCount: 1,
+      tcpAverageLossPct: 51,
+      tcpTargetCount: 2,
+      targetCount: 3,
+      targets: ['tcp-mtr', 'tcp-native', 'icmp'],
+      totalDownstreamLoss: 12,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 30,
+    }
+    const diagnosis = getCrossTargetDiagnosis([protocolSelective])
+    expect(diagnosis.shape.kind).toBe('protocol_selective')
+    expect(diagnosis.label).toBe('Protocol-selective loss')
+    expect(diagnosis.summary).toContain('51.0%')
+    expect(diagnosis.summary).toContain('0.5%')
+    expect(diagnosis.summary).toContain('middlebox')
+  })
+
+  test('does NOT flag protocol-selective when ICMP is also lossy (real capacity problem)', () => {
+    // Both protocols see substantial loss — that's not policy-driven, it's
+    // the classic "sick router drops packets" signature. Fall through to
+    // the generic downstream_from_hop shape so the operator gets the
+    // escalate-upstream message instead of the protocol-asymmetry one.
+    const bothLossy = {
+      asn: 'AS24940',
+      averageLossPct: 40,
+      host: 'sick-router.example',
+      icmpAverageLossPct: 45,
+      icmpTargetCount: 1,
+      tcpAverageLossPct: 48,
+      tcpTargetCount: 1,
+      targetCount: 2,
+      targets: ['icmp', 'tcp'],
+      totalDownstreamLoss: 14,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 20,
+    }
+    expect(getCrossTargetDiagnosis([bothLossy]).shape.kind).toBe('downstream_from_hop')
+  })
+
+  test('does NOT flag protocol-selective when only one protocol is represented', () => {
+    // Classifier requires at least one ICMP and one TCP target at the same
+    // hop — a single protocol in the cluster can't establish asymmetry.
+    const onlyTcp = {
+      asn: null,
+      averageLossPct: 50,
+      host: 'tcp-only.example',
+      icmpAverageLossPct: null,
+      icmpTargetCount: 0,
+      tcpAverageLossPct: 50,
+      tcpTargetCount: 2,
+      targetCount: 2,
+      targets: ['a', 'b'],
+      totalDownstreamLoss: 12,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 20,
+    }
+    expect(getCrossTargetDiagnosis([onlyTcp]).shape.kind).toBe('downstream_from_hop')
+  })
+
+  test('per-protocol averages are computed from the per-target hop inputs', () => {
+    // Regression test for the summarizer's per-protocol accumulator: ICMP
+    // comes out near zero, TCP near 50%, and both target counts are 1 — the
+    // exact inputs classifyCrossTargetShape needs to recognize the shape.
+    const cross = summarizeCrossTargetHopIssues([
+      {
+        asnByHost: new Map(),
+        hopIssues: [suspect({ host: 'router.example', averageLossPct: 0, downstreamLossCount: 2 })],
+        protocol: 'icmp',
+        target: 'icmp-target',
+      },
+      {
+        asnByHost: new Map(),
+        hopIssues: [
+          suspect({ host: 'router.example', averageLossPct: 50, downstreamLossCount: 5 }),
+        ],
+        protocol: 'tcp',
+        target: 'tcp-target',
+      },
+    ])
+    expect(cross).toHaveLength(1)
+    expect(cross[0].icmpAverageLossPct).toBe(0)
+    expect(cross[0].tcpAverageLossPct).toBe(50)
+    expect(cross[0].icmpTargetCount).toBe(1)
+    expect(cross[0].tcpTargetCount).toBe(1)
   })
 })

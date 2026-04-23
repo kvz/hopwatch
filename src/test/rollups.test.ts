@@ -17,6 +17,7 @@ function snap(collectedAt: string, rawEvents: RawMtrEvent[]): StoredRawSnapshot 
     label: 'example',
     observer: 'test-observer',
     probeMode: 'default',
+    protocol: 'icmp',
     rawEvents,
     schemaVersion: 2,
     target: 'example.com',
@@ -102,6 +103,7 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
       label: 'example',
       observer: 'test-observer',
       probeMode: 'default',
+      protocol: 'icmp',
       // Only `sent` events, no replies and no host — resolveDestinationHopIndex
       // returns null, so both sentCount and replyCount are 0.
       rawEvents: [

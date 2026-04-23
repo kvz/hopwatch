@@ -24,7 +24,7 @@ function totalLossPoint(timestamp: number): ChartPoint {
 
 function nearTotalLossWithTinyMedianPoint(timestamp: number): ChartPoint {
   // 19/20 probes lost, one probe got through quickly. A strict reading of the
-  // sample data yields a median near 0 ms — but SmokePing suppresses the dot
+  // sample data yields a median near 0 ms - but SmokePing suppresses the dot
   // under near-total loss rather than anchoring a red marker on the baseline.
   return {
     destinationLossPct: 95,
@@ -87,7 +87,7 @@ function extractLossBars(svg: string): Array<{
 }
 
 describe('renderChartSvg loss bar', () => {
-  test('100% loss bins leave a gap — no median to anchor a marker on, same as SmokePing', () => {
+  test('100% loss bins leave a gap - no median to anchor a marker on, same as SmokePing', () => {
     const points = [totalLossPoint(NOW - 30 * 60 * 1000)]
     const svg = renderChartSvg(points, {
       height: HEIGHT,

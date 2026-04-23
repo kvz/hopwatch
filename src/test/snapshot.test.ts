@@ -20,7 +20,7 @@ function hop(partial: Partial<HopRecord> & { index: number }): HopRecord {
 describe('parseStoredSnapshotSummary', () => {
   test('reports a blackholed trace as 100% destination loss instead of unknown', () => {
     // v2 snapshot with `sent` events at every ttl but no `reply` or `host`
-    // events anywhere — the path is fully black-holed. Previously this
+    // events anywhere - the path is fully black-holed. Previously this
     // bubbled up as destinationLossPct = null and diagnosis = 'unknown',
     // causing the 3h/30h charts to skip the bar and the weekly status
     // logic to record it as "no destination loss observed".

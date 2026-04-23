@@ -25,7 +25,7 @@ const histogramBucketSchema = z.object({
 // Per-hop aggregate within a bucket, keyed by `host` (merged `dns (ip)` form
 // from raw.ts's deriveHopRecordsFromRawEvents). `hopIndexes` surfaces ECMP
 // (same router seen at multiple TTLs) without fragmenting stats across rows.
-// Only populated for hourly rollups — daily keeps hops: [] to avoid bloating
+// Only populated for hourly rollups - daily keeps hops: [] to avoid bloating
 // the 365-day file with per-hop detail nobody renders at that horizon.
 const hopRollupEntrySchema = z.object({
   host: z.string().min(1),
@@ -259,7 +259,7 @@ function buildRollupBucket(
   // summarizeDestinationSamples returns sentCount: 0 (no resolvable
   // destination hop). Reporting that as 0% loss would render a full hour of
   // "target unreachable" as a healthy bar on the long-range chart. Mirror
-  // raw.ts's per-snapshot summary — zero sent, zero replies = 100% loss.
+  // raw.ts's per-snapshot summary - zero sent, zero replies = 100% loss.
   // We only reach buildRollupBucket for non-empty buckets, so this branch
   // always represents "we had data, none of it hit the destination".
   const destinationLossPct =
@@ -374,7 +374,7 @@ export function aggregateSnapshotsToRollupBuckets(
 ): MtrRollupBucket[] {
   // Per-hop aggregates only for hourly rollups. Daily rollups keep 365 days
   // of history; adding ~30 hops per bucket to every day for every target
-  // balloons the daily file for little benefit — the visualizations that
+  // balloons the daily file for little benefit - the visualizations that
   // consume hops (heatmap, loss funnel) operate on hourly granularity, and
   // the 14-day raw retention means per-hop signal is inherently bounded to
   // the hourly window anyway.
@@ -454,7 +454,7 @@ export async function readRollupFile(
     return parsed
   } catch (err) {
     // A corrupt rollup would otherwise be silently overwritten with whatever
-    // we can still reconstruct from the raw snapshot retention window —
+    // we can still reconstruct from the raw snapshot retention window -
     // dropping years of hourly/daily history in the process. Quarantine the
     // bad file with a timestamped suffix so the next write starts fresh but
     // the original is preserved for post-mortem.
@@ -465,7 +465,7 @@ export async function readRollupFile(
       await rename(filePath, quarantinePath)
     } catch (renameErr) {
       // Previously swallowed silently, which produced a log line claiming the
-      // file was quarantined even when the rename had failed — and the caller
+      // file was quarantined even when the rename had failed - and the caller
       // would then `writeRollupFile()` over `filePath`, losing the original.
       // Surface it so operators at least see both failures in the log.
       quarantineError = renameErr instanceof Error ? renameErr.message : String(renameErr)
@@ -473,7 +473,7 @@ export async function readRollupFile(
     if (quarantineError != null) {
       process.stderr.write(
         `hopwatch: corrupt rollup at ${filePath} (${reason}); ` +
-          `quarantine rename to ${quarantinePath} failed (${quarantineError}) — ` +
+          `quarantine rename to ${quarantinePath} failed (${quarantineError}) - ` +
           `about to overwrite the corrupt file\n`,
       )
     } else {
@@ -487,7 +487,7 @@ export async function readRollupFile(
 
 interface ListStoredRawSnapshotsOptions {
   // Only include snapshot files whose name is >= this prefix (the filename
-  // format is lexicographically sortable — `YYYYMMDDTHHmmssZ.json`). Used by
+  // format is lexicographically sortable - `YYYYMMDDTHHmmssZ.json`). Used by
   // updateTargetRollups for incremental re-aggregation so long histories do
   // not reparse every retained file on every cycle.
   sinceFileName?: string
@@ -511,7 +511,7 @@ async function listStoredRawSnapshots(
     } catch (err) {
       // A single unparseable snapshot must not abort the rollup rebuild for an
       // entire target. Surface the failure on stderr so operators can find and
-      // triage the bad file — silently skipping would hide real bugs (schema
+      // triage the bad file - silently skipping would hide real bugs (schema
       // drift, partial writes) while also papering over on-disk corruption.
       const reason = err instanceof Error ? err.message : String(err)
       process.stderr.write(`hopwatch: skipping unreadable snapshot ${filePath}: ${reason}\n`)

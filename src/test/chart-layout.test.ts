@@ -54,7 +54,7 @@ describe('lossColorFor', () => {
   })
 
   test('picks mid bucket for intermediate loss', () => {
-    // Bucket covering (15%, 25%] — the SmokePing "4-5" band at pings=20.
+    // Bucket covering (15%, 25%] - the SmokePing "4-5" band at pings=20.
     const bucket = SMOKEPING_LOSS_BUCKETS[4]
     expect(lossColorFor(20)).toBe(bucket.color)
   })
@@ -76,7 +76,7 @@ describe('buildLossLegendLabels', () => {
   })
 
   test('drops empty buckets at small pings counts', () => {
-    // At pings=10, a single lost packet is already 10% — buckets whose
+    // At pings=10, a single lost packet is already 10% - buckets whose
     // integer threshold does not advance past the previous one are skipped.
     const labels = buildLossLegendLabels(10).map((e) => e.label)
     expect(labels[0]).toBe('0/10')

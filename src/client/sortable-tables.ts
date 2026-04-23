@@ -1,7 +1,7 @@
 // Progressive-enhancement client script: finds every <table data-sortable> on
 // the page and lets the user click a <th> to sort its <tbody> rows by that
 // column. Re-clicking toggles direction, and a third click restores the
-// original order. No React, no bundler — just a small plain-TS module served
+// original order. No React, no bundler - just a small plain-TS module served
 // as-is to the browser.
 
 export type SortKind = 'text' | 'number' | 'loss' | 'time'
@@ -23,7 +23,7 @@ export function parseDefaultSort(raw: string | null): SortDirection | null {
   return null
 }
 
-const MISSING_TEXT = new Set(['', 'n/a', '—', '-', 'unknown', 'nan'])
+const MISSING_TEXT = new Set(['', 'n/a', '-', '-', 'unknown', 'nan'])
 
 export function parseSortValue(raw: string, kind: SortKind): SortValue {
   const trimmed = raw.trim()
@@ -64,7 +64,7 @@ function readCellValue(cell: HTMLTableCellElement, kind: SortKind): SortValue {
 
 // Visual-only rows (e.g. day separators between snapshot runs) carry
 // data-row-kind="separator" so they render in the default chronological order
-// but stay out of the sort machinery entirely — they'd otherwise pollute the
+// but stay out of the sort machinery entirely - they'd otherwise pollute the
 // comparator and end up in arbitrary positions once a user clicks a header.
 function isSortableRow(row: HTMLTableRowElement): boolean {
   return row.getAttribute('data-row-kind') !== 'separator'
@@ -90,7 +90,7 @@ function sortBody(
     // Stable tie-break: original row order.
     return originalOrder.indexOf(rowA) - originalOrder.indexOf(rowB)
   })
-  // When a sort is active, separators are meaningless — hide them, keep the
+  // When a sort is active, separators are meaningless - hide them, keep the
   // sortable rows contiguous. restoreOriginalOrder will un-hide them.
   const allRows = Array.from(body.querySelectorAll<HTMLTableRowElement>(':scope > tr'))
   for (const row of allRows) {

@@ -17,6 +17,7 @@ function snap(collectedAt: string, rawEvents: RawMtrEvent[]): StoredRawSnapshot 
     label: 'example',
     observer: 'test-observer',
     probeMode: 'default',
+    protocol: 'icmp',
     rawEvents,
     schemaVersion: 2,
     target: 'example.com',
@@ -90,8 +91,8 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
   })
 
   test('reports 100% loss (not 0%) when every snapshot in a bucket was completely blackholed', () => {
-    // resolveDestinationHopIndex returns null when nothing survives — no
-    // reply/host events at any hop — and summarizeDestinationSamples returns
+    // resolveDestinationHopIndex returns null when nothing survives - no
+    // reply/host events at any hop - and summarizeDestinationSamples returns
     // sentCount: 0. Before the fix, buildRollupBucket short-circuited that to
     // destinationLossPct=0, so a full hour of "target unreachable" appeared as
     // a healthy 0% bar on the long-range chart, hiding the outage.
@@ -102,7 +103,8 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
       label: 'example',
       observer: 'test-observer',
       probeMode: 'default',
-      // Only `sent` events, no replies and no host — resolveDestinationHopIndex
+      protocol: 'icmp',
+      // Only `sent` events, no replies and no host - resolveDestinationHopIndex
       // returns null, so both sentCount and replyCount are 0.
       rawEvents: [
         { kind: 'sent', hopIndex: 0, probeId: 0 },
@@ -311,7 +313,7 @@ describe('updateTargetRollups daily RTT fidelity', () => {
       JSON.stringify(existingHourly, null, 2),
     )
 
-    // Only one snapshot survives raw pruning for this hour — regenerated bucket would
+    // Only one snapshot survives raw pruning for this hour - regenerated bucket would
     // have snapshotCount=1, overwriting the stored snapshotCount=4 bucket.
     const partial = {
       collectedAt: '20260420T104500Z',

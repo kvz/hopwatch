@@ -107,7 +107,7 @@ const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000
 const THREE_SIXTY_DAYS_MS = 360 * 24 * 60 * 60 * 1000
 
 // Thumbnail-only loader for the root overview. renderRootIndex used to call
-// loadChartDefinitions() and throw three of the four charts away — each target
+// loadChartDefinitions() and throw three of the four charts away - each target
 // paying for two rollup-file reads plus three unused ChartPoint arrays. This
 // helper builds just the 30h snapshot-backed chart that the overview needs.
 export function buildThumbnailChartDefinition(

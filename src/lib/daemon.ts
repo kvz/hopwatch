@@ -4,7 +4,7 @@ import path from 'node:path'
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
 // value is always a string and Bun.Transpiler handles the rest.
 import relativeTimeSource from '../client/relative-time.ts' with { type: 'text' }
-// @ts-expect-error see note on relativeTimeSource — same import-attribute shape.
+// @ts-expect-error see note on relativeTimeSource - same import-attribute shape.
 import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
 import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
@@ -55,7 +55,7 @@ function contentTypeFor(filePath: string): string {
 function safeResolve(root: string, urlPath: string): string | null {
   // decodeURIComponent throws URIError on malformed percent-encoding (e.g.
   // `/%E0%A4`). A probe or attacker hitting such a URL must not bubble up to
-  // the fetch handler and produce a generic 500 — return null so the caller
+  // the fetch handler and produce a generic 500 - return null so the caller
   // can respond with a 4xx.
   let decoded: string
   try {
@@ -74,7 +74,7 @@ function safeResolve(root: string, urlPath: string): string | null {
 }
 
 // Shared symlink-escape guard for both entry points. safeResolve() only checks
-// the lexical path, but stat() and Bun.file() follow symlinks — so a symlink
+// the lexical path, but stat() and Bun.file() follow symlinks - so a symlink
 // under data_dir pointing at /etc/passwd would otherwise be happily used. We
 // realpath both the root and the resolved target and require the target stay
 // within the root's realpath. `allowRoot=false` additionally rejects the bare
@@ -103,7 +103,7 @@ async function realpathContained(
 // Resolves a target-dashboard slug to its on-disk directory while guarding
 // against symlink escape. The daemon's target route previously only applied
 // the lexical `safeResolve()` check, so a symlink under data_dir pointing at
-// /var/log or /etc would render — the page code then enumerated and parsed
+// /var/log or /etc would render - the page code then enumerated and parsed
 // JSON files from outside the data tree.
 export async function resolveTargetDirPath(root: string, slug: string): Promise<string | null> {
   const lexical = safeResolve(root, slug)
@@ -141,7 +141,7 @@ async function serveFile(root: string, urlPath: string): Promise<Response> {
   // Collapse "lexically outside root" (was 403) and "not resolvable under root"
   // (404) into a single 404 response. The split let a caller probing
   // `/../etc/passwd` distinguish "existed but denied" (403) from
-  // "didn't exist" (404) — a minor oracle that leaked whether a given path
+  // "didn't exist" (404) - a minor oracle that leaked whether a given path
   // was even on disk outside the data dir. 404 for every failure mode
   // removes the signal without changing any legitimate response.
   const realFile = await resolveServeFilePath(root, urlPath)

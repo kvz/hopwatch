@@ -10,7 +10,7 @@ import {
   loadChartDefinitions,
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
-import { readRollupFile } from './rollups.ts'
+import { type MtrRollupBucket, readRollupFile } from './rollups.ts'
 import {
   listSnapshotFileNames,
   parseCollectedAt,
@@ -28,6 +28,7 @@ import {
   summarizeCrossTargetHopIssues,
   summarizeDiagnoses,
   summarizeHopIssues,
+  summarizeHopProtocolStats,
   summarizeSnapshots,
 } from './snapshot-aggregate.ts'
 
@@ -37,7 +38,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000
 // Parsed snapshot summaries are cached by absolute path. Snapshot files are
 // immutable once written (timestamped filenames, never updated in place), so
 // a never-invalidated cache is safe _per file_. Without this, every `/` render
-// reparses the entire retention window (keep_days * 96 files per target) — at
+// reparses the entire retention window (keep_days * 96 files per target) - at
 // the default 15-minute cadence and 14-day retention that is ~1,344 parses
 // per target per request, which makes the open HTTP server trivial to exhaust
 // with repeat GETs.
@@ -93,7 +94,7 @@ export async function listTargetSnapshots(targetDir: string): Promise<SnapshotSu
       snapshots.push(summary)
     } catch (err) {
       // A single corrupt snapshot must not kill the dashboard for an entire
-      // target. Log to stderr so operators can triage — the rollup rebuilder
+      // target. Log to stderr so operators can triage - the rollup rebuilder
       // does the same with listStoredRawSnapshots.
       const reason = err instanceof Error ? err.message : String(err)
       process.stderr.write(`hopwatch: skipping unreadable snapshot ${cacheKey}: ${reason}\n`)
@@ -139,7 +140,7 @@ export async function renderTargetIndex(
   const lastDay = summarizeSnapshots(lastDaySnapshots)
   const lastWeek = summarizeSnapshots(lastWeekSnapshots)
   // Exclude anonymized (???) hops from the top-5 "Recurring problematic hops"
-  // table — they almost always represent routers that rate-limit ICMP reply,
+  // table - they almost always represent routers that rate-limit ICMP reply,
   // so elevating them above real suspects is misleading. The hint under the
   // diagnosis explains the convention.
   const hopIssues = summarizeHopIssues(lastWeekSnapshots)
@@ -196,6 +197,8 @@ export async function renderRootIndex(
     aggregate: SnapshotAggregate
     diagnosisAggregate: DiagnosisAggregate
     hopIssues: HopAggregate[]
+    hourlyBuckets: MtrRollupBucket[]
+    lastWeekSnapshots: SnapshotSummary[]
     summary: SnapshotSummary
     targetSlug: string
     thumbnailChart: ChartDefinition
@@ -208,10 +211,21 @@ export async function renderRootIndex(
     }
 
     const lastWeekSnapshots = selectSnapshotsInWindow(snapshots, now, SEVEN_DAYS_MS)
+    // The cross-target diagnosis needs per-hop bucket history so it can
+    // compute "degraded since" for the suspect hop. Missing or unparseable
+    // rollups are treated as no history rather than fatal - the root page
+    // should still render for fresh installs that have not accumulated a
+    // full hour yet.
+    const hourlyRollup = await readRollupFile(
+      path.join(targetDir, 'hourly.rollup.json'),
+      'hour',
+    ).catch(() => null)
     targetSummaries.push({
       aggregate: summarizeSnapshots(lastWeekSnapshots),
       diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots),
       hopIssues: summarizeHopIssues(lastWeekSnapshots),
+      hourlyBuckets: hourlyRollup?.buckets ?? [],
+      lastWeekSnapshots,
       summary: snapshots[0],
       targetSlug,
       thumbnailChart: buildThumbnailChartDefinition(snapshots, now),
@@ -242,21 +256,48 @@ export async function renderRootIndex(
   // ASN labels are per-target/per-snapshot; keep the latest seen mapping per
   // host so the cross-target diagnosis can attribute a hop to its upstream
   // network without re-walking the full snapshot set.
-  const crossTargetDiagnosis = getCrossTargetDiagnosis(
-    summarizeCrossTargetHopIssues(
-      targetSummaries.map((entry) => {
-        const asnByHost = new Map<string, string | null>()
-        for (const hop of entry.summary.hops) {
-          asnByHost.set(hop.host, hop.asn)
-        }
-        return {
-          asnByHost,
-          hopIssues: entry.hopIssues,
-          target: entry.summary.target,
-        }
-      }),
-    ),
+  const crossIssues = summarizeCrossTargetHopIssues(
+    targetSummaries.map((entry) => {
+      const asnByHost = new Map<string, string | null>()
+      for (const hop of entry.summary.hops) {
+        asnByHost.set(hop.host, hop.asn)
+      }
+      return {
+        asnByHost,
+        destinationHost: entry.summary.host,
+        hopIssues: entry.hopIssues,
+        // Protocol was added to SnapshotSummary; use the target's most
+        // recent snapshot as the source of truth. A target cannot flip
+        // protocols without a config edit + rolling restart, so the
+        // latest snapshot is representative of the window.
+        protocol: entry.summary.protocol,
+        target: entry.summary.target,
+      }
+    }),
   )
+  // All-traversals stats (including clean hops) feed the shape classifier
+  // so it can see that ICMP probes cross the suspect hop with 0% loss
+  // even when those probes never appear in the lossy-only cross-issue
+  // aggregate - the signal that distinguishes protocol_selective from a
+  // generic "upstream path degraded".
+  const hopProtocolStats = summarizeHopProtocolStats(
+    targetSummaries.map((entry) => ({
+      protocol: entry.summary.protocol,
+      snapshots: entry.lastWeekSnapshots,
+      target: entry.summary.target,
+    })),
+  )
+  const rollupBucketsByTarget = targetSummaries.map((entry) => entry.hourlyBuckets)
+  const perTargetSnapshots = targetSummaries.map((entry) => ({
+    protocol: entry.summary.protocol,
+    snapshots: entry.lastWeekSnapshots,
+    target: entry.summary.target,
+  }))
+  const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
+    now,
+    perTargetSnapshots,
+    rollupBucketsByTarget,
+  })
 
   const latestCollectedAt = rows.reduce<string | null>((acc, row) => {
     const rowTs = parseCollectedAt(row.summary.collectedAt) ?? 0

@@ -31,7 +31,7 @@ export function parseListenAddress(listen: string): ParsedListenAddress {
   }
 
   // `Number("")` silently coerces to 0, which would then pass every remaining
-  // check and leave Bun.serve binding a random ephemeral port — hiding a typo
+  // check and leave Bun.serve binding a random ephemeral port - hiding a typo
   // like `listen = "127.0.0.1:"` until the next operator wonders why the
   // dashboard is on a different port on each restart.
   if (portRaw === '') {
@@ -39,7 +39,7 @@ export function parseListenAddress(listen: string): ParsedListenAddress {
   }
 
   const port = Number(portRaw)
-  // Port 0 is a legitimate value — Bun.serve interprets it as "bind any
+  // Port 0 is a legitimate value - Bun.serve interprets it as "bind any
   // available port", which tests rely on to avoid collisions.
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`Invalid listen port in "${listen}"`)

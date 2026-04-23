@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises'
 import path from 'node:path'
 import { execa } from 'execa'
-import type { LoadedConfig, ProbeEngine, ProbeMode, TargetConfig } from './config.ts'
+import type { LoadedConfig, ProbeEngine, ProbeMode, ProbeProtocol, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
 import { parseRawMtrOutput, parseStoredRawSnapshot, type RawMtrEvent } from './raw.ts'
 import { updateTargetRollups } from './rollups.ts'
@@ -26,6 +26,8 @@ export interface MtrHistoryTarget {
   engine: ProbeEngine
   netns: string | null
   group: string
+  protocol: ProbeProtocol
+  port: number
 }
 
 export function targetFromConfig(config: TargetConfig): MtrHistoryTarget {
@@ -37,6 +39,8 @@ export function targetFromConfig(config: TargetConfig): MtrHistoryTarget {
     engine: config.engine,
     netns: config.netns ?? null,
     group: config.group ?? 'default',
+    protocol: config.protocol,
+    port: config.port,
   }
 }
 
@@ -45,6 +49,8 @@ export interface NativeProbeRequest {
   packets: number
   maxHops: number
   timeoutMs: number
+  protocol: ProbeProtocol
+  port: number
 }
 
 export type RunNativeProbeFn = (request: NativeProbeRequest) => Promise<RawMtrEvent[]>
@@ -53,6 +59,16 @@ export type RunNativeProbeFn = (request: NativeProbeRequest) => Promise<RawMtrEv
 // under vitest/Node (which lacks `bun:ffi`). Tests that exercise engine=native
 // must inject a `runNativeProbeFn` dependency.
 async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMtrEvent[]> {
+  if (request.protocol === 'tcp') {
+    const { probeTargetNativeTcp } = await import('./prober-native-tcp.ts')
+    return probeTargetNativeTcp({
+      hostIp: request.hostIp,
+      maxHops: request.maxHops,
+      packets: request.packets,
+      port: request.port,
+      timeoutMs: request.timeoutMs,
+    })
+  }
   const { probeTargetNative } = await import('./prober-native.ts')
   return probeTargetNative({
     hostIp: request.hostIp,
@@ -115,7 +131,7 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
   // Bound each probe at roughly half the cycle interval, floored at 60s. A
   // normal `mtr -c 20` finishes in ~20s; anything past the ceiling is stuck
   // and blocking the next cycle. Half-interval keeps 15-min cadences around
-  // a 7.5-min ceiling — plenty of headroom for retries but not forever.
+  // a 7.5-min ceiling - plenty of headroom for retries but not forever.
   const probeTimeoutMs = Math.max(60_000, Math.floor(config.probe.interval_seconds * 500))
   return {
     concurrency: config.probe.concurrency,
@@ -286,7 +302,7 @@ export interface CollectSnapshotDeps {
 }
 
 // Promise.race-based timeout wrapper. Node's DNS resolver and Bun's reverse
-// DNS calls ignore AbortSignal, so a stuck resolver cannot be aborted — we can
+// DNS calls ignore AbortSignal, so a stuck resolver cannot be aborted - we can
 // at least release the caller on schedule and let the underlying request
 // finish in the background.
 async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -342,6 +358,8 @@ export async function collectSnapshot(
       hostIp: resolved.address,
       maxHops: 30,
       packets: options.packets,
+      port: target.port,
+      protocol: target.protocol,
       // Honor the same probe deadline the mtr path uses. Previously this was
       // hardcoded to 5s, which truncated late replies on slow paths and
       // diverged the two engines' behavior from the scheduler's budget.
@@ -356,18 +374,18 @@ export async function collectSnapshot(
     // failedTargetSlugs and the snapshot is not written at all.
     if (rawEvents.length === 0) {
       throw new Error(
-        `native probe for '${target.slug}' returned no events (likely raw-socket failure — check CAP_NET_RAW)`,
+        `native probe for '${target.slug}' returned no events (likely raw-socket failure - check CAP_NET_RAW)`,
       )
     }
   } else {
-    const mtrArgs = [
-      '-b',
-      `-${options.ipVersion}`,
-      '-l',
-      '-c',
-      String(options.packets),
-      target.host,
-    ]
+    const mtrArgs = ['-b', `-${options.ipVersion}`, '-l', '-c', String(options.packets)]
+    // TCP probes carry a destination port; ICMP does not. `--tcp -P <port>`
+    // is the mtr CLI for TCP SYN probes and is what we need to see the
+    // protocol-selective loss that ICMP probes miss on some paths.
+    if (target.protocol === 'tcp') {
+      mtrArgs.push('--tcp', '-P', String(target.port))
+    }
+    mtrArgs.push(target.host)
     if (target.probeMode === 'netns' && options.namespaceDir.trim() === '') {
       throw new Error(
         `target '${target.slug}' uses probe_mode='netns' but the probe [namespace_dir] is empty`,
@@ -404,6 +422,7 @@ export async function collectSnapshot(
     label: target.label,
     observer: nodeLabel,
     probeMode: target.probeMode,
+    protocol: target.protocol,
     rawEvents,
     target: target.host,
   }
@@ -412,7 +431,7 @@ export async function collectSnapshot(
   // Publish atomically via link() instead of rename() so a second process
   // probing the same target in the same wall-clock second collides on
   // EEXIST instead of silently overwriting the first snapshot. The common
-  // single-writer case is unaffected — link()+unlink() is one extra syscall.
+  // single-writer case is unaffected - link()+unlink() is one extra syscall.
   try {
     await link(tmpJsonFile, jsonFile)
   } catch (err) {
@@ -481,12 +500,12 @@ export async function runCollector(
   deps: CollectorDependencies = {},
 ): Promise<RunCollectorResult> {
   // The native prober uses bun:ffi to dlopen('libc.so.6') + AF_INET raw
-  // sockets — that only exists on Linux. Catch the mismatch here (shared by
+  // sockets - that only exists on Linux. Catch the mismatch here (shared by
   // both the daemon's scheduler and `hopwatch probe-once`) instead of failing
   // mid-probe; config-check still passes on any platform so operators can
   // validate linux-targeted configs from a dev machine. Tests that inject a
   // mock `runNativeProbeFn` bypass the FFI load entirely and therefore also
-  // bypass this guard — the check is about protecting the real code path.
+  // bypass this guard - the check is about protecting the real code path.
   const nativeTargets = config.target.filter((target) => target.engine === 'native')
   // An explicit `warmupNativeEngineFn` in deps opts into the warmup path and
   // bypasses the platform check below, so tests can exercise the "libc failed
@@ -509,7 +528,7 @@ export async function runCollector(
   // dlopen('libc.so.6') inside the native prober fails with an opaque
   // bun:ffi error on every probe cycle. Warm the FFI load up front so the
   // failure surfaces once, with a clear glibc requirement, before the first
-  // probe — matching the intent of the platform check above.
+  // probe - matching the intent of the platform check above.
   if (shouldRunWarmup) {
     try {
       const warmup = deps.warmupNativeEngineFn ?? defaultWarmupNativeEngine
@@ -571,7 +590,7 @@ export async function refreshRollups(
   await mkdir(options.logDir, { recursive: true })
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
-  // `hopwatch rollup` is the recovery escape hatch — always do a full rebuild.
+  // `hopwatch rollup` is the recovery escape hatch - always do a full rebuild.
   const failedTargetSlugs = await updateRollupsForTargets(nodeLabel, options, nowDate, true, logger)
   return { failedTargetSlugs }
 }

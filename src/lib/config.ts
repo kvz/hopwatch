@@ -10,6 +10,15 @@ export type ProbeMode = z.infer<typeof probeModeSchema>
 export const probeEngineSchema = z.enum(['mtr', 'native'])
 export type ProbeEngine = z.infer<typeof probeEngineSchema>
 
+// `icmp` sends ICMP Echo Requests (or the mtr equivalent) - the default, and
+// what hopwatch has always done. `tcp` sends TCP SYN probes to the target's
+// port. The two can disagree by tens of percentage points on the same path:
+// some transit routers rate-limit ICMP but forward TCP normally (or vice
+// versa). When the production workload is HTTPS to S3/R2/etc., TCP is what
+// actually reflects user-visible reliability.
+export const probeProtocolSchema = z.enum(['icmp', 'tcp'])
+export type ProbeProtocol = z.infer<typeof probeProtocolSchema>
+
 const targetSchema = z.object({
   id: z
     .string()
@@ -18,7 +27,7 @@ const targetSchema = z.object({
   label: z.string().min(1),
   // `host` lands in `mtr`/`nsenter` argv untouched. A host that starts with `-`
   // (e.g. `-h`, `--report-cycles=1`) would be parsed as an option instead of a
-  // destination and make the probe wildly misbehave — reject at config time so
+  // destination and make the probe wildly misbehave - reject at config time so
   // this can't sneak in via a typo or a hostile config file.
   host: z
     .string()
@@ -35,6 +44,11 @@ const targetSchema = z.object({
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'netns must be slug-safe (no "/" or "..")')
     .optional(),
   group: z.string().optional(),
+  protocol: probeProtocolSchema.default('icmp'),
+  // Only consulted when protocol='tcp'. 443 covers the HTTPS case that
+  // motivates TCP probing (S3, R2, Hetzner Object Storage). Operators can
+  // override per target when probing a non-HTTPS service.
+  port: z.number().int().min(1).max(65535).default(443),
 })
 export type TargetConfig = z.infer<typeof targetSchema>
 
@@ -76,7 +90,7 @@ export type PeerConfig = z.infer<typeof peerSchema>
 
 const serverSchema = z.object({
   // Loopback by default. Hop topology + reverse-DNS for every target is
-  // sensitive enough that we'd rather operators opt into exposing the UI —
+  // sensitive enough that we'd rather operators opt into exposing the UI -
   // front with nginx (README shows the proxy recipe) or set
   // `listen = "0.0.0.0:8080"` explicitly. Before this, fresh installs bound
   // on every interface with no authentication shipped.
@@ -244,6 +258,15 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
       )
     }
 
+    if (target.protocol === 'tcp' && config.probe.ip_version === 6) {
+      // mtr supports --tcp over IPv6 and the native TCP prober would too, but
+      // we haven't exercised either combination against real v6 paths yet.
+      // Fail fast instead of shipping an untested code path.
+      throw new Error(
+        `target '${target.id}' uses protocol='tcp' but probe.ip_version=6; IPv6 TCP probing is not yet supported`,
+      )
+    }
+
     // The native prober packs (cycle, ttl) into the 16-bit ICMP seq field
     // (11 bits for cycle). Past cycle 2047 the seq wraps and late replies
     // from a pre-wrap cycle overwrite post-wrap send times, returning
@@ -265,7 +288,7 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
     peerIds.add(peer.id)
   }
 
-  // `path.resolve()` normalizes both absolute and relative data_dir values —
+  // `path.resolve()` normalizes both absolute and relative data_dir values -
   // in particular it strips trailing separators. safeResolve() later compares
   // `resolved.startsWith(root + sep)`, and a stored `/var/lib/hopwatch/` would
   // otherwise fail every prefix check because the resolved target is

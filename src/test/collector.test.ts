@@ -78,7 +78,9 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
       host,
       id: host,
       label: host,
+      port: 443,
       probe_mode: 'default',
+      protocol: 'icmp',
     })),
   }
 }
@@ -174,6 +176,48 @@ describe('runCollector', () => {
     expect(result.failedTargetSlugs).toEqual([])
   })
 
+  test('passes --tcp -P <port> to mtr when the target uses protocol="tcp"', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    config.target[0].protocol = 'tcp'
+    config.target[0].port = 8443
+    const logger = createLogger({ level: 'error', pretty: false })
+    let capturedArgs: string[] = []
+    const runCommand = async (
+      _file: string,
+      args: string[],
+    ): Promise<{ stderr: string; stdout: string }> => {
+      capturedArgs = args
+      return { stdout: MTR_OUTPUT, stderr: '' }
+    }
+
+    await runCollector(config, logger, { runCommand })
+
+    expect(capturedArgs).toContain('--tcp')
+    const portIndex = capturedArgs.indexOf('-P')
+    expect(portIndex).toBeGreaterThanOrEqual(0)
+    expect(capturedArgs[portIndex + 1]).toBe('8443')
+    // The target host must come last so it isn't parsed as an option arg.
+    expect(capturedArgs[capturedArgs.length - 1]).toBe('good.example')
+  })
+
+  test('omits --tcp and -P when the target uses the default protocol="icmp"', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    const logger = createLogger({ level: 'error', pretty: false })
+    let capturedArgs: string[] = []
+    const runCommand = async (
+      _file: string,
+      args: string[],
+    ): Promise<{ stderr: string; stdout: string }> => {
+      capturedArgs = args
+      return { stdout: MTR_OUTPUT, stderr: '' }
+    }
+
+    await runCollector(config, logger, { runCommand })
+
+    expect(capturedArgs).not.toContain('--tcp')
+    expect(capturedArgs).not.toContain('-P')
+  })
+
   test('rejects engine="native" with a clear error when the FFI warmup fails (e.g. musl)', async () => {
     // config-check and daemon start both succeed on musl because the native
     // prober dlopens libc.so.6 lazily (that library does not exist on Alpine /
@@ -200,7 +244,7 @@ describe('runCollector', () => {
 
   test('treats an empty native probe result as a failed target instead of persisting an empty snapshot', async () => {
     // When every sendto() fails, the native prober returns an empty event
-    // list. Before this fix the collector persisted the snapshot anyway —
+    // list. Before this fix the collector persisted the snapshot anyway -
     // detail pages classified it as "unknown" (no events) while rollups saw
     // destinationSentCount=0 and rendered 100% loss, producing a dashboard
     // that disagreed with itself about the same probe.

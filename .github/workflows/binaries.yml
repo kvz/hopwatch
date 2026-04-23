@@ -101,8 +101,8 @@ jobs:
           cd bin-build
           # The release asset keeps its platform suffix (for disambiguation on
           # the releases page), but inside the tarball we always call the
-          # binary `hopwatch`. That way the install commands in README.md —
-          # `tar -xz -C /usr/local/bin` followed by `./hopwatch` — work without
+          # binary `hopwatch`. That way the install commands in README.md -
+          # `tar -xz -C /usr/local/bin` followed by `./hopwatch` - work without
           # a post-extract rename.
           cp "$ASSET_NAME" hopwatch
           tar -czf "$ASSET_NAME.tar.gz" hopwatch

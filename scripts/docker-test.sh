@@ -8,7 +8,7 @@ cd "${REPO_ROOT}"
 
 # Dockerfile.test COPYs the repo into /app and installs node_modules there.
 # We used to bind-mount the repo over /workspace, but that hid /app and left
-# the working tree without node_modules — `bun run check` then failed before
+# the working tree without node_modules - `bun run check` then failed before
 # exercising any code. Run against the image's /app WORKDIR so deps resolve.
 # Rebuild is fast because only changed source invalidates cache layers after
 # the install layer.

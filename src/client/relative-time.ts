@@ -1,7 +1,7 @@
 // Progressive-enhancement client script: finds every <time data-relative>
 // element on the page and re-renders its text content from the `dateTime`
 // attribute on a 60s cadence so "Nm ago" labels don't go stale while the user
-// keeps the tab open. No React, no bundler — mirrors the sortable-tables
+// keeps the tab open. No React, no bundler - mirrors the sortable-tables
 // sibling script.
 
 const TICK_MS = 60 * 1000

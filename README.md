@@ -83,7 +83,7 @@ install -d -o hopwatch -g hopwatch -m 0750 /var/lib/hopwatch
 # 5. Config.
 cat > /etc/hopwatch/hopwatch.toml <<'EOF'
 [server]
-# Loopback by default — the nginx recipe below terminates TLS and forwards to
+# Loopback by default - the nginx recipe below terminates TLS and forwards to
 # 127.0.0.1:8080. Drop the listen line or set it to "0.0.0.0:8080" if you want
 # to expose the daemon directly (not recommended without an auth proxy).
 listen   = "127.0.0.1:8080"
@@ -112,7 +112,7 @@ EOF
 # capabilities and is outside the scope of this recipe).
 cat > /etc/systemd/system/hopwatch.service <<'EOF'
 [Unit]
-Description=hopwatch — SmokePing-style MTR monitor
+Description=hopwatch - SmokePing-style MTR monitor
 After=network-online.target
 Wants=network-online.target
 
@@ -222,7 +222,7 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
 - **One binary.** `bun build --compile` produces a self-contained executable
   per platform. Linux needs `mtr` in `PATH`; that's it. `engine='native'` also
   requires a glibc Linux (the built-in prober `dlopen`s `libc.so.6` via
-  `bun:ffi`) — on musl distros (Alpine) stay on the default `engine='mtr'`.
+  `bun:ffi`) - on musl distros (Alpine) stay on the default `engine='mtr'`.
 
 ## Building from source
 
@@ -240,7 +240,7 @@ bun run build    # cross-compile bin-build/hopwatch-{target}
 ### Proposing a change
 
 1. Branch from `main` and commit your work.
-2. Add a changeset describing the user-visible effect — `bun run changeset`
+2. Add a changeset describing the user-visible effect - `bun run changeset`
    (interactive) or drop a `.changeset/<slug>.md` file like:
 
    ```markdown
@@ -263,7 +263,7 @@ bun run build    # cross-compile bin-build/hopwatch-{target}
 
 The release pipeline requires two non-default repo settings. A fork or
 a freshly-created clone needs these flipped before the first release
-will land — without them the `release` workflow fails at "Create Release
+will land - without them the `release` workflow fails at "Create Release
 Pull Request" with `HttpError: GitHub Actions is not permitted to create
 or approve pull requests`:
 
@@ -291,8 +291,8 @@ hand.
    workflow runs `changeset tag` (creates the `vX.Y.Z` git tag),
    publishes a GitHub Release with the generated changelog, and then
    calls the `binaries` workflow via `workflow_call`.
-3. **`binaries.yml` cross-compiles the matrix** —
-   `linux-{x64,arm64}` and `darwin-{x64,arm64}` — using
+3. **`binaries.yml` cross-compiles the matrix** -
+   `linux-{x64,arm64}` and `darwin-{x64,arm64}` - using
    `bun build --compile --target=bun-<target>` and attaches each
    `hopwatch-<os>-<arch>.tar.gz` plus its `.sha256` to the release.
 4. **Verify the release.** The install commands in the [Quick start](#quick-start)
@@ -312,17 +312,17 @@ hand.
 
    The printed version should match the tag you just released.
 
-> **Note — the `chore: release` PR has no CI checks.** The
+> **Note - the `chore: release` PR has no CI checks.** The
 > changesets-created PR is authored by `GITHUB_TOKEN`, and GitHub
 > intentionally does not trigger downstream workflows for events emitted
 > by that token (otherwise workflows could loop). This means `check.yml`
 > never runs on the Version Packages PR. That's safe here because the
-> PR only mutates `package.json#version` and `CHANGELOG.md` — CI
+> PR only mutates `package.json#version` and `CHANGELOG.md` - CI
 > already ran green on the source PR before it hit `main`.
 
 If the `binaries` job fails after the release is already tagged, fix
 the workflow and re-run it via
-`gh workflow run binaries.yml -f tag=vX.Y.Z` — the job uploads with
+`gh workflow run binaries.yml -f tag=vX.Y.Z` - the job uploads with
 `--clobber` so re-running is idempotent. If the release itself is bad
 (e.g. wrong changelog, wrong version), delete the tag and release in the
 GitHub UI, revert the `chore: release` commit, and start over from a
@@ -352,28 +352,28 @@ bun run scripts/update-smokeping-fixtures.ts          # regenerate points from R
 ```
 
 CI fails if any fixture's mismatchPct or rmsDelta drifts outside the
-per-manifest `tolerancePct` / `toleranceRms` of its locked value — in
+per-manifest `tolerancePct` / `toleranceRms` of its locked value - in
 either direction, so improvements must be re-locked explicitly rather
 than silently banked. On failure the rendered vs reference diff PNGs are
 uploaded as CI artifacts.
 
 ## hopwatch vs SmokePing
 
-hopwatch does not replace SmokePing — it covers the subset most operators use
+hopwatch does not replace SmokePing - it covers the subset most operators use
 day-to-day (MTR-based latency + loss graphs for a list of targets) in a form
 that's easier to drop onto a host. Pick whichever matches your situation.
 
 **Pick hopwatch when you want…**
 
 - **One binary, one process.** `bun build --compile` produces a
-  self-contained executable — no Perl, no rrdtool, no Apache/CGI, no FastCGI
+  self-contained executable - no Perl, no rrdtool, no Apache/CGI, no FastCGI
   slaves. `mtr` in `PATH` is the only runtime dependency.
 - **Raw trace logs you can read.** Every probe cycle writes a per-snapshot
   JSON with the full MTR event stream (`x`/`h`/`d`/`p` lines). Network
   engineers can open the snapshot on disk and see what actually happened on
-  each hop — something rrdtool's binary RRAs do not give you.
-- **A familiar SmokePing look.** Same plot conventions — smoke bands,
-  loss-colored median markers, pink major grid, rotated RRDTOOL signature —
+  each hop - something rrdtool's binary RRAs do not give you.
+- **A familiar SmokePing look.** Same plot conventions - smoke bands,
+  loss-colored median markers, pink major grid, rotated RRDTOOL signature -
   so a busy netop can read the chart without context-switching.
 
 **Stick with SmokePing when you need…**
@@ -385,14 +385,14 @@ that's easier to drop onto a host. Pick whichever matches your situation.
   via URL in the top-nav; each instance stores its own data.
 - **Email/paging alerts with pattern matching.** SmokePing's alert rules and
   matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that,
-  and probably never will — alerting belongs in the alerting system you
+  and probably never will - alerting belongs in the alerting system you
   already run.
 - **Decade-plus historical rollups on a small disk.** rrdtool's pre-sized
   round-robin archives are hard to beat for long retention on tiny storage.
   hopwatch keeps raw snapshots on disk (pruned at `keep_days`) plus
-  JSON hourly/daily rollups — correct and human-readable, but bulkier.
+  JSON hourly/daily rollups - correct and human-readable, but bulkier.
 - **The ecosystem.** Plugins, recipes, Stack Overflow answers, existing
-  Puppet/Ansible modules — SmokePing has a 20-year head start.
+  Puppet/Ansible modules - SmokePing has a 20-year head start.
 
 In short: if you want a familiar-looking MTR dashboard that you can `scp` to
 a box and run behind systemd in five minutes, and lets you observe the

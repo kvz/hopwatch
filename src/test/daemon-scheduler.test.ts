@@ -209,7 +209,7 @@ describe('resolveServeFilePath', () => {
     // when resolveServeFilePath rejected after realpath. That split let a
     // prober distinguish "existed outside the root" from "did not exist",
     // which is a small information leak. Both failure modes now collapse to
-    // 404 — resolveServeFilePath must therefore return null on the lexical
+    // 404 - resolveServeFilePath must therefore return null on the lexical
     // escape just like it does on missing files.
     expect(await resolveServeFilePath(rootDir, '/../etc/passwd')).toBeNull()
   })
@@ -242,7 +242,7 @@ describe('resolveTargetDirPath', () => {
 
   test('refuses a slug whose on-disk directory is a symlink pointing outside the root', async () => {
     // Before the fix, the target dashboard route only applied the lexical
-    // safeResolve check — it never took the realpath. An operator (or an
+    // safeResolve check - it never took the realpath. An operator (or an
     // attacker who can write into data_dir) could create a symlink pointing
     // at /etc or /var/log, and rendering /<slug>/ would enumerate and parse
     // JSON files from that external location.

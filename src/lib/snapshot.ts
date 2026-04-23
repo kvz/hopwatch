@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import type { ProbeMode } from './config.ts'
+import type { ProbeMode, ProbeProtocol } from './config.ts'
 import {
   deriveHopRecordsFromRawEvents,
   parseStoredRawSnapshot,
@@ -79,6 +79,7 @@ export interface SnapshotSummary {
   hopCount: number
   hops: HopRecord[]
   probeMode: ProbeMode
+  protocol: ProbeProtocol
   rawText: string
   target: string
   worstHopLossPct: number | null
@@ -166,7 +167,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     const destinationAvgRttMs = destinationHop?.avgMs ?? null
     // Blackholed traces (`sent` events but no `reply`/`host` events at all)
     // have destinationHopIndex == null. Treat them as 100% destination loss
-    // instead of "unknown" — otherwise full outages vanish from the 3h/30h
+    // instead of "unknown" - otherwise full outages vanish from the 3h/30h
     // charts and the weekly status logic records them as "no destination
     // loss observed". Preserve null for the genuinely-empty case (probe
     // tool errored and we have zero events to work with).
@@ -206,6 +207,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
       hopCount: hops.length,
       hops,
       probeMode: rawSnapshot.probeMode,
+      protocol: rawSnapshot.protocol,
       rawText: renderSnapshotRawText(rawSnapshot, hops),
       target: rawSnapshot.label,
       worstHopLossPct,
@@ -231,6 +233,9 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     hopCount: legacy.hopCount,
     hops: legacy.hops,
     probeMode: legacy.probeMode,
+    // No stored protocol on legacy snapshots - they predate protocol-aware
+    // probing, so they were definitionally ICMP.
+    protocol: 'icmp' as const,
     rawText: legacy.rawText,
     target: legacy.target,
     worstHopLossPct: legacy.worstHopLossPct,
@@ -295,7 +300,7 @@ export function diagnoseSnapshot(
   }
 
   // When the destination hop index is known, "intermediates" are the hops
-  // strictly before it — any hop at or after the destination index is either
+  // strictly before it - any hop at or after the destination index is either
   // the destination itself or a phantom trailing hop MTR sometimes emits
   // (same host, bumped TTL). Using `<` rather than `!==` excludes both, so
   // the phantom can't be blamed as a suspect or diagnosis anchor.
@@ -304,7 +309,7 @@ export function diagnoseSnapshot(
       ? hops.filter((hop) => hop.index < destinationHopIndex)
       : hops.slice(0, -1)
   if (destinationHopIndex != null && intermediateHops.length === hops.length && hops.length > 0) {
-    // `destinationHopIndex` was supplied but no hop's index is < it — the
+    // `destinationHopIndex` was supplied but no hop's index is < it - the
     // recorded hop indices are all at or past the destination, which isn't
     // a shape we expect. Fall back to "last hop is destination" so we stay
     // consistent with the pre-fix behavior on unusual inputs.
@@ -396,6 +401,8 @@ export function parseSnapshotSummary(fileName: string, rawText: string): Snapsho
     hopCount: hops.length,
     hops,
     probeMode: probeModeMatch?.[1] === 'netns' ? 'netns' : 'default',
+    // Legacy .txt snapshots predate protocol-aware probing; treat as ICMP.
+    protocol: 'icmp' as const,
     rawText,
     target: labelMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
     worstHopLossPct,
@@ -424,7 +431,7 @@ export async function readSnapshotSummary(
 ): Promise<SnapshotSummary> {
   // Only .json snapshots land here (listSnapshotFileNames filters for that
   // extension). Any parse failure therefore signals corruption or schema
-  // drift, not a legacy raw-text snapshot — let the error propagate so the
+  // drift, not a legacy raw-text snapshot - let the error propagate so the
   // caller can log + skip + quarantine. Swallowing it and re-parsing the
   // same file as legacy text would hide on-disk data loss by producing a
   // synthetic "unknown" snapshot that pollutes the dashboard.
@@ -530,7 +537,7 @@ export interface CompactCollectedAtParts {
 // Single source of truth for the on-disk `YYYYMMDDTHHmmssZ` timestamp format
 // used by snapshot filenames and `collectedAt` fields. All callers that need
 // to parse/reformat this timestamp should go through here so the regex and
-// semantics stay in lockstep. `formatCompactCollectedAt` is the inverse —
+// semantics stay in lockstep. `formatCompactCollectedAt` is the inverse -
 // used by the collector when naming new snapshots.
 export function formatCompactCollectedAt(date: Date): string {
   const year = date.getUTCFullYear()

@@ -38,7 +38,7 @@ export function ChartCard({ chart, now, compact = false, signature }: ChartCardP
       <div className="graph-card graph-card--empty">
         <h3>{chart.label}</h3>
         <p className="graph-empty">
-          Not enough history yet — this window will fill in as more {chart.sourceLabel} accumulate.
+          Not enough history yet - this window will fill in as more {chart.sourceLabel} accumulate.
         </p>
       </div>
     )

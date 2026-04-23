@@ -71,7 +71,7 @@ a.topnav-title:hover { color: var(--accent); }
 
 /* ??? tokens carry a native browser tooltip via <dfn title=…>. Desktop users
    get the explanation on hover; mobile users see the dotted-underline
-   affordance but can't get the tooltip — accepted trade-off, a <details>
+   affordance but can't get the tooltip - accepted trade-off, a <details>
    alternative would be heavier and rarely needed. */
 dfn {
   font-style: normal;

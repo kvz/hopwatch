@@ -279,6 +279,74 @@ interface PerProtocolAccumulator {
   targets: Set<string>
 }
 
+// Per-(hop-host, protocol) loss statistics over ALL observed hops in the
+// window, including clean ones. This is deliberately a separate pass from
+// the lossy-only CrossTargetHopIssue aggregate: for the `protocol_selective`
+// shape we need "ICMP traverses this hop cleanly" as a positive signal, and
+// a clean ICMP traversal generates zero HopAggregate entries (the upstream
+// summarizeHopIssues filters out hops with lossPct == 0).
+export interface HopProtocolStat {
+  averageLossPct: number
+  sampleCount: number
+  targetCount: number
+}
+
+interface PerTargetSnapshots {
+  protocol: ProbeProtocol
+  snapshots: SnapshotSummary[]
+  target: string
+}
+
+export function summarizeHopProtocolStats(
+  perTarget: PerTargetSnapshots[],
+): Map<string, Map<ProbeProtocol, HopProtocolStat>> {
+  interface Accum {
+    sampleCount: number
+    weightedLoss: number
+    targets: Set<string>
+  }
+  const accum = new Map<string, Map<ProbeProtocol, Accum>>()
+  for (const entry of perTarget) {
+    for (const snap of entry.snapshots) {
+      // Skip the destination hop and anything past it: we are measuring
+      // intermediate hops' behavior, and a hop counted as "destination" on
+      // one target may happen to be an intermediate on another.
+      const destIndex = snap.destinationHopIndex ?? Number.POSITIVE_INFINITY
+      for (const hop of snap.hops) {
+        if (hop.host === '' || hop.host === '???') continue
+        if (hop.index >= destIndex) continue
+        let byProto = accum.get(hop.host)
+        if (byProto == null) {
+          byProto = new Map()
+          accum.set(hop.host, byProto)
+        }
+        let slot = byProto.get(entry.protocol)
+        if (slot == null) {
+          slot = { sampleCount: 0, weightedLoss: 0, targets: new Set() }
+          byProto.set(entry.protocol, slot)
+        }
+        slot.sampleCount += 1
+        slot.weightedLoss += hop.lossPct
+        slot.targets.add(entry.target)
+      }
+    }
+  }
+
+  const out = new Map<string, Map<ProbeProtocol, HopProtocolStat>>()
+  for (const [host, byProto] of accum.entries()) {
+    const inner = new Map<ProbeProtocol, HopProtocolStat>()
+    for (const [protocol, a] of byProto.entries()) {
+      inner.set(protocol, {
+        averageLossPct: a.sampleCount === 0 ? 0 : a.weightedLoss / a.sampleCount,
+        sampleCount: a.sampleCount,
+        targetCount: a.targets.size,
+      })
+    }
+    out.set(host, inner)
+  }
+  return out
+}
+
 export function summarizeCrossTargetHopIssues(
   perTarget: PerTargetHopInput[],
 ): CrossTargetHopIssue[] {
@@ -379,7 +447,18 @@ const PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT = 30
 // disqualify an otherwise clear TCP-vs-ICMP split.
 const PROTOCOL_SELECTIVE_ICMP_CEILING_PCT = 10
 
-export function classifyCrossTargetShape(crossIssues: CrossTargetHopIssue[]): CrossTargetShape {
+export function classifyCrossTargetShape(
+  crossIssues: CrossTargetHopIssue[],
+  // Optional: per-hop per-protocol stats over ALL traversals (including
+  // clean ones). When provided, takes precedence over the lossy-only
+  // per-protocol fields on the issue itself — a clean ICMP probe past
+  // this hop contributes 0% to this map but leaves no trace in the
+  // CrossTargetHopIssue (HopAggregate upstream filters out zero-loss
+  // hops). That clean signal is what makes `protocol_selective`
+  // distinguishable from "we only happen to have TCP probes through
+  // this hop, so there is nothing to compare".
+  hopProtocolStats?: Map<string, Map<ProbeProtocol, HopProtocolStat>>,
+): CrossTargetShape {
   // One shared hop across ≥2 targets is the escalation trigger. A single hop
   // hitting one target is already surfaced by that target's own "Most
   // suspicious hop (7d)" column; the cross-target panel only earns its space
@@ -390,27 +469,54 @@ export function classifyCrossTargetShape(crossIssues: CrossTargetHopIssue[]): Cr
     return { kind: 'none', hop: null }
   }
 
+  let icmpLossPct: number | null = primary.icmpAverageLossPct
+  let tcpLossPct: number | null = primary.tcpAverageLossPct
+  let icmpTargetCount = primary.icmpTargetCount
+  let tcpTargetCount = primary.tcpTargetCount
+  const byProto = hopProtocolStats?.get(primary.host)
+  if (byProto != null) {
+    const icmp = byProto.get('icmp')
+    const tcp = byProto.get('tcp')
+    if (icmp != null && icmp.sampleCount > 0) {
+      icmpLossPct = icmp.averageLossPct
+      icmpTargetCount = icmp.targetCount
+    }
+    if (tcp != null && tcp.sampleCount > 0) {
+      tcpLossPct = tcp.averageLossPct
+      tcpTargetCount = tcp.targetCount
+    }
+  }
+
   // Protocol-selective: we have at least one ICMP and one TCP target
   // covering this same hop, ICMP loss is below the noise floor, and TCP
   // loss is substantially higher. That signature points to a middlebox
   // policer or asymmetric-ECMP flow selection rather than raw capacity
   // loss — a qualitatively different failure mode from "sick router".
   if (
-    primary.icmpTargetCount >= 1 &&
-    primary.tcpTargetCount >= 1 &&
-    primary.icmpAverageLossPct != null &&
-    primary.tcpAverageLossPct != null &&
-    primary.icmpAverageLossPct <= PROTOCOL_SELECTIVE_ICMP_CEILING_PCT &&
-    primary.tcpAverageLossPct - primary.icmpAverageLossPct >= PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT
+    icmpTargetCount >= 1 &&
+    tcpTargetCount >= 1 &&
+    icmpLossPct != null &&
+    tcpLossPct != null &&
+    icmpLossPct <= PROTOCOL_SELECTIVE_ICMP_CEILING_PCT &&
+    tcpLossPct - icmpLossPct >= PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT
   ) {
+    // Seed the primary's per-protocol numbers so renderers don't have to
+    // re-do the lookup.
+    primary.icmpAverageLossPct = icmpLossPct
+    primary.tcpAverageLossPct = tcpLossPct
+    primary.icmpTargetCount = icmpTargetCount
+    primary.tcpTargetCount = tcpTargetCount
     return { kind: 'protocol_selective', hop: primary }
   }
 
   return { kind: 'downstream_from_hop', hop: primary }
 }
 
-export function getCrossTargetDiagnosis(crossIssues: CrossTargetHopIssue[]): CrossTargetDiagnosis {
-  const shape = classifyCrossTargetShape(crossIssues)
+export function getCrossTargetDiagnosis(
+  crossIssues: CrossTargetHopIssue[],
+  hopProtocolStats?: Map<string, Map<ProbeProtocol, HopProtocolStat>>,
+): CrossTargetDiagnosis {
+  const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
     return {
       className: 'good',

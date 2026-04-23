@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'vitest'
+import type { ProbeProtocol } from '../lib/config.ts'
 import type { SnapshotSummary } from '../lib/snapshot.ts'
 import {
+  type CrossTargetHopIssue,
+  classifyCrossTargetShape,
   getCrossTargetDiagnosis,
   getHistoricalSeverityBadge,
   getRootSuspectHop,
   type HopAggregate,
+  type HopProtocolStat,
   selectSnapshotsInWindow,
   shouldSurfaceHopIssueForRoot,
   summarizeCrossTargetHopIssues,
@@ -578,6 +582,42 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       totalSampleCount: 20,
     }
     expect(getCrossTargetDiagnosis([onlyTcp]).shape.kind).toBe('downstream_from_hop')
+  })
+
+  test('hopProtocolStats sidecar can supply a clean ICMP traversal that the lossy-only aggregate missed', () => {
+    // The lossy-only CrossTargetHopIssue only sees a hop when lossPct > 0
+    // (upstream summarizeHopIssues filters zeros out). In production, an
+    // ICMP-clean + TCP-lossy hop therefore has icmpTargetCount=0 in the
+    // aggregate — classifyCrossTargetShape would fall back to
+    // downstream_from_hop without the sidecar. Feeding the sidecar unblocks
+    // the protocol_selective classification that is the whole point.
+    const tcpOnlyIssue: CrossTargetHopIssue = {
+      asn: null,
+      averageLossPct: 50,
+      host: 'vqbn-egress.example',
+      icmpAverageLossPct: null,
+      icmpTargetCount: 0,
+      tcpAverageLossPct: 50,
+      tcpTargetCount: 2,
+      targetCount: 2,
+      targets: ['tcp-mtr', 'tcp-native'],
+      totalDownstreamLoss: 10,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 20,
+    }
+    const hopProtocolStats = new Map<string, Map<ProbeProtocol, HopProtocolStat>>([
+      [
+        'vqbn-egress.example',
+        new Map([
+          ['icmp', { averageLossPct: 0.2, sampleCount: 500, targetCount: 1 }],
+          ['tcp', { averageLossPct: 51, sampleCount: 500, targetCount: 2 }],
+        ]),
+      ],
+    ])
+    expect(classifyCrossTargetShape([tcpOnlyIssue]).kind).toBe('downstream_from_hop')
+    expect(classifyCrossTargetShape([tcpOnlyIssue], hopProtocolStats).kind).toBe(
+      'protocol_selective',
+    )
   })
 
   test('per-protocol averages are computed from the per-target hop inputs', () => {

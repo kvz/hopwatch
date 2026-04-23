@@ -28,6 +28,7 @@ import {
   summarizeCrossTargetHopIssues,
   summarizeDiagnoses,
   summarizeHopIssues,
+  summarizeHopProtocolStats,
   summarizeSnapshots,
 } from './snapshot-aggregate.ts'
 
@@ -196,6 +197,7 @@ export async function renderRootIndex(
     aggregate: SnapshotAggregate
     diagnosisAggregate: DiagnosisAggregate
     hopIssues: HopAggregate[]
+    lastWeekSnapshots: SnapshotSummary[]
     summary: SnapshotSummary
     targetSlug: string
     thumbnailChart: ChartDefinition
@@ -212,6 +214,7 @@ export async function renderRootIndex(
       aggregate: summarizeSnapshots(lastWeekSnapshots),
       diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots),
       hopIssues: summarizeHopIssues(lastWeekSnapshots),
+      lastWeekSnapshots,
       summary: snapshots[0],
       targetSlug,
       thumbnailChart: buildThumbnailChartDefinition(snapshots, now),
@@ -242,26 +245,37 @@ export async function renderRootIndex(
   // ASN labels are per-target/per-snapshot; keep the latest seen mapping per
   // host so the cross-target diagnosis can attribute a hop to its upstream
   // network without re-walking the full snapshot set.
-  const crossTargetDiagnosis = getCrossTargetDiagnosis(
-    summarizeCrossTargetHopIssues(
-      targetSummaries.map((entry) => {
-        const asnByHost = new Map<string, string | null>()
-        for (const hop of entry.summary.hops) {
-          asnByHost.set(hop.host, hop.asn)
-        }
-        return {
-          asnByHost,
-          hopIssues: entry.hopIssues,
-          // Protocol was added to SnapshotSummary; use the target's most
-          // recent snapshot as the source of truth. A target cannot flip
-          // protocols without a config edit + rolling restart, so the
-          // latest snapshot is representative of the window.
-          protocol: entry.summary.protocol,
-          target: entry.summary.target,
-        }
-      }),
-    ),
+  const crossIssues = summarizeCrossTargetHopIssues(
+    targetSummaries.map((entry) => {
+      const asnByHost = new Map<string, string | null>()
+      for (const hop of entry.summary.hops) {
+        asnByHost.set(hop.host, hop.asn)
+      }
+      return {
+        asnByHost,
+        hopIssues: entry.hopIssues,
+        // Protocol was added to SnapshotSummary; use the target's most
+        // recent snapshot as the source of truth. A target cannot flip
+        // protocols without a config edit + rolling restart, so the
+        // latest snapshot is representative of the window.
+        protocol: entry.summary.protocol,
+        target: entry.summary.target,
+      }
+    }),
   )
+  // All-traversals stats (including clean hops) feed the shape classifier
+  // so it can see that ICMP probes cross the suspect hop with 0% loss
+  // even when those probes never appear in the lossy-only cross-issue
+  // aggregate — the signal that distinguishes protocol_selective from a
+  // generic "upstream path degraded".
+  const hopProtocolStats = summarizeHopProtocolStats(
+    targetSummaries.map((entry) => ({
+      protocol: entry.summary.protocol,
+      snapshots: entry.lastWeekSnapshots,
+      target: entry.summary.target,
+    })),
+  )
+  const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats)
 
   const latestCollectedAt = rows.reduce<string | null>((acc, row) => {
     const rowTs = parseCollectedAt(row.summary.collectedAt) ?? 0

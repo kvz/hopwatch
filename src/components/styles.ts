@@ -235,6 +235,22 @@ code dfn, dfn code { border-bottom: 0; }
   border-radius: 6px;
 }
 
+/* Suspect-hop cells can carry long "hostname (ip)" strings (e.g.
+   "33455.your-cloud.host (5.161.8.130)") which pushed the table wider
+   than most laptop viewports and forced the mini-chart column off the
+   right edge. Cap the hostname at ~26 characters with a tooltip so the
+   full value stays discoverable on hover; the downstream/isolated
+   counts on the next line stay unclipped. */
+.suspect-hop-cell { max-width: 22ch; }
+.suspect-hop-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .snapshot-day td {
   background: #f3f3ed;
   color: var(--muted);

@@ -253,6 +253,7 @@ export async function renderRootIndex(
       }
       return {
         asnByHost,
+        destinationHost: entry.summary.host,
         hopIssues: entry.hopIssues,
         // Protocol was added to SnapshotSummary; use the target's most
         // recent snapshot as the source of truth. A target cannot flip

@@ -418,6 +418,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'router.example', downstreamLossCount: 3, averageLossPct: 12 }),
         ],
+        destinationHost: 's3.us-east-1.amazonaws.com',
         protocol: 'icmp',
         target: 's3-us-east-1',
       },
@@ -426,6 +427,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'router.example', downstreamLossCount: 4, averageLossPct: 18 }),
         ],
+        destinationHost: 's3.us-west-2.amazonaws.com',
         protocol: 'icmp',
         target: 's3-us-west-2',
       },
@@ -440,6 +442,44 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(cross[0].targets.sort()).toEqual(['s3-us-east-1', 's3-us-west-2'])
   })
 
+  test('deduplicates destination hosts so "3 probe paths to 1 destination" does not read as 3 outages', () => {
+    // Three probe paths, same destination host — the dashboard should tell
+    // operators "1 destination affected" (with 3 paths' worth of evidence),
+    // not "3 destinations are broken". Same-host dedup is how the shape
+    // classifier's output turns from alarming-but-vague into actionable.
+    const cross = summarizeCrossTargetHopIssues([
+      {
+        asnByHost: new Map(),
+        destinationHost: 's3.us-west-2.amazonaws.com',
+        hopIssues: [suspect({ host: 'router.example' })],
+        protocol: 'icmp',
+        target: 's3-us-west-2',
+      },
+      {
+        asnByHost: new Map(),
+        destinationHost: 's3.us-west-2.amazonaws.com',
+        hopIssues: [suspect({ host: 'router.example' })],
+        protocol: 'tcp',
+        target: 's3-us-west-2-tcp-mtr',
+      },
+      {
+        asnByHost: new Map(),
+        destinationHost: 's3.us-west-2.amazonaws.com',
+        hopIssues: [suspect({ host: 'router.example' })],
+        protocol: 'tcp',
+        target: 's3-us-west-2-tcp-native',
+      },
+    ])
+    expect(cross).toHaveLength(1)
+    expect(cross[0].targetCount).toBe(3)
+    expect(cross[0].affectedDestinations).toEqual(['s3.us-west-2.amazonaws.com'])
+    // The summary should say "1 destination" (not "3 destinations") and
+    // "3 probe paths".
+    const diagnosis = getCrossTargetDiagnosis(cross)
+    expect(diagnosis.summary).toContain('1 destination')
+    expect(diagnosis.summary).toContain('3 probe paths')
+  })
+
   test('ignores hops that a per-target aggregate already rejected as not root-suspect', () => {
     // A hop with only isolated loss shouldn't be elevated to "cross-target
     // escalation" just because it appears on many targets — that's usually
@@ -450,6 +490,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'rate-limited.example', downstreamLossCount: 0, isolatedLossCount: 5 }),
         ],
+        destinationHost: 'dest-a.example',
         protocol: 'icmp',
         target: 'target-a',
       },
@@ -458,6 +499,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'rate-limited.example', downstreamLossCount: 0, isolatedLossCount: 5 }),
         ],
+        destinationHost: 'dest-b.example',
         protocol: 'icmp',
         target: 'target-b',
       },
@@ -468,6 +510,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
   test('diagnosis is neutral when no hop is shared across ≥2 targets', () => {
     const diagnosis = getCrossTargetDiagnosis([
       {
+        affectedDestinations: ['isolated.example'],
         asn: null,
         averageLossPct: 5,
         host: 'isolated.example',
@@ -489,6 +532,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
 
   test('diagnosis flags bad vs warn based on total downstream-loss volume', () => {
     const mildBase = {
+      affectedDestinations: ['dest-a.example', 'dest-b.example'],
       asn: 'AS24940',
       averageLossPct: 8,
       host: 'shared.example',
@@ -521,6 +565,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     // remediations (fight the upstream ISP about a middlebox policy vs.
     // demand more link capacity).
     const protocolSelective = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com'],
       asn: 'AS38093',
       averageLossPct: 30,
       host: 'vqbn-egress.example',
@@ -548,6 +593,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     // the generic downstream_from_hop shape so the operator gets the
     // escalate-upstream message instead of the protocol-asymmetry one.
     const bothLossy = {
+      affectedDestinations: ['sick-dest.example'],
       asn: 'AS24940',
       averageLossPct: 40,
       host: 'sick-router.example',
@@ -568,6 +614,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     // Classifier requires at least one ICMP and one TCP target at the same
     // hop — a single protocol in the cluster can't establish asymmetry.
     const onlyTcp = {
+      affectedDestinations: ['tcp-dest.example'],
       asn: null,
       averageLossPct: 50,
       host: 'tcp-only.example',
@@ -592,6 +639,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     // downstream_from_hop without the sidecar. Feeding the sidecar unblocks
     // the protocol_selective classification that is the whole point.
     const tcpOnlyIssue: CrossTargetHopIssue = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com'],
       asn: null,
       averageLossPct: 50,
       host: 'vqbn-egress.example',
@@ -628,6 +676,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       {
         asnByHost: new Map(),
         hopIssues: [suspect({ host: 'router.example', averageLossPct: 0, downstreamLossCount: 2 })],
+        destinationHost: 'shared.example',
         protocol: 'icmp',
         target: 'icmp-target',
       },
@@ -636,6 +685,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hopIssues: [
           suspect({ host: 'router.example', averageLossPct: 50, downstreamLossCount: 5 }),
         ],
+        destinationHost: 'shared.example',
         protocol: 'tcp',
         target: 'tcp-target',
       },

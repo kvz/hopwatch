@@ -11,6 +11,7 @@ import {
   type SnapshotSummary,
 } from '../lib/snapshot.ts'
 import type { HopAggregate } from '../lib/snapshot-aggregate.ts'
+import { deriveTargetVariant } from '../lib/target-variant.ts'
 import { ChartCard } from './ChartCard.tsx'
 import { DiagnosisSummary } from './DiagnosisSummary.tsx'
 import { EventTimeline } from './EventTimeline.tsx'
@@ -93,11 +94,32 @@ export function TargetIndexPage({
         ]}
         title={latestSnapshot.target}
       />
-      <h1>{headingText}</h1>
+      <h1>
+        {headingText}
+        {(() => {
+          const variant = deriveTargetVariant({
+            engine: latestSnapshot.engine,
+            netns: latestSnapshot.netns,
+            port: latestSnapshot.port,
+            probeMode: latestSnapshot.probeMode,
+            protocol: latestSnapshot.protocol,
+          })
+          if (variant == null) return null
+          return (
+            <>
+              {' '}
+              <span className="variant-pill">{variant}</span>
+            </>
+          )
+        })()}
+      </h1>
       <p className="lede target-meta">
         Probing <code>{latestSnapshot.host}</code>
-        {probeIsNetns ? <> from a Linux network namespace</> : null} with ICMP traceroute.
-        Destination loss counts only the final hop; worst-hop loss may include intermediate router
+        {probeIsNetns ? <> from a Linux network namespace</> : null} with{' '}
+        {latestSnapshot.protocol === 'tcp'
+          ? `TCP SYN to port ${latestSnapshot.port}`
+          : 'ICMP traceroute'}
+        . Destination loss counts only the final hop; worst-hop loss may include intermediate router
         reply rate-limiting and is shown muted for that reason.
       </p>
       <p className="freshness">

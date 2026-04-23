@@ -417,10 +417,13 @@ export async function collectSnapshot(
   const storedSnapshot = {
     schemaVersion: 2 as const,
     collectedAt: timestamp,
+    engine: target.engine,
     fileName: path.basename(jsonFile),
     host: target.host,
     label: target.label,
+    netns: target.netns,
     observer: nodeLabel,
+    port: target.port,
     probeMode: target.probeMode,
     protocol: target.protocol,
     rawEvents,

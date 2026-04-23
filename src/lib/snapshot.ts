@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import type { ProbeMode, ProbeProtocol } from './config.ts'
+import type { ProbeEngine, ProbeMode, ProbeProtocol } from './config.ts'
 import {
   deriveHopRecordsFromRawEvents,
   parseStoredRawSnapshot,
@@ -78,6 +78,9 @@ export interface SnapshotSummary {
   host: string
   hopCount: number
   hops: HopRecord[]
+  engine: ProbeEngine
+  netns: string | null
+  port: number
   probeMode: ProbeMode
   protocol: ProbeProtocol
   rawText: string
@@ -206,6 +209,9 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
       host: rawSnapshot.host,
       hopCount: hops.length,
       hops,
+      engine: rawSnapshot.engine,
+      netns: rawSnapshot.netns,
+      port: rawSnapshot.port,
       probeMode: rawSnapshot.probeMode,
       protocol: rawSnapshot.protocol,
       rawText: renderSnapshotRawText(rawSnapshot, hops),
@@ -232,6 +238,9 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     host: legacy.host,
     hopCount: legacy.hopCount,
     hops: legacy.hops,
+    engine: 'mtr' as const,
+    netns: null,
+    port: 443,
     probeMode: legacy.probeMode,
     // No stored protocol on legacy snapshots - they predate protocol-aware
     // probing, so they were definitionally ICMP.
@@ -400,6 +409,9 @@ export function parseSnapshotSummary(fileName: string, rawText: string): Snapsho
     host: hostMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
     hopCount: hops.length,
     hops,
+    engine: 'mtr' as const,
+    netns: null,
+    port: 443,
     probeMode: probeModeMatch?.[1] === 'netns' ? 'netns' : 'default',
     // Legacy .txt snapshots predate protocol-aware probing; treat as ICMP.
     protocol: 'icmp' as const,

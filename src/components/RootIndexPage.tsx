@@ -17,6 +17,7 @@ import type {
   SeverityBadge,
   SnapshotAggregate,
 } from '../lib/snapshot-aggregate.ts'
+import { deriveTargetVariant } from '../lib/target-variant.ts'
 import { ChartCard } from './ChartCard.tsx'
 import { Layout } from './Layout.tsx'
 import { RelativeTime } from './RelativeTime.tsx'
@@ -139,10 +140,23 @@ export function RootIndexPage({
                 }) => {
                   const destinationLossClass = getLossClass(aggregate.averageDestinationLossPct)
                   const absoluteCollectedAt = formatAbsoluteCollectedAt(summary.collectedAt)
+                  const variant = deriveTargetVariant({
+                    engine: summary.engine,
+                    netns: summary.netns,
+                    port: summary.port,
+                    probeMode: summary.probeMode,
+                    protocol: summary.protocol,
+                  })
                   return (
                     <tr key={targetSlug}>
                       <td data-sort-value={summary.target}>
                         <a href={`./${encodeURIComponent(targetSlug)}/`}>{summary.target}</a>
+                        {variant == null ? null : (
+                          <>
+                            {' '}
+                            <span className="variant-pill">{variant}</span>
+                          </>
+                        )}
                         {summary.target.includes(summary.host) ? null : (
                           <>
                             <br />

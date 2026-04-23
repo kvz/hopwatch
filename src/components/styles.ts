@@ -235,6 +235,26 @@ code dfn, dfn code { border-bottom: 0; }
   border-radius: 6px;
 }
 
+/* Small badge next to the target name that surfaces the non-default
+   probe variant (e.g. "TCP 443", "via netns tl-allow-external",
+   "TCP 443 · native"). Derived at render time from the stored
+   (protocol, port, engine, probeMode, netns) fields so operators
+   never maintain the variant text by hand. */
+.variant-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(24, 77, 71, 0.08);
+  border: 1px solid rgba(24, 77, 71, 0.18);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+h1 .variant-pill { font-size: 13px; padding: 2px 10px; }
+
 /* Suspect-hop cells can carry long "hostname (ip)" strings (e.g.
    "33455.your-cloud.host (5.161.8.130)") which pushed the table wider
    than most laptop viewports and forced the mini-chart column off the

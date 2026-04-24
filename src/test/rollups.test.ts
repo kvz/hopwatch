@@ -16,6 +16,9 @@ function snap(collectedAt: string, rawEvents: RawMtrEvent[]): StoredRawSnapshot 
     host: 'example.com',
     label: 'example',
     observer: 'test-observer',
+    engine: 'mtr',
+    netns: null,
+    port: 443,
     probeMode: 'default',
     protocol: 'icmp',
     rawEvents,
@@ -98,10 +101,13 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
     // a healthy 0% bar on the long-range chart, hiding the outage.
     const blackholed: StoredRawSnapshot = {
       collectedAt: '20260420T100000Z',
+      engine: 'mtr',
       fileName: '20260420T100000Z.json',
       host: 'example.com',
       label: 'example',
+      netns: null,
       observer: 'test-observer',
+      port: 443,
       probeMode: 'default',
       protocol: 'icmp',
       // Only `sent` events, no replies and no host - resolveDestinationHopIndex

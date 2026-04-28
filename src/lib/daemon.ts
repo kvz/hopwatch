@@ -385,6 +385,12 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       return serveFile(dataDir, url.pathname)
     },
     hostname: parseHostname(config.server.listen),
+    // Bun.serve defaults idleTimeout to 10s; the root dashboard render
+    // walks all targets and easily exceeds that on production observers
+    // (27 targets × 14 days of snapshots), so the connection was getting
+    // closed without a response and haproxy turned that into a 502. Bump
+    // it well above measured render time. Bun caps idleTimeout at 255s.
+    idleTimeout: 240,
     port: parsePort(config.server.listen),
   })
 

@@ -366,4 +366,46 @@ describe('runCollector', () => {
 
     expect(store.snapshotFor('native.example')?.rawEvents).toEqual(nativeEvents)
   })
+
+  test('engine="connect" skips mtr/native probing and writes connect probe events', async () => {
+    const config = buildConfig(dataDir, ['connect.example'])
+    config.target[0].engine = 'connect'
+    config.target[0].protocol = 'tcp'
+    config.target[0].port = 443
+    const logger = createLogger({ level: 'error', pretty: false })
+    const store = new FakeHopwatchStore()
+
+    const connectEvents: RawMtrEvent[] = [
+      { host: 'connect.example', hopIndex: 0, kind: 'dns' },
+      { hopIndex: 0, kind: 'sent', probeId: 0 },
+      { host: '198.51.100.10', hopIndex: 0, kind: 'host' },
+      { hopIndex: 0, kind: 'reply', probeId: 0, rttUs: 1234 },
+    ]
+    const runConnectProbeFn = vi.fn(async () => connectEvents)
+    const runCommand = vi.fn(async (): Promise<{ stderr: string; stdout: string }> => {
+      throw new Error('mtr path must not be called for engine=connect')
+    })
+    const runNativeProbeFn = vi.fn(async () => {
+      throw new Error('native path must not be called for engine=connect')
+    })
+
+    const result = await runCollector(
+      config,
+      logger,
+      withStore(store, { runCommand, runConnectProbeFn, runNativeProbeFn }),
+    )
+
+    expect(result.failedTargetSlugs).toEqual([])
+    expect(runCommand).not.toHaveBeenCalled()
+    expect(runNativeProbeFn).not.toHaveBeenCalled()
+    expect(runConnectProbeFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: 'connect.example',
+        ipVersion: '4',
+        packets: 20,
+        port: 443,
+      }),
+    )
+    expect(store.snapshotFor('connect.example')?.rawEvents).toEqual(connectEvents)
+  })
 })

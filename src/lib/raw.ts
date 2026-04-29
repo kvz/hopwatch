@@ -65,7 +65,9 @@ const storedRawSnapshotSchema = z.object({
   // defaults only kick in for on-disk history from previous daemon versions.
   protocol: z.enum(['icmp', 'tcp'] as const satisfies readonly ProbeProtocol[]).default('icmp'),
   port: z.number().int().min(1).max(65535).default(443),
-  engine: z.enum(['mtr', 'native'] as const satisfies readonly ProbeEngine[]).default('mtr'),
+  engine: z
+    .enum(['mtr', 'native', 'connect'] as const satisfies readonly ProbeEngine[])
+    .default('mtr'),
   rawEvents: z.array(rawMtrEventSchema),
   target: z.string().min(1),
 })

@@ -123,6 +123,7 @@ export async function renderRootIndex(
   now = Date.now(),
   signature?: string,
   sourceIdentity?: SourceIdentity,
+  publicBaseUrl?: string,
 ): Promise<string> {
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
@@ -209,6 +210,7 @@ export async function renderRootIndex(
   // generic "upstream path degraded".
   const hopProtocolStats = summarizeHopProtocolStats(
     targetSummaries.map((entry) => ({
+      engine: entry.summary.engine,
       protocol: entry.summary.protocol,
       snapshots: entry.lastWeekSnapshots,
       target: entry.targetSlug,
@@ -216,6 +218,7 @@ export async function renderRootIndex(
   )
   const rollupBucketsByTarget = targetSummaries.map((entry) => entry.hourlyBuckets)
   const perTargetSnapshots = targetSummaries.map((entry) => ({
+    engine: entry.summary.engine,
     protocol: entry.summary.protocol,
     snapshots: entry.lastWeekSnapshots,
     target: entry.targetSlug,
@@ -223,6 +226,7 @@ export async function renderRootIndex(
   const diagnosisContext = {
     now,
     perTargetSnapshots,
+    publicBaseUrl,
     rollupBucketsByTarget,
     sourceIdentity,
   }

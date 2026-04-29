@@ -245,6 +245,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           Date.now(),
           signature,
           sourceIdentity,
+          config.server.public_url,
         )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
@@ -283,6 +284,34 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           headers: {
             'cache-control': 'no-cache',
             'content-type': 'application/json; charset=utf-8',
+          },
+        })
+      }
+
+      const textMatch = /^\/([^/]+)\/([^/]+\.txt)$/.exec(url.pathname)
+      if (textMatch != null) {
+        let targetSlug: string
+        let fileName: string
+        try {
+          targetSlug = decodeURIComponent(textMatch[1])
+          fileName = decodeURIComponent(textMatch[2])
+        } catch {
+          return new Response('bad request', { status: 400 })
+        }
+
+        const rawText =
+          fileName === 'latest.txt'
+            ? store.getLatestSnapshotRawText(targetSlug)
+            : store.getSnapshotRawText(targetSlug, fileName.replace(/\.txt$/, '.json'))
+
+        if (rawText == null) {
+          return new Response('not found', { status: 404 })
+        }
+
+        return new Response(`${rawText}\n`, {
+          headers: {
+            'cache-control': 'no-cache',
+            'content-type': 'text/plain; charset=utf-8',
           },
         })
       }

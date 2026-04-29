@@ -1179,6 +1179,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     return snapshot == null ? null : `${JSON.stringify(snapshot, null, 2)}\n`
   }
 
+  getLatestSnapshotRawText(targetSlug: string): string | null {
+    const row = this.getLatestSnapshotRow(targetSlug)
+    if (row == null) return null
+    return this.getSnapshotRawText(row.target_slug, row.file_name)
+  }
+
   getSnapshotRawText(targetSlug: string, fileName: string): string | null {
     const row = this.getSnapshotRow(targetSlug, fileName)
     if (row == null) return null

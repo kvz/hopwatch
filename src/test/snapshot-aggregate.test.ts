@@ -597,6 +597,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.summary).toContain('51.0%')
     expect(diagnosis.summary).toContain('0.5%')
     expect(diagnosis.summary).toContain('middlebox')
+    expect(diagnosis.summary).toContain('TCP connect check')
   })
 
   test('diagnosis includes escalation owner and copy text when hop ownership is known', () => {
@@ -633,6 +634,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
           },
         ],
       ]),
+      publicBaseUrl: 'https://hopwatch.example.net/hopwatch/',
       sourceNetworkOwner: {
         asName: 'HETZNER-CLOUD4-AS, DE',
         asn: 'AS215859',
@@ -677,6 +679,9 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain('Evidence:')
     expect(diagnosis.escalation?.copyText).toContain(
       'External evidence paths: direct TCP/443 MTR, direct TCP/443 native raw-socket cross-check, and direct ICMP MTR comparison.',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Latest raw MTR output: https://hopwatch.example.net/hopwatch/tcp-mtr/latest.txt, https://hopwatch.example.net/hopwatch/icmp/latest.txt',
     )
     expect(diagnosis.escalation?.copyText).not.toContain('Hopwatch loss')
     expect(diagnosis.escalation?.copyText).not.toContain('our observer')
@@ -836,6 +841,16 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
             target: 's3-us-west-2-tcp-native',
           }),
           target: 's3-us-west-2-tcp-native',
+        },
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: buildSnapshots({
+            destinationLossPct: 0,
+            protocol: 'tcp',
+            target: 's3-us-west-2-tcp-connect',
+          }),
+          target: 's3-us-west-2-tcp-connect',
         },
         {
           protocol: 'icmp',

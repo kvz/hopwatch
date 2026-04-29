@@ -102,6 +102,23 @@ engine = "native"
     expect(config.target[0].engine).toBe('native')
   })
 
+  test('accepts engine="connect" for TCP probes with the default probe mode', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "connect"
+protocol = "tcp"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.target[0].engine).toBe('connect')
+  })
+
   test('defaults protocol to "icmp" and port to 443', async () => {
     const configPath = await writeConfig(`
 [server]
@@ -321,6 +338,39 @@ probe_mode = "netns"
 netns = "ns-uk-1"
 `)
     await expect(loadConfig(configPath)).rejects.toThrow(/not yet supported/)
+  })
+
+  test('rejects engine="connect" combined with probe_mode="netns"', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "connect"
+protocol = "tcp"
+probe_mode = "netns"
+netns = "ns-uk-1"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/not yet supported/)
+  })
+
+  test('rejects engine="connect" unless protocol is TCP', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "connect"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/requires protocol='tcp'/)
   })
 
   test('rejects target IDs that differ only in case, which collide on case-insensitive filesystems', async () => {

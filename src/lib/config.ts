@@ -7,7 +7,7 @@ import { parseListenAddress } from './listen.ts'
 export const probeModeSchema = z.enum(['default', 'netns'])
 export type ProbeMode = z.infer<typeof probeModeSchema>
 
-export const probeEngineSchema = z.enum(['mtr', 'native'])
+export const probeEngineSchema = z.enum(['mtr', 'native', 'connect'])
 export type ProbeEngine = z.infer<typeof probeEngineSchema>
 
 // `icmp` sends ICMP Echo Requests (or the mtr equivalent) - the default, and
@@ -35,8 +35,9 @@ const targetSchema = z.object({
     .regex(/^[^-]/, 'host must not start with "-" (would be interpreted as an mtr flag)'),
   probe_mode: probeModeSchema.default('default'),
   // `mtr` shells out to the external mtr binary (default, battle-tested).
-  // `native` uses the built-in Linux raw-ICMP prober (no external mtr
-  // needed, but the process needs CAP_NET_RAW).
+  // `native` uses the built-in Linux raw-ICMP/TCP traceroute prober (no
+  // external mtr needed, but the process needs CAP_NET_RAW). `connect` measures
+  // end-to-end TCP connect success/latency without pretending to be traceroute.
   engine: probeEngineSchema.default('mtr'),
   netns: z
     .string()
@@ -310,6 +311,21 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
       // uses nsenter) or move this target out of netns.
       throw new Error(
         `target '${target.id}' uses engine='native' with probe_mode='netns', which is not yet supported`,
+      )
+    }
+
+    if (target.engine === 'connect' && target.probe_mode === 'netns') {
+      // Running connect probes in a netns would need nsenter/setns support in
+      // the connect engine. Keep this explicit instead of silently probing from
+      // the host namespace and labeling it as namespace evidence.
+      throw new Error(
+        `target '${target.id}' uses engine='connect' with probe_mode='netns', which is not yet supported`,
+      )
+    }
+
+    if (target.engine === 'connect' && target.protocol !== 'tcp') {
+      throw new Error(
+        `target '${target.id}' uses engine='connect' but protocol='${target.protocol}'; engine='connect' requires protocol='tcp'`,
       )
     }
 

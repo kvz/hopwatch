@@ -1,4 +1,4 @@
-import type { ProbeProtocol } from './config.ts'
+import type { ProbeEngine, ProbeProtocol } from './config.ts'
 import { formatNetworkOwnerLabel, type NetworkOwnerInfo } from './network-owner.ts'
 import { average } from './raw.ts'
 import type { MtrRollupBucket } from './rollups.ts'
@@ -340,6 +340,7 @@ export interface HopProtocolStat {
 }
 
 export interface PerTargetSnapshots {
+  engine?: ProbeEngine
   protocol: ProbeProtocol
   snapshots: SnapshotSummary[]
   // Unique probe-path identifier, not the human label. Multiple probe
@@ -664,6 +665,11 @@ export function summarizeDestinationProtocolIssues(
 ): CrossTargetDestinationProtocolIssue[] {
   const byDestination = new Map<string, Map<ProbeProtocol, DestinationProtocolAccumulator>>()
   for (const entry of perTarget) {
+    // End-to-end TCP connect probes are counter-evidence for application
+    // impact, not traceroute/MTR destination-loss evidence. Keeping them out
+    // of this shape prevents a healthy connect check from being averaged into
+    // lossy TCP traceroute samples and producing a muddled diagnosis.
+    if (entry.engine === 'connect') continue
     for (const snapshot of entry.snapshots) {
       const lossPct = snapshot.destinationLossPct
       if (lossPct == null) continue
@@ -813,6 +819,7 @@ export function classifyCrossTargetShape(
 
 export interface CrossTargetDiagnosisContext {
   networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
+  publicBaseUrl?: string
   sourceIdentity?: SourceIdentity
   sourceNetworkOwner?: NetworkOwnerInfo
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
@@ -830,6 +837,7 @@ function buildCrossTargetEscalation({
   hopDisplay,
   owner,
   primary,
+  publicBaseUrl,
   shapeKind,
   sourceIdentity,
   sourceNetworkOwner,
@@ -839,6 +847,7 @@ function buildCrossTargetEscalation({
   hopDisplay: string
   owner: NetworkOwnerInfo | null
   primary: CrossTargetHopIssue
+  publicBaseUrl?: string
   shapeKind: CrossTargetShapeKind
   sourceIdentity?: SourceIdentity
   sourceNetworkOwner?: NetworkOwnerInfo
@@ -880,7 +889,7 @@ function buildCrossTargetEscalation({
       owner.prefix == null ? null : `Prefix: ${owner.prefix}`,
       '',
       'Evidence:',
-      ...formatExternalEvidenceLines(primary),
+      ...formatExternalEvidenceLines(primary, publicBaseUrl),
       protocolLine,
       timelineLine,
     ]
@@ -896,37 +905,85 @@ function formatEnglishList(items: string[]): string {
   return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
 }
 
-function formatExternalEvidenceLines(primary: CrossTargetHopIssue): string[] {
-  const methods: string[] = []
+function normalizePublicBaseUrl(publicBaseUrl: string | undefined): string | null {
+  if (publicBaseUrl == null || publicBaseUrl.trim() === '') return null
+  return publicBaseUrl.endsWith('/') ? publicBaseUrl : `${publicBaseUrl}/`
+}
+
+function formatEvidenceUrl(
+  publicBaseUrl: string | undefined,
+  target: string,
+  file: string,
+): string | null {
+  const normalized = normalizePublicBaseUrl(publicBaseUrl)
+  if (normalized == null) return null
+  return `${normalized}${encodeURIComponent(target)}/${file}`
+}
+
+interface EvidenceMethod {
+  label: string
+  rawMtrUrl: string | null
+}
+
+function formatExternalEvidenceLines(
+  primary: CrossTargetHopIssue,
+  publicBaseUrl?: string,
+): string[] {
+  const methods: EvidenceMethod[] = []
   for (const target of primary.targets) {
     if (target.includes('via-namespace')) {
       continue
     }
 
     if (target.includes('tcp-native')) {
-      methods.push('direct TCP/443 native raw-socket cross-check')
+      methods.push({
+        label: 'direct TCP/443 native raw-socket cross-check',
+        rawMtrUrl: null,
+      })
+      continue
+    }
+
+    if (target.includes('tcp-connect')) {
+      methods.push({
+        label: 'direct TCP/443 connect check',
+        rawMtrUrl: null,
+      })
       continue
     }
 
     if (target.includes('tcp-mtr')) {
-      methods.push('direct TCP/443 MTR')
+      methods.push({
+        label: 'direct TCP/443 MTR',
+        rawMtrUrl: formatEvidenceUrl(publicBaseUrl, target, 'latest.txt'),
+      })
       continue
     }
 
     if (target.includes('tcp')) {
-      methods.push('direct TCP/443 probe')
+      methods.push({
+        label: 'direct TCP/443 probe',
+        rawMtrUrl: null,
+      })
       continue
     }
 
-    methods.push('direct ICMP MTR comparison')
+    methods.push({
+      label: 'direct ICMP MTR comparison',
+      rawMtrUrl: formatEvidenceUrl(publicBaseUrl, target, 'latest.txt'),
+    })
   }
 
-  const uniqueMethods = [...new Set(methods)]
-  if (uniqueMethods.length === 0) {
+  const uniqueMethodLabels = [...new Set(methods.map((method) => method.label))]
+  if (uniqueMethodLabels.length === 0) {
     return []
   }
 
-  return [`External evidence paths: ${formatEnglishList(uniqueMethods)}.`]
+  const lines = [`External evidence paths: ${formatEnglishList(uniqueMethodLabels)}.`]
+  const rawMtrUrls = [...new Set(methods.flatMap((method) => method.rawMtrUrl ?? []))]
+  if (rawMtrUrls.length > 0) {
+    lines.push(`Latest raw MTR output: ${rawMtrUrls.join(', ')}`)
+  }
+  return lines
 }
 
 export function getCrossTargetDiagnosis(
@@ -939,6 +996,7 @@ export function getCrossTargetDiagnosis(
   const networkOwnersByHopHost = context.networkOwnersByHopHost
   const sourceIdentity = context.sourceIdentity
   const sourceNetworkOwner = context.sourceNetworkOwner
+  const publicBaseUrl = context.publicBaseUrl
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
@@ -1050,6 +1108,7 @@ export function getCrossTargetDiagnosis(
       hopDisplay,
       owner,
       primary,
+      publicBaseUrl,
       shapeKind: shape.kind,
       sourceIdentity,
       sourceNetworkOwner,
@@ -1064,7 +1123,7 @@ export function getCrossTargetDiagnosis(
       escalation,
       label: 'Protocol-selective loss',
       shape,
-      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades.${escalationSuffix}${timelineSuffix}${siblingsSuffix}`,
+      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP traceroute probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy. Use the TCP connect check to confirm end-to-end application impact.${escalationSuffix}${timelineSuffix}${siblingsSuffix}`,
       suspect: primary,
     }
   }
@@ -1077,6 +1136,7 @@ export function getCrossTargetDiagnosis(
     hopDisplay,
     owner,
     primary,
+    publicBaseUrl,
     shapeKind: shape.kind,
     sourceIdentity,
     sourceNetworkOwner,

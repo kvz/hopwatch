@@ -638,16 +638,21 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       rawMtrSamplesByTarget: new Map([
         [
           'tcp-mtr',
-          [
-            '# observer=probe-1',
-            '# target=s3.us-west-2.amazonaws.com',
-            '# engine=mtr',
-            '# protocol=tcp',
-            '',
-            'Start: 2026-04-29T18:35:07Z',
-            'HOST: probe-1                                Loss%   Snt   Last    Avg   Best   Wrst  StDev',
-            '  1.|-- 132.147.112.101                      50.0%    10     2.3     2.1     1.9     2.8     0.3',
-          ].join('\n'),
+          {
+            collectedAt: '20260429T183507Z',
+            destinationLossPct: 50,
+            rawText: [
+              '# observer=probe-1',
+              '# target=s3.us-west-2.amazonaws.com',
+              '# engine=mtr',
+              '# protocol=tcp',
+              '',
+              'Start: 2026-04-29T18:35:07Z',
+              'HOST: probe-1                                Loss%   Snt   Last    Avg   Best   Wrst  StDev',
+              '  1.|-- 132.147.112.101                      50.0%    10     2.3     2.1     1.9     2.8     0.3',
+            ].join('\n'),
+            worstHopLossPct: 50,
+          },
         ],
       ]),
       sourceNetworkOwner: {
@@ -696,10 +701,10 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       'External evidence paths: direct TCP/443 MTR, direct TCP/443 native raw-socket cross-check, and direct ICMP MTR comparison.',
     )
     expect(diagnosis.escalation?.copyText).toContain(
-      'Latest raw MTR output: https://hopwatch.example.net/hopwatch/tcp-mtr/latest.txt, https://hopwatch.example.net/hopwatch/icmp/latest.txt',
+      'Live latest raw MTR output (may differ by the time this message is read): https://hopwatch.example.net/hopwatch/tcp-mtr/latest.txt, https://hopwatch.example.net/hopwatch/icmp/latest.txt',
     )
     expect(diagnosis.escalation?.copyText).toContain(
-      'Example raw MTR output (direct TCP/443 MTR, latest sample):',
+      'Problematic raw MTR example (direct TCP/443 MTR, collected 2026-04-29 18:35:07 UTC, destination loss 50.0%, worst-hop loss 50.0%):',
     )
     expect(diagnosis.escalation?.copyText).toContain('```text')
     expect(diagnosis.escalation?.copyText).toContain('132.147.112.101')

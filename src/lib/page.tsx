@@ -17,6 +17,7 @@ import {
   getHistoricalSeverityBadge,
   getRootSuspectHop,
   type HopAggregate,
+  type RawMtrEvidenceSample,
   type SnapshotAggregate,
   selectSnapshotsInWindow,
   summarizeCrossTargetHopIssues,
@@ -55,6 +56,30 @@ async function getCachedNetworkOwner(
   }
 
   return lookedUpOwner
+}
+
+function scoreRawMtrEvidenceSnapshot(snapshot: SnapshotSummary): number {
+  const destinationLossPct = snapshot.destinationLossPct ?? 0
+  const worstHopLossPct = snapshot.worstHopLossPct ?? 0
+  if (destinationLossPct <= 0 && worstHopLossPct <= 0) return Number.NEGATIVE_INFINITY
+
+  const collectedAt = parseCollectedAt(snapshot.collectedAt) ?? 0
+  const recencyTieBreaker = collectedAt / 1_000_000_000_000_000
+  const diagnosisBoost = snapshot.diagnosis.kind === 'destination_loss' ? 1_000 : 0
+  return diagnosisBoost + destinationLossPct * 10 + worstHopLossPct + recencyTieBreaker
+}
+
+function selectRawMtrEvidenceSnapshot(snapshots: SnapshotSummary[]): SnapshotSummary | null {
+  let best: SnapshotSummary | null = null
+  let bestScore = Number.NEGATIVE_INFINITY
+  for (const snapshot of snapshots) {
+    if (snapshot.engine !== 'mtr') continue
+    const score = scoreRawMtrEvidenceSnapshot(snapshot)
+    if (score <= bestScore) continue
+    best = snapshot
+    bestScore = score
+  }
+  return best
 }
 
 export async function renderTargetIndex(
@@ -223,15 +248,22 @@ export async function renderRootIndex(
     snapshots: entry.lastWeekSnapshots,
     target: entry.targetSlug,
   }))
-  const rawMtrSamplesByTarget = new Map<string, string>()
+  const rawMtrSamplesByTarget = new Map<string, RawMtrEvidenceSample>()
   for (const entry of targetSummaries) {
     if (entry.summary.engine !== 'mtr') continue
+    const evidenceSnapshot = selectRawMtrEvidenceSnapshot(entry.lastWeekSnapshots)
+    if (evidenceSnapshot == null) continue
     const rawText =
-      entry.summary.rawText === ''
-        ? store.getSnapshotRawText(entry.targetSlug, entry.summary.fileName)
-        : entry.summary.rawText
+      evidenceSnapshot.rawText === ''
+        ? store.getSnapshotRawText(entry.targetSlug, evidenceSnapshot.fileName)
+        : evidenceSnapshot.rawText
     if (rawText == null || rawText.trim() === '') continue
-    rawMtrSamplesByTarget.set(entry.targetSlug, rawText)
+    rawMtrSamplesByTarget.set(entry.targetSlug, {
+      collectedAt: evidenceSnapshot.collectedAt,
+      destinationLossPct: evidenceSnapshot.destinationLossPct,
+      rawText,
+      worstHopLossPct: evidenceSnapshot.worstHopLossPct,
+    })
   }
   const diagnosisContext = {
     now,

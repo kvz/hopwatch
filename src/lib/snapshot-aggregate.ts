@@ -2,7 +2,7 @@ import type { ProbeEngine, ProbeProtocol } from './config.ts'
 import { formatNetworkOwnerLabel, type NetworkOwnerInfo } from './network-owner.ts'
 import { average } from './raw.ts'
 import type { MtrRollupBucket } from './rollups.ts'
-import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
+import { formatAbsoluteCollectedAt, parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 import {
   formatSourceIdentityInline,
   formatSourceIdentityLines,
@@ -308,6 +308,13 @@ export interface CrossTargetEscalation {
   copyText: string
   ownerLabel: string
   summaryAction: string
+}
+
+export interface RawMtrEvidenceSample {
+  collectedAt: string
+  destinationLossPct: number | null
+  rawText: string
+  worstHopLossPct: number | null
 }
 
 interface PerTargetHopInput {
@@ -821,7 +828,7 @@ export function classifyCrossTargetShape(
 export interface CrossTargetDiagnosisContext {
   networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
   publicBaseUrl?: string
-  rawMtrSamplesByTarget?: Map<string, string>
+  rawMtrSamplesByTarget?: Map<string, RawMtrEvidenceSample>
   sourceIdentity?: SourceIdentity
   sourceNetworkOwner?: NetworkOwnerInfo
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
@@ -949,7 +956,7 @@ function buildCrossTargetEscalation({
   owner: NetworkOwnerInfo | null
   primary: CrossTargetHopIssue
   publicBaseUrl?: string
-  rawMtrSamplesByTarget?: Map<string, string>
+  rawMtrSamplesByTarget?: Map<string, RawMtrEvidenceSample>
   shapeKind: CrossTargetShapeKind
   sourceIdentity?: SourceIdentity
   sourceNetworkOwner?: NetworkOwnerInfo
@@ -1043,7 +1050,7 @@ interface EvidenceMethod {
 function formatExternalEvidenceLines(
   primary: CrossTargetHopIssue,
   publicBaseUrl?: string,
-  rawMtrSamplesByTarget?: Map<string, string>,
+  rawMtrSamplesByTarget?: Map<string, RawMtrEvidenceSample>,
 ): string[] {
   const methods: EvidenceMethod[] = []
   for (const target of primary.targets) {
@@ -1100,19 +1107,22 @@ function formatExternalEvidenceLines(
   }
 
   const lines = [`External evidence paths: ${formatEnglishList(uniqueMethodLabels)}.`]
-  const rawMtrUrls = [...new Set(methods.flatMap((method) => method.rawMtrUrl ?? []))]
-  if (rawMtrUrls.length > 0) {
-    lines.push(`Latest raw MTR output: ${rawMtrUrls.join(', ')}`)
-  }
-
   const rawMtrExample = selectInlineRawMtrExample(methods, rawMtrSamplesByTarget)
   if (rawMtrExample != null) {
     lines.push(
       '',
-      `Example raw MTR output (${rawMtrExample.label}, latest sample):`,
+      `Problematic raw MTR example (${formatInlineRawMtrExampleLabel(rawMtrExample)}):`,
       '```text',
-      trimInlineRawMtrExample(rawMtrExample.rawText),
+      trimInlineRawMtrExample(rawMtrExample.sample.rawText),
       '```',
+    )
+  }
+
+  const rawMtrUrls = [...new Set(methods.flatMap((method) => method.rawMtrUrl ?? []))]
+  if (rawMtrUrls.length > 0) {
+    lines.push(
+      '',
+      `Live latest raw MTR output (may differ by the time this message is read): ${rawMtrUrls.join(', ')}`,
     )
   }
   return lines
@@ -1120,21 +1130,40 @@ function formatExternalEvidenceLines(
 
 interface InlineRawMtrExample {
   label: string
-  rawText: string
+  sample: RawMtrEvidenceSample
 }
 
 function selectInlineRawMtrExample(
   methods: EvidenceMethod[],
-  rawMtrSamplesByTarget: Map<string, string> | undefined,
+  rawMtrSamplesByTarget: Map<string, RawMtrEvidenceSample> | undefined,
 ): InlineRawMtrExample | null {
   if (rawMtrSamplesByTarget == null) return null
   const preferred =
     methods.find((method) => method.target.includes('tcp-mtr')) ??
     methods.find((method) => method.rawMtrUrl != null)
   if (preferred == null) return null
-  const rawText = rawMtrSamplesByTarget.get(preferred.target)
-  if (rawText == null || rawText.trim() === '') return null
-  return { label: preferred.label, rawText }
+  const sample = rawMtrSamplesByTarget.get(preferred.target)
+  if (sample == null || sample.rawText.trim() === '') return null
+  return { label: preferred.label, sample }
+}
+
+function formatInlineRawMtrExampleLabel(example: InlineRawMtrExample): string {
+  const parts = [
+    example.label,
+    `collected ${formatAbsoluteCollectedAt(example.sample.collectedAt)}`,
+  ]
+  const lossParts = [
+    example.sample.destinationLossPct == null || example.sample.destinationLossPct <= 0
+      ? null
+      : `destination loss ${example.sample.destinationLossPct.toFixed(1)}%`,
+    example.sample.worstHopLossPct == null || example.sample.worstHopLossPct <= 0
+      ? null
+      : `worst-hop loss ${example.sample.worstHopLossPct.toFixed(1)}%`,
+  ].filter((part): part is string => part != null)
+  if (lossParts.length > 0) {
+    parts.push(lossParts.join(', '))
+  }
+  return parts.join(', ')
 }
 
 function trimInlineRawMtrExample(rawText: string): string {

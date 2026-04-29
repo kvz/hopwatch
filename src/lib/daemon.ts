@@ -442,6 +442,7 @@ async function loadDaemonSourceIdentity(
     hostname: config.identity.hostname ?? osHostname(),
     location: config.identity.location,
     provider: config.identity.provider,
+    providerContactEmails: config.identity.provider_contact_emails,
     publicHostname: config.identity.public_hostname,
     siteLabel: config.identity.site_label,
   })

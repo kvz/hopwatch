@@ -14,6 +14,7 @@ describe('source identity formatting', () => {
       hostname: 'probe-1.example.net',
       location: 'Example City (ex1)',
       provider: 'Example Cloud',
+      providerContactEmails: ['noc@example.net'],
       publicHostname: 'hopwatch.example.net',
       siteLabel: 'dc-1',
     })
@@ -30,6 +31,7 @@ describe('source identity formatting', () => {
       hostname: 'probe-1.example.net',
       location: 'Example City (ex1)',
       provider: 'Example Cloud',
+      providerContactEmails: ['noc@example.net'],
       publicHostname: 'hopwatch.example.net',
       siteLabel: 'dc-1',
     })
@@ -39,6 +41,7 @@ describe('source identity formatting', () => {
       'Source public hostname: hopwatch.example.net',
       'Source egress IP: 203.0.113.10',
       'Source provider: Example Cloud',
+      'Source provider contacts: noc@example.net',
       'Source location: Example City (ex1)',
       'Source datacenter: ex1-dc1',
       'Internal site label: dc-1',
@@ -53,6 +56,7 @@ describe('source identity formatting', () => {
       {
         egressIp: '203.0.113.10',
         hostname: 'ignored.example.net',
+        providerContactEmails: ['noc@example.net'],
         publicHostname: 'hopwatch.example.net',
       },
     )
@@ -63,6 +67,7 @@ describe('source identity formatting', () => {
       hostname: 'probe-1.example.net',
       location: null,
       provider: null,
+      providerContactEmails: ['noc@example.net'],
       publicHostname: 'hopwatch.example.net',
       siteLabel: null,
     })

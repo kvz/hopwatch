@@ -4,6 +4,7 @@ export interface SourceIdentity {
   hostname: string | null
   location: string | null
   provider: string | null
+  providerContactEmails: string[]
   publicHostname: string | null
   siteLabel: string | null
 }
@@ -15,6 +16,7 @@ export function emptySourceIdentity(): SourceIdentity {
     hostname: null,
     location: null,
     provider: null,
+    providerContactEmails: [],
     publicHostname: null,
     siteLabel: null,
   }
@@ -25,6 +27,11 @@ function normalize(value: string | null | undefined): string | null {
   return trimmed == null || trimmed === '' ? null : trimmed
 }
 
+function normalizeList(values: string[] | null | undefined): string[] {
+  const normalized = values?.map((value) => value.trim()).filter((value) => value !== '')
+  return [...new Set(normalized ?? [])]
+}
+
 export function buildSourceIdentity(input: Partial<SourceIdentity>): SourceIdentity {
   return {
     datacenter: normalize(input.datacenter),
@@ -32,6 +39,7 @@ export function buildSourceIdentity(input: Partial<SourceIdentity>): SourceIdent
     hostname: normalize(input.hostname),
     location: normalize(input.location),
     provider: normalize(input.provider),
+    providerContactEmails: normalizeList(input.providerContactEmails),
     publicHostname: normalize(input.publicHostname),
     siteLabel: normalize(input.siteLabel),
   }
@@ -48,6 +56,10 @@ export function sourceIdentityWithFallback(
     hostname: primary.hostname ?? normalizedFallback.hostname,
     location: primary.location ?? normalizedFallback.location,
     provider: primary.provider ?? normalizedFallback.provider,
+    providerContactEmails:
+      primary.providerContactEmails.length > 0
+        ? primary.providerContactEmails
+        : normalizedFallback.providerContactEmails,
     publicHostname: primary.publicHostname ?? normalizedFallback.publicHostname,
     siteLabel: primary.siteLabel ?? normalizedFallback.siteLabel,
   }
@@ -84,6 +96,9 @@ export function formatSourceIdentityLines(identity: SourceIdentity | null | unde
     identity.publicHostname == null ? null : `Source public hostname: ${identity.publicHostname}`,
     identity.egressIp == null ? null : `Source egress IP: ${identity.egressIp}`,
     identity.provider == null ? null : `Source provider: ${identity.provider}`,
+    identity.providerContactEmails.length === 0
+      ? null
+      : `Source provider contacts: ${identity.providerContactEmails.join(', ')}`,
     identity.location == null ? null : `Source location: ${identity.location}`,
     identity.datacenter == null ? null : `Source datacenter: ${identity.datacenter}`,
     identity.siteLabel == null ? null : `Internal site label: ${identity.siteLabel}`,

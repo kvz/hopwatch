@@ -842,6 +842,7 @@ export interface CrossTargetDiagnosisContext {
 }
 
 interface EscalationRoute {
+  contactEmails: string[]
   contactLine: string
   rationaleLine: string
   recommendedLine: string
@@ -883,6 +884,26 @@ function formatSourceProviderEscalationTarget(
     : `${ownerLabel} network team / ${owner.asn}`
 }
 
+function formatContactSuffix(contactEmails: string[]): string {
+  return contactEmails.length === 0 ? '' : ` (${contactEmails.join(', ')})`
+}
+
+function combineContactEmails(...emailGroups: string[][]): string[] {
+  const contacts: string[] = []
+  const seen = new Set<string>()
+  for (const group of emailGroups) {
+    for (const email of group) {
+      const trimmed = email.trim()
+      if (trimmed === '') continue
+      const key = trimmed.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      contacts.push(trimmed)
+    }
+  }
+  return contacts
+}
+
 function determineEscalationRoute({
   owner,
   primary,
@@ -904,15 +925,21 @@ function determineEscalationRoute({
 
   if (sourceOwned) {
     const target = formatSourceProviderEscalationTarget(sourceIdentity, owner)
+    const contactEmails = combineContactEmails(
+      owner.contactEmails,
+      sourceIdentity?.providerContactEmails ?? [],
+    )
+    const contactSuffix = formatContactSuffix(contactEmails)
     const asnSuffix = owner.asn == null ? '' : ` and cite ${owner.asn}`
     return {
+      contactEmails,
       contactLine:
-        owner.contactEmails.length === 0
+        contactEmails.length === 0
           ? `No public NOC contact found in RDAP; open this through the source provider's network/support escalation path${asnSuffix}.`
-          : owner.contactEmails.join(', '),
+          : contactEmails.join(', '),
       rationaleLine: `The source egress IP and suspect hop are both announced by ${ownerLabel}, and the pattern affects ${destinationScope}${siteSuffix}.`,
-      recommendedLine: `Recommended escalation: ${target}.`,
-      summaryAction: `recommended escalation: ${target} because the source and suspect hop are in the same network`,
+      recommendedLine: `Recommended escalation: ${target}${contactSuffix}.`,
+      summaryAction: `recommended escalation: ${target}${contactSuffix} because the source and suspect hop are in the same network`,
     }
   }
 
@@ -926,6 +953,7 @@ function determineEscalationRoute({
       : ''
 
   return {
+    contactEmails: owner.contactEmails,
     contactLine:
       owner.contactEmails.length === 0
         ? `No public NOC contact found in RDAP; use the owner/ASN as the escalation target, or ${upstreamFallback}.`
@@ -982,7 +1010,7 @@ function buildCrossTargetEscalation({
       : `Source ASN/prefix: ${formatNetworkOwnerLabel(sourceNetworkOwner)}${sourceNetworkOwner.prefix == null ? '' : `, ${sourceNetworkOwner.prefix}`}`
 
   return {
-    contactEmails: owner.contactEmails,
+    contactEmails: route.contactEmails,
     copyText: [
       `Please investigate persistent packet loss observed by continuous MTR-style probes from ${formatSourceIdentityInline(sourceIdentity)} to ${destinationList}.`,
       '',

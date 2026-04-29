@@ -256,6 +256,7 @@ data_dir = "${dir}"
 hostname = "probe-1.example.net"
 public_hostname = "hopwatch.example.net"
 provider = "Example Cloud"
+provider_contact_emails = ["noc@example.net", "abuse@example.net"]
 location = "Example City (ex1)"
 datacenter = "ex1-dc1"
 site_label = "dc-1"
@@ -275,6 +276,7 @@ host = "example.com"
       hostname: 'probe-1.example.net',
       location: 'Example City (ex1)',
       provider: 'Example Cloud',
+      provider_contact_emails: ['noc@example.net', 'abuse@example.net'],
       public_hostname: 'hopwatch.example.net',
       site_label: 'dc-1',
     })
@@ -284,6 +286,10 @@ host = "example.com"
     vi.stubEnv('HOPWATCH_IDENTITY_HOSTNAME', 'env-probe.example.net')
     vi.stubEnv('HOPWATCH_IDENTITY_PUBLIC_HOSTNAME', 'env-hopwatch.example.net')
     vi.stubEnv('HOPWATCH_IDENTITY_PROVIDER', 'Env Cloud')
+    vi.stubEnv(
+      'HOPWATCH_IDENTITY_PROVIDER_CONTACT_EMAILS',
+      'noc-env@example.net, abuse-env@example.net',
+    )
     vi.stubEnv('HOPWATCH_IDENTITY_LOCATION', 'Env City (env1)')
     vi.stubEnv('HOPWATCH_IDENTITY_DATACENTER', 'env1-dc1')
     vi.stubEnv('HOPWATCH_IDENTITY_SITE_LABEL', 'env-dc')
@@ -318,6 +324,7 @@ host = "example.com"
       hostname: 'env-probe.example.net',
       location: 'Env City (env1)',
       provider: 'Env Cloud',
+      provider_contact_emails: ['noc-env@example.net', 'abuse-env@example.net'],
       public_hostname: 'env-hopwatch.example.net',
       site_label: 'env-dc',
     })

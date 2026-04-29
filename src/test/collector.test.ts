@@ -12,7 +12,7 @@ import type { HopwatchStorage, ImportSnapshotInput } from '../lib/sqlite-storage
 function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
   return {
     chart: { signature: 'RRDTOOL / TOBI OETIKER' },
-    identity: {},
+    identity: { provider_contact_emails: [] },
     peer: [],
     probe: {
       concurrency: 3,

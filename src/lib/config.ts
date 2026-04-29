@@ -109,6 +109,7 @@ const identitySchema = z.object({
   hostname: z.string().min(1).optional(),
   public_hostname: z.string().min(1).optional(),
   provider: z.string().min(1).optional(),
+  provider_contact_emails: z.array(z.string().min(1)).default([]),
   location: z.string().min(1).optional(),
   datacenter: z.string().min(1).optional(),
   site_label: z.string().min(1).optional(),
@@ -162,7 +163,7 @@ export interface LoadedConfig extends HopwatchConfig {
 
 function applyEnvOverrides(raw: unknown): unknown {
   const env = process.env
-  const overrides: Record<string, Record<string, boolean | number | string>> = {
+  const overrides: Record<string, Record<string, boolean | number | string | string[]>> = {
     server: {},
     identity: {},
     probe: {},
@@ -196,6 +197,13 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   if (env.HOPWATCH_IDENTITY_PROVIDER) {
     overrides.identity.provider = env.HOPWATCH_IDENTITY_PROVIDER
+  }
+
+  if (env.HOPWATCH_IDENTITY_PROVIDER_CONTACT_EMAILS) {
+    overrides.identity.provider_contact_emails =
+      env.HOPWATCH_IDENTITY_PROVIDER_CONTACT_EMAILS.split(',')
+        .map((email) => email.trim())
+        .filter((email) => email !== '')
   }
 
   if (env.HOPWATCH_IDENTITY_LOCATION) {

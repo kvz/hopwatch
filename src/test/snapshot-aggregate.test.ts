@@ -673,6 +673,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hostname: 'probe-1.example.net',
         location: 'Singapore (sin)',
         provider: 'Hetzner Cloud',
+        providerContactEmails: [],
         publicHostname: 'hopwatch.example.net',
         siteLabel: 'dc-1',
       },
@@ -753,6 +754,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hostname: 'ho14up.transloadit.com',
         location: 'Ashburn, VA (ash)',
         provider: 'Hetzner Cloud',
+        providerContactEmails: ['abuse@hetzner.com'],
         publicHostname: 'observer1-us-east-1-production.transloadit.com',
         siteLabel: 'us-east-1-hetzner',
       },
@@ -764,11 +766,11 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     })
 
     expect(diagnosis.summary).toContain(
-      'recommended escalation: Hetzner Cloud network team / AS213230',
+      'recommended escalation: Hetzner Cloud network team / AS213230 (abuse@hetzner.com)',
     )
     expect(diagnosis.summary).toContain('source and suspect hop are in the same network')
     expect(diagnosis.escalation?.copyText).toContain(
-      'Recommended escalation: Hetzner Cloud network team / AS213230.',
+      'Recommended escalation: Hetzner Cloud network team / AS213230 (abuse@hetzner.com).',
     )
     expect(diagnosis.escalation?.copyText).toContain(
       'The source egress IP and suspect hop are both announced by HETZNER-CLOUD2-AS (AS213230)',
@@ -776,9 +778,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain(
       'the pattern affects 2 external destinations across 4 probe paths from ash-dc1',
     )
-    expect(diagnosis.escalation?.copyText).toContain(
-      'Contact: No public NOC contact found in RDAP; open this through the source provider',
-    )
+    expect(diagnosis.escalation?.copyText).toContain('Contact: abuse@hetzner.com')
     expect(diagnosis.escalation?.copyText).not.toContain(
       'use the owner/ASN as the escalation target',
     )

@@ -1,5 +1,24 @@
 # hopwatch
 
+## 0.4.0
+
+### Minor Changes
+
+- 8c85104: feat: make SQLite the Hopwatch storage source of truth.
+
+  Hopwatch now stores snapshots, raw probe events, hop summaries, RTT samples, and rollups in
+  relational SQLite tables instead of JSON blobs. The daemon renders directly from SQLite without the
+  old file-backed read path, and `hopwatch storage verify` now checks SQLite integrity and relational
+  consistency without depending on legacy JSON files.
+
+### Patch Changes
+
+- 8c85104: fix: bump `Bun.serve` `idleTimeout` to 240s so busy observers do not 502 while rendering dashboards.
+
+  Bun's default `idleTimeout` is 10s. With 27 targets × 14 days of accumulated snapshots, the root dashboard render legitimately took 12–29s on production observers, so Bun was closing the connection before any bytes were written and haproxy turned that into a 502. Setting `idleTimeout: 240` (4 minutes; Bun caps it at 255s) restores headroom without masking real hangs.
+
+  SQLite-backed rendering is expected to keep live dashboard reads fast enough without an HTML cache.
+
 ## 0.3.0
 
 ### Minor Changes

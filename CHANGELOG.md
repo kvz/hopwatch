@@ -1,5 +1,12 @@
 # hopwatch
 
+## 0.4.1
+
+### Patch Changes
+
+- 3418ea5: Show cached hop owner/contact enrichment in cross-target diagnoses and add a copy escalation action.
+- 9e23eb1: Surface protocol-selective S3 TCP loss across probe variants in the cross-target diagnosis.
+
 ## 0.4.0
 
 ### Minor Changes

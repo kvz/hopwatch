@@ -1,4 +1,5 @@
 import type { ProbeProtocol } from './config.ts'
+import { formatNetworkOwnerLabel, type NetworkOwnerInfo } from './network-owner.ts'
 import { average } from './raw.ts'
 import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
@@ -290,10 +291,17 @@ export interface CrossTargetShape {
 
 export interface CrossTargetDiagnosis {
   className: 'good' | 'warn' | 'bad'
+  escalation: CrossTargetEscalation | null
   label: string
   shape: CrossTargetShape
   summary: string
   suspect: CrossTargetHopIssue | null
+}
+
+export interface CrossTargetEscalation {
+  contactEmails: string[]
+  copyText: string
+  ownerLabel: string
 }
 
 interface PerTargetHopInput {
@@ -799,6 +807,7 @@ export function classifyCrossTargetShape(
 }
 
 export interface CrossTargetDiagnosisContext {
+  networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
   // and PTR discovery for the suspect hop.
   rollupBucketsByTarget?: MtrRollupBucket[][]
@@ -809,6 +818,48 @@ export interface CrossTargetDiagnosisContext {
   now?: number
 }
 
+function buildCrossTargetEscalation({
+  destinationList,
+  hopDisplay,
+  owner,
+  primary,
+  shapeKind,
+}: {
+  destinationList: string
+  hopDisplay: string
+  owner: NetworkOwnerInfo | null
+  primary: CrossTargetHopIssue
+  shapeKind: CrossTargetShapeKind
+}): CrossTargetEscalation | null {
+  if (owner == null) return null
+
+  const ownerLabel = formatNetworkOwnerLabel(owner)
+  const contacts =
+    owner.contactEmails.length === 0
+      ? 'No public NOC contact found in RDAP; use the owner/ASN as the escalation target.'
+      : owner.contactEmails.join(', ')
+  const protocolLine =
+    shapeKind === 'protocol_selective'
+      ? `TCP loss is ~${(primary.tcpAverageLossPct ?? 0).toFixed(1)}% while ICMP loss is ~${(primary.icmpAverageLossPct ?? 0).toFixed(1)}% on the same hop.`
+      : `The hop coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots.`
+
+  return {
+    contactEmails: owner.contactEmails,
+    copyText: [
+      `Please investigate persistent Hopwatch loss from our observer to ${destinationList}.`,
+      `Suspect hop: ${hopDisplay}`,
+      `Report to: ${ownerLabel}`,
+      `Contact: ${contacts}`,
+      owner.prefix == null ? null : `Prefix: ${owner.prefix}`,
+      protocolLine,
+      `Affected probe paths: ${primary.targets.join(', ')}`,
+    ]
+      .filter((line): line is string => line != null)
+      .join('\n'),
+    ownerLabel,
+  }
+}
+
 export function getCrossTargetDiagnosis(
   crossIssues: CrossTargetHopIssue[],
   hopProtocolStats?: Map<string, Map<ProbeProtocol, HopProtocolStat>>,
@@ -816,6 +867,7 @@ export function getCrossTargetDiagnosis(
 ): CrossTargetDiagnosis {
   const rollupBucketsByTarget = context.rollupBucketsByTarget
   const perTargetSnapshots = context.perTargetSnapshots
+  const networkOwnersByHopHost = context.networkOwnersByHopHost
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
@@ -836,6 +888,7 @@ export function getCrossTargetDiagnosis(
       const icmpLossPct = issue.icmpAverageLossPct ?? 0
       return {
         className: 'bad',
+        escalation: null,
         label: 'Protocol-selective destination loss',
         shape: destinationShape,
         summary: `${issue.destinationHost} shows TCP${tcpPorts} destination loss across ${issue.tcpTargetCount} probe paths (~${tcpLossPct.toFixed(1)}% average, ${issue.tcpDestinationLossCount}/${issue.tcpSampleCount} lossy snapshots) while ICMP probes to the same destination stay near-clean (~${icmpLossPct.toFixed(1)}% average across ${issue.icmpTargetCount} probe paths). This points to TCP path, middlebox, ECMP, or destination-edge behavior rather than general packet loss; ICMP-only monitoring would miss it.`,
@@ -845,6 +898,7 @@ export function getCrossTargetDiagnosis(
 
     return {
       className: 'good',
+      escalation: null,
       label: 'No cross-target pattern',
       shape,
       summary:
@@ -913,22 +967,48 @@ export function getCrossTargetDiagnosis(
   if (shape.kind === 'protocol_selective') {
     const icmpPct = primary.icmpAverageLossPct ?? 0
     const tcpPct = primary.tcpAverageLossPct ?? 0
+    const owner = networkOwnersByHopHost?.get(primary.host) ?? null
+    const escalation = buildCrossTargetEscalation({
+      destinationList: `${destinationList}${moreDestinations}`,
+      hopDisplay,
+      owner,
+      primary,
+      shapeKind: shape.kind,
+    })
+    const escalationSuffix =
+      escalation == null
+        ? ' The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.'
+        : ` Report this to ${escalation.ownerLabel}${escalation.contactEmails.length === 0 ? '' : ` (${escalation.contactEmails.join(', ')})`}, or ask your upstream/provider to escalate there.`
     return {
       className: 'bad',
+      escalation,
       label: 'Protocol-selective loss',
       shape,
-      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.${timelineSuffix}${siblingsSuffix}`,
+      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades.${escalationSuffix}${timelineSuffix}${siblingsSuffix}`,
       suspect: primary,
     }
   }
 
   const lossLabel =
     primary.averageLossPct == null ? '' : ` at ~${primary.averageLossPct.toFixed(1)}% average loss`
+  const owner = networkOwnersByHopHost?.get(primary.host) ?? null
+  const escalation = buildCrossTargetEscalation({
+    destinationList: `${destinationList}${moreDestinations}`,
+    hopDisplay,
+    owner,
+    primary,
+    shapeKind: shape.kind,
+  })
+  const escalationSuffix =
+    escalation == null
+      ? 'consider escalating with the upstream network'
+      : `consider escalating with ${escalation.ownerLabel}${escalation.contactEmails.length === 0 ? '' : ` (${escalation.contactEmails.join(', ')})`}`
   return {
     className: severe ? 'bad' : 'warn',
+    escalation,
     label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
     shape,
-    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - consider escalating with the upstream network.${timelineSuffix}${siblingsSuffix}`,
+    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - ${escalationSuffix}.${timelineSuffix}${siblingsSuffix}`,
     suspect: primary,
   }
 }

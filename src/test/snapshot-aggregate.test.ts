@@ -594,6 +594,48 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.summary).toContain('middlebox')
   })
 
+  test('diagnosis includes escalation owner and copy text when hop ownership is known', () => {
+    const protocolSelective = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com'],
+      asn: null,
+      averageLossPct: 30,
+      host: '132.147.112.101',
+      icmpAverageLossPct: 0.5,
+      icmpTargetCount: 1,
+      tcpAverageLossPct: 51,
+      tcpTargetCount: 2,
+      targetCount: 3,
+      targets: ['tcp-mtr', 'tcp-native', 'icmp'],
+      totalDownstreamLoss: 12,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 30,
+    }
+    const diagnosis = getCrossTargetDiagnosis([protocolSelective], undefined, {
+      networkOwnersByHopHost: new Map([
+        [
+          '132.147.112.101',
+          {
+            asName: 'VIEWQWEST-SG-AP Viewqwest Pte Ltd, SG',
+            asn: 'AS18106',
+            contactEmails: ['noc.sg@viewqwest.com', 'abuse@viewqwest.com'],
+            country: 'SG',
+            fetchedAt: '2026-04-29T00:00:00.000Z',
+            ip: '132.147.112.101',
+            prefix: '132.147.112.0/24',
+            rdapName: 'VIEWQWEST-NET',
+            registry: 'apnic',
+            source: 'test',
+          },
+        ],
+      ]),
+    })
+
+    expect(diagnosis.summary).toContain('Report this to Viewqwest Pte Ltd (AS18106)')
+    expect(diagnosis.summary).toContain('noc.sg@viewqwest.com')
+    expect(diagnosis.escalation?.copyText).toContain('Contact: noc.sg@viewqwest.com')
+    expect(diagnosis.escalation?.copyText).toContain('Prefix: 132.147.112.0/24')
+  })
+
   test('does NOT flag protocol-selective when ICMP is also lossy (real capacity problem)', () => {
     // Both protocols see substantial loss - that's not policy-driven, it's
     // the classic "sick router drops packets" signature. Fall through to

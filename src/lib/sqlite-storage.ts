@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import type { MtrHistoryTarget } from './collector.ts'
 import type { ProbeEngine, ProbeMode, ProbeProtocol } from './config.ts'
+import type { NetworkOwnerInfo } from './network-owner.ts'
 import { parseStoredRawSnapshot, type RawMtrEvent, type StoredRawSnapshot } from './raw.ts'
 import {
   aggregateSnapshotsToRollupBuckets,
@@ -293,6 +294,34 @@ interface TableInfoRow {
   name: string
 }
 
+interface NetworkOwnerCacheRow {
+  as_name: string | null
+  asn: string | null
+  contact_emails_json: string
+  country: string | null
+  expires_at: string
+  fetched_at: string
+  ip: string
+  prefix: string | null
+  rdap_name: string | null
+  registry: string | null
+  source: string
+}
+
+type NetworkOwnerCacheStatementParams = [
+  string,
+  string | null,
+  string | null,
+  string,
+  string | null,
+  string,
+  string,
+  string | null,
+  string | null,
+  string | null,
+  string,
+]
+
 export interface HopwatchStorage {
   close(): void
   insertRawSnapshot(input: ImportSnapshotInput, rawSnapshot: StoredRawSnapshot): void
@@ -469,12 +498,13 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     `)
     this.initializeSnapshotTables()
     this.initializeRollupTables()
+    this.initializeNetworkOwnerTables()
     this.createIndexes()
     this.db
       .query<unknown, [string, string]>(
         'INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)',
       )
-      .run('schema_version', '3')
+      .run('schema_version', '4')
   }
 
   private tableColumns(tableName: string): Set<string> {
@@ -665,6 +695,24 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     `)
   }
 
+  private initializeNetworkOwnerTables(): void {
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS network_owner_cache (
+        ip TEXT PRIMARY KEY,
+        as_name TEXT,
+        asn TEXT,
+        contact_emails_json TEXT NOT NULL,
+        country TEXT,
+        expires_at TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        prefix TEXT,
+        rdap_name TEXT,
+        registry TEXT,
+        source TEXT NOT NULL
+      )
+    `)
+  }
+
   private createIndexes(): void {
     this.db.run(`
       CREATE INDEX IF NOT EXISTS snapshots_target_collected_at_idx
@@ -686,6 +734,89 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       CREATE INDEX IF NOT EXISTS rollup_buckets_target_granularity_idx
       ON rollup_buckets (target_slug, granularity, bucket_start)
     `)
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS network_owner_cache_expires_at_idx
+      ON network_owner_cache (expires_at)
+    `)
+  }
+
+  getNetworkOwnerCache(ip: string, now = new Date()): NetworkOwnerInfo | null {
+    const row = this.db
+      .query<NetworkOwnerCacheRow, [string, string]>(
+        `
+          SELECT *
+          FROM network_owner_cache
+          WHERE ip = ? AND expires_at > ?
+        `,
+      )
+      .get(ip, now.toISOString())
+    if (row == null) return null
+
+    let contactEmails: string[] = []
+    const parsed: unknown = JSON.parse(row.contact_emails_json)
+    if (Array.isArray(parsed)) {
+      contactEmails = parsed.filter((item): item is string => typeof item === 'string')
+    }
+
+    return {
+      asName: row.as_name,
+      asn: row.asn,
+      contactEmails,
+      country: row.country,
+      fetchedAt: row.fetched_at,
+      ip: row.ip,
+      prefix: row.prefix,
+      rdapName: row.rdap_name,
+      registry: row.registry,
+      source: row.source,
+    }
+  }
+
+  upsertNetworkOwnerCache(owner: NetworkOwnerInfo, now = new Date()): void {
+    const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    this.db
+      .query<unknown, NetworkOwnerCacheStatementParams>(
+        `
+          INSERT INTO network_owner_cache (
+            ip,
+            as_name,
+            asn,
+            contact_emails_json,
+            country,
+            expires_at,
+            fetched_at,
+            prefix,
+            rdap_name,
+            registry,
+            source
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(ip) DO UPDATE SET
+            as_name = excluded.as_name,
+            asn = excluded.asn,
+            contact_emails_json = excluded.contact_emails_json,
+            country = excluded.country,
+            expires_at = excluded.expires_at,
+            fetched_at = excluded.fetched_at,
+            prefix = excluded.prefix,
+            rdap_name = excluded.rdap_name,
+            registry = excluded.registry,
+            source = excluded.source
+        `,
+      )
+      .run(
+        owner.ip,
+        owner.asName,
+        owner.asn,
+        JSON.stringify(owner.contactEmails),
+        owner.country,
+        expiresAt,
+        owner.fetchedAt,
+        owner.prefix,
+        owner.rdapName,
+        owner.registry,
+        owner.source,
+      )
   }
 
   upsertRawSnapshot(input: ImportSnapshotInput, rawSnapshot: StoredRawSnapshot): void {

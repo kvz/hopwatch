@@ -178,6 +178,35 @@ code dfn, dfn code { border-bottom: 0; }
   margin-bottom: 20px;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.panel-title-row h2 { margin-bottom: 0; }
+
+.diagnosis-copy { margin-bottom: 0; }
+
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(24, 77, 71, 0.24);
+  border-radius: 999px;
+  background: rgba(24, 77, 71, 0.08);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.copy-button:hover { background: rgba(24, 77, 71, 0.14); }
+.copy-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

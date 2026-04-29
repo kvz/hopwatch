@@ -1,3 +1,5 @@
+// @ts-expect-error see note on sortableTablesSource - same import-attribute shape.
+import copyButtonsSource from '../client/copy-buttons.ts' with { type: 'text' }
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
 // value is always a string and Bun.Transpiler handles the rest.
@@ -33,6 +35,17 @@ function getRelativeTimeJs(): string {
     }).transformSync(relativeTimeSource)
   }
   return relativeTimeJsCache
+}
+
+let copyButtonsJsCache: string | null = null
+function getCopyButtonsJs(): string {
+  if (copyButtonsJsCache == null) {
+    copyButtonsJsCache = new Bun.Transpiler({
+      loader: 'ts',
+      target: 'browser',
+    }).transformSync(copyButtonsSource)
+  }
+  return copyButtonsJsCache
 }
 
 export interface SchedulerHandle {
@@ -189,6 +202,15 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
 
       if (url.pathname.endsWith('/assets/relative-time.js')) {
         return new Response(getRelativeTimeJs(), {
+          headers: {
+            'cache-control': 'public, max-age=3600',
+            'content-type': 'application/javascript; charset=utf-8',
+          },
+        })
+      }
+
+      if (url.pathname.endsWith('/assets/copy-buttons.js')) {
+        return new Response(getCopyButtonsJs(), {
           headers: {
             'cache-control': 'public, max-age=3600',
             'content-type': 'application/javascript; charset=utf-8',

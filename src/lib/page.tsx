@@ -8,6 +8,7 @@ import {
   loadChartDefinitions,
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
+import { extractIpv4Address, lookupNetworkOwner, type NetworkOwnerInfo } from './network-owner.ts'
 import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 import {
@@ -200,11 +201,38 @@ export async function renderRootIndex(
     snapshots: entry.lastWeekSnapshots,
     target: entry.targetSlug,
   }))
-  const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
+  const diagnosisContext = {
     now,
     perTargetSnapshots,
     rollupBucketsByTarget,
-  })
+  }
+  const preliminaryCrossTargetDiagnosis = getCrossTargetDiagnosis(
+    crossIssues,
+    hopProtocolStats,
+    diagnosisContext,
+  )
+  const networkOwnersByHopHost = new Map<string, NetworkOwnerInfo>()
+  const suspectHopHost = preliminaryCrossTargetDiagnosis.suspect?.host
+  const suspectHopIp = suspectHopHost == null ? null : extractIpv4Address(suspectHopHost)
+  if (suspectHopHost != null && suspectHopIp != null) {
+    const cachedOwner = store.getNetworkOwnerCache(suspectHopIp)
+    if (cachedOwner != null) {
+      networkOwnersByHopHost.set(suspectHopHost, cachedOwner)
+    } else {
+      const lookedUpOwner = await lookupNetworkOwner(suspectHopIp).catch(() => null)
+      if (lookedUpOwner != null) {
+        store.upsertNetworkOwnerCache(lookedUpOwner)
+        networkOwnersByHopHost.set(suspectHopHost, lookedUpOwner)
+      }
+    }
+  }
+  const crossTargetDiagnosis =
+    networkOwnersByHopHost.size === 0
+      ? preliminaryCrossTargetDiagnosis
+      : getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
+          ...diagnosisContext,
+          networkOwnersByHopHost,
+        })
 
   const latestCollectedAt = rows.reduce<string | null>((acc, row) => {
     const rowTs = parseCollectedAt(row.summary.collectedAt) ?? 0

@@ -635,6 +635,21 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         ],
       ]),
       publicBaseUrl: 'https://hopwatch.example.net/hopwatch/',
+      rawMtrSamplesByTarget: new Map([
+        [
+          'tcp-mtr',
+          [
+            '# observer=probe-1',
+            '# target=s3.us-west-2.amazonaws.com',
+            '# engine=mtr',
+            '# protocol=tcp',
+            '',
+            'Start: 2026-04-29T18:35:07Z',
+            'HOST: probe-1                                Loss%   Snt   Last    Avg   Best   Wrst  StDev',
+            '  1.|-- 132.147.112.101                      50.0%    10     2.3     2.1     1.9     2.8     0.3',
+          ].join('\n'),
+        ],
+      ]),
       sourceNetworkOwner: {
         asName: 'HETZNER-CLOUD4-AS, DE',
         asn: 'AS215859',
@@ -683,6 +698,11 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain(
       'Latest raw MTR output: https://hopwatch.example.net/hopwatch/tcp-mtr/latest.txt, https://hopwatch.example.net/hopwatch/icmp/latest.txt',
     )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Example raw MTR output (direct TCP/443 MTR, latest sample):',
+    )
+    expect(diagnosis.escalation?.copyText).toContain('```text')
+    expect(diagnosis.escalation?.copyText).toContain('132.147.112.101')
     expect(diagnosis.escalation?.copyText).not.toContain('Hopwatch loss')
     expect(diagnosis.escalation?.copyText).not.toContain('our observer')
     expect(diagnosis.escalation?.copyText).not.toContain('via-namespace')

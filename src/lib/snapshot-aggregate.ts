@@ -820,6 +820,7 @@ export function classifyCrossTargetShape(
 export interface CrossTargetDiagnosisContext {
   networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
   publicBaseUrl?: string
+  rawMtrSamplesByTarget?: Map<string, string>
   sourceIdentity?: SourceIdentity
   sourceNetworkOwner?: NetworkOwnerInfo
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
@@ -838,6 +839,7 @@ function buildCrossTargetEscalation({
   owner,
   primary,
   publicBaseUrl,
+  rawMtrSamplesByTarget,
   shapeKind,
   sourceIdentity,
   sourceNetworkOwner,
@@ -848,6 +850,7 @@ function buildCrossTargetEscalation({
   owner: NetworkOwnerInfo | null
   primary: CrossTargetHopIssue
   publicBaseUrl?: string
+  rawMtrSamplesByTarget?: Map<string, string>
   shapeKind: CrossTargetShapeKind
   sourceIdentity?: SourceIdentity
   sourceNetworkOwner?: NetworkOwnerInfo
@@ -889,7 +892,7 @@ function buildCrossTargetEscalation({
       owner.prefix == null ? null : `Prefix: ${owner.prefix}`,
       '',
       'Evidence:',
-      ...formatExternalEvidenceLines(primary, publicBaseUrl),
+      ...formatExternalEvidenceLines(primary, publicBaseUrl, rawMtrSamplesByTarget),
       protocolLine,
       timelineLine,
     ]
@@ -923,11 +926,13 @@ function formatEvidenceUrl(
 interface EvidenceMethod {
   label: string
   rawMtrUrl: string | null
+  target: string
 }
 
 function formatExternalEvidenceLines(
   primary: CrossTargetHopIssue,
   publicBaseUrl?: string,
+  rawMtrSamplesByTarget?: Map<string, string>,
 ): string[] {
   const methods: EvidenceMethod[] = []
   for (const target of primary.targets) {
@@ -939,6 +944,7 @@ function formatExternalEvidenceLines(
       methods.push({
         label: 'direct TCP/443 native raw-socket cross-check',
         rawMtrUrl: null,
+        target,
       })
       continue
     }
@@ -947,6 +953,7 @@ function formatExternalEvidenceLines(
       methods.push({
         label: 'direct TCP/443 connect check',
         rawMtrUrl: null,
+        target,
       })
       continue
     }
@@ -955,6 +962,7 @@ function formatExternalEvidenceLines(
       methods.push({
         label: 'direct TCP/443 MTR',
         rawMtrUrl: formatEvidenceUrl(publicBaseUrl, target, 'latest.txt'),
+        target,
       })
       continue
     }
@@ -963,6 +971,7 @@ function formatExternalEvidenceLines(
       methods.push({
         label: 'direct TCP/443 probe',
         rawMtrUrl: null,
+        target,
       })
       continue
     }
@@ -970,6 +979,7 @@ function formatExternalEvidenceLines(
     methods.push({
       label: 'direct ICMP MTR comparison',
       rawMtrUrl: formatEvidenceUrl(publicBaseUrl, target, 'latest.txt'),
+      target,
     })
   }
 
@@ -983,7 +993,44 @@ function formatExternalEvidenceLines(
   if (rawMtrUrls.length > 0) {
     lines.push(`Latest raw MTR output: ${rawMtrUrls.join(', ')}`)
   }
+
+  const rawMtrExample = selectInlineRawMtrExample(methods, rawMtrSamplesByTarget)
+  if (rawMtrExample != null) {
+    lines.push(
+      '',
+      `Example raw MTR output (${rawMtrExample.label}, latest sample):`,
+      '```text',
+      trimInlineRawMtrExample(rawMtrExample.rawText),
+      '```',
+    )
+  }
   return lines
+}
+
+interface InlineRawMtrExample {
+  label: string
+  rawText: string
+}
+
+function selectInlineRawMtrExample(
+  methods: EvidenceMethod[],
+  rawMtrSamplesByTarget: Map<string, string> | undefined,
+): InlineRawMtrExample | null {
+  if (rawMtrSamplesByTarget == null) return null
+  const preferred =
+    methods.find((method) => method.target.includes('tcp-mtr')) ??
+    methods.find((method) => method.rawMtrUrl != null)
+  if (preferred == null) return null
+  const rawText = rawMtrSamplesByTarget.get(preferred.target)
+  if (rawText == null || rawText.trim() === '') return null
+  return { label: preferred.label, rawText }
+}
+
+function trimInlineRawMtrExample(rawText: string): string {
+  const trimmed = rawText.trim()
+  const maxChars = 6_000
+  if (trimmed.length <= maxChars) return trimmed
+  return `${trimmed.slice(0, maxChars).trimEnd()}\n… [truncated]`
 }
 
 export function getCrossTargetDiagnosis(
@@ -997,6 +1044,7 @@ export function getCrossTargetDiagnosis(
   const sourceIdentity = context.sourceIdentity
   const sourceNetworkOwner = context.sourceNetworkOwner
   const publicBaseUrl = context.publicBaseUrl
+  const rawMtrSamplesByTarget = context.rawMtrSamplesByTarget
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
@@ -1109,6 +1157,7 @@ export function getCrossTargetDiagnosis(
       owner,
       primary,
       publicBaseUrl,
+      rawMtrSamplesByTarget,
       shapeKind: shape.kind,
       sourceIdentity,
       sourceNetworkOwner,
@@ -1137,6 +1186,7 @@ export function getCrossTargetDiagnosis(
     owner,
     primary,
     publicBaseUrl,
+    rawMtrSamplesByTarget,
     shapeKind: shape.kind,
     sourceIdentity,
     sourceNetworkOwner,

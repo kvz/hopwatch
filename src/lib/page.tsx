@@ -223,10 +223,21 @@ export async function renderRootIndex(
     snapshots: entry.lastWeekSnapshots,
     target: entry.targetSlug,
   }))
+  const rawMtrSamplesByTarget = new Map<string, string>()
+  for (const entry of targetSummaries) {
+    if (entry.summary.engine !== 'mtr') continue
+    const rawText =
+      entry.summary.rawText === ''
+        ? store.getSnapshotRawText(entry.targetSlug, entry.summary.fileName)
+        : entry.summary.rawText
+    if (rawText == null || rawText.trim() === '') continue
+    rawMtrSamplesByTarget.set(entry.targetSlug, rawText)
+  }
   const diagnosisContext = {
     now,
     perTargetSnapshots,
     publicBaseUrl,
+    rawMtrSamplesByTarget,
     rollupBucketsByTarget,
     sourceIdentity,
   }

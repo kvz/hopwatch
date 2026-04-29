@@ -591,13 +591,43 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       totalIsolatedLoss: 0,
       totalSampleCount: 30,
     }
-    const diagnosis = getCrossTargetDiagnosis([protocolSelective])
+    const diagnosis = getCrossTargetDiagnosis([protocolSelective], undefined, {
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+            snapshot({
+              collectedAt: '20260420T111500Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+          ],
+          target: 's3-us-west-2-tcp-connect',
+        },
+      ],
+    })
     expect(diagnosis.shape.kind).toBe('protocol_selective')
     expect(diagnosis.label).toBe('Protocol-selective loss')
     expect(diagnosis.summary).toContain('51.0%')
     expect(diagnosis.summary).toContain('0.5%')
     expect(diagnosis.summary).toContain('middlebox')
-    expect(diagnosis.summary).toContain('TCP connect check')
+    expect(diagnosis.summary).toContain(
+      'TCP/443 probes to s3.us-west-2.amazonaws.com stayed healthy',
+    )
+    expect(diagnosis.summary).not.toContain('across 1 destination')
+    expect(diagnosis.summary).not.toContain('TCP connect check')
   })
 
   test('diagnosis includes escalation owner and copy text when hop ownership is known', () => {
@@ -655,6 +685,23 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
           },
         ],
       ]),
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+          ],
+          target: 's3-us-west-2-tcp-connect',
+        },
+      ],
       sourceNetworkOwner: {
         asName: 'HETZNER-CLOUD4-AS, DE',
         asn: 'AS215859',
@@ -706,6 +753,9 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     )
     expect(diagnosis.escalation?.copyText).toContain(
       'Problematic raw MTR example (direct TCP/443 MTR, collected 2026-04-29 18:35:07 UTC, destination loss 50.0%, worst-hop loss 50.0%):',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Application impact: TCP/443 probes to s3.us-west-2.amazonaws.com stayed healthy',
     )
     expect(diagnosis.escalation?.copyText).toContain('```text')
     expect(diagnosis.escalation?.copyText).toContain('132.147.112.101')

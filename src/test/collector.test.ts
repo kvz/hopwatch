@@ -13,6 +13,7 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
   return {
     chart: { signature: 'RRDTOOL / TOBI OETIKER' },
     identity: { provider_contact_emails: [] },
+    network_owner_contact: [],
     peer: [],
     probe: {
       concurrency: 3,

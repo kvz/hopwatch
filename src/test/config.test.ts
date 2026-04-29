@@ -282,6 +282,49 @@ host = "example.com"
     })
   })
 
+  test('loads network owner contact overrides from config', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[network_owner_contact]]
+asn = "1299"
+contact_emails = ["support@arelion.com"]
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.network_owner_contact).toEqual([
+      {
+        asn: 'AS1299',
+        contact_emails: ['support@arelion.com'],
+      },
+    ])
+  })
+
+  test('rejects invalid network owner contact ASNs', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[network_owner_contact]]
+asn = "arelion"
+contact_emails = ["support@arelion.com"]
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+
+    await expect(loadConfig(configPath)).rejects.toThrow(/asn/)
+  })
+
   test('overrides source identity from environment', async () => {
     vi.stubEnv('HOPWATCH_IDENTITY_HOSTNAME', 'env-probe.example.net')
     vi.stubEnv('HOPWATCH_IDENTITY_PUBLIC_HOSTNAME', 'env-hopwatch.example.net')

@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest'
-import { cleanAsName, extractIpv4Address, formatNetworkOwnerLabel } from '../lib/network-owner.ts'
+import {
+  applyNetworkOwnerContactOverrides,
+  cleanAsName,
+  extractIpv4Address,
+  formatNetworkOwnerLabel,
+} from '../lib/network-owner.ts'
 
 describe('network owner helpers', () => {
   test('extracts IPv4 addresses from rich hop labels', () => {
@@ -30,5 +35,26 @@ describe('network owner helpers', () => {
         source: 'test',
       }),
     ).toBe('Viewqwest Pte Ltd (AS18106)')
+  })
+
+  test('applies configured contact overrides before RDAP fallback contacts', () => {
+    const owner = {
+      asName: 'Arelion Sweden AB',
+      asn: 'AS1299',
+      contactEmails: ['abuse@twelve99.net'],
+      country: 'SE',
+      fetchedAt: '2026-04-29T00:00:00.000Z',
+      ip: '62.115.136.103',
+      prefix: '62.115.136.0/24',
+      rdapName: 'TELIANET',
+      registry: 'ripencc',
+      source: 'test',
+    }
+
+    expect(
+      applyNetworkOwnerContactOverrides(owner, [
+        { asn: 'AS1299', contactEmails: ['support@arelion.com'] },
+      ]).contactEmails,
+    ).toEqual(['support@arelion.com', 'abuse@twelve99.net'])
   })
 })

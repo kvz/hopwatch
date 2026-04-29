@@ -246,6 +246,10 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           signature,
           sourceIdentity,
           config.server.public_url,
+          config.network_owner_contact.map((contact) => ({
+            asn: contact.asn,
+            contactEmails: contact.contact_emails,
+          })),
         )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },

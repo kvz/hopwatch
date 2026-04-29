@@ -8,7 +8,13 @@ import {
   loadChartDefinitions,
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
-import { extractIpv4Address, lookupNetworkOwner, type NetworkOwnerInfo } from './network-owner.ts'
+import {
+  applyNetworkOwnerContactOverrides,
+  extractIpv4Address,
+  lookupNetworkOwner,
+  type NetworkOwnerContactOverride,
+  type NetworkOwnerInfo,
+} from './network-owner.ts'
 import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 import {
@@ -44,18 +50,20 @@ function renderDocument(element: ReactElement): string {
 async function getCachedNetworkOwner(
   store: HopwatchSqliteStore,
   ip: string,
+  contactOverrides: NetworkOwnerContactOverride[],
 ): Promise<NetworkOwnerInfo | null> {
   const cachedOwner = store.getNetworkOwnerCache(ip)
   if (cachedOwner != null) {
-    return cachedOwner
+    return applyNetworkOwnerContactOverrides(cachedOwner, contactOverrides)
   }
 
   const lookedUpOwner = await lookupNetworkOwner(ip).catch(() => null)
   if (lookedUpOwner != null) {
     store.upsertNetworkOwnerCache(lookedUpOwner)
+    return applyNetworkOwnerContactOverrides(lookedUpOwner, contactOverrides)
   }
 
-  return lookedUpOwner
+  return null
 }
 
 function scoreRawMtrEvidenceSnapshot(snapshot: SnapshotSummary): number {
@@ -149,6 +157,7 @@ export async function renderRootIndex(
   signature?: string,
   sourceIdentity?: SourceIdentity,
   publicBaseUrl?: string,
+  networkOwnerContactOverrides: NetworkOwnerContactOverride[] = [],
 ): Promise<string> {
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
@@ -282,7 +291,11 @@ export async function renderRootIndex(
   const suspectHopHost = preliminaryCrossTargetDiagnosis.suspect?.host
   const suspectHopIp = suspectHopHost == null ? null : extractIpv4Address(suspectHopHost)
   if (suspectHopHost != null && suspectHopIp != null) {
-    const suspectOwner = await getCachedNetworkOwner(store, suspectHopIp)
+    const suspectOwner = await getCachedNetworkOwner(
+      store,
+      suspectHopIp,
+      networkOwnerContactOverrides,
+    )
     if (suspectOwner != null) {
       networkOwnersByHopHost.set(suspectHopHost, suspectOwner)
     }
@@ -290,7 +303,7 @@ export async function renderRootIndex(
   const sourceNetworkOwner =
     sourceIdentity?.egressIp == null
       ? null
-      : await getCachedNetworkOwner(store, sourceIdentity.egressIp)
+      : await getCachedNetworkOwner(store, sourceIdentity.egressIp, networkOwnerContactOverrides)
   const crossTargetDiagnosis =
     networkOwnersByHopHost.size === 0 && sourceNetworkOwner == null
       ? preliminaryCrossTargetDiagnosis

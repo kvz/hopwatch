@@ -144,12 +144,27 @@ const storageSchema = z.object({
 })
 export type StorageSettings = z.infer<typeof storageSchema>
 
+const networkOwnerContactSchema = z.object({
+  asn: z
+    .string()
+    .trim()
+    .min(1)
+    .regex(/^(?:AS)?\d+$/i, 'asn must be AS-prefixed or numeric')
+    .transform((value) => {
+      const normalized = value.trim().toUpperCase()
+      return normalized.startsWith('AS') ? normalized : `AS${normalized}`
+    }),
+  contact_emails: z.array(z.string().email()).default([]),
+})
+export type NetworkOwnerContactConfig = z.infer<typeof networkOwnerContactSchema>
+
 const configSchema = z.object({
   server: serverSchema.default({}),
   identity: identitySchema.default({}),
   probe: probeSchema.default({}),
   chart: chartSchema.default({}),
   storage: storageSchema.default({}),
+  network_owner_contact: z.array(networkOwnerContactSchema).default([]),
   target: z.array(targetSchema).default([]),
   peer: z.array(peerSchema).default([]),
 })

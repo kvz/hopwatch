@@ -16,6 +16,11 @@ export interface NetworkOwnerInfo {
   source: string
 }
 
+export interface NetworkOwnerContactOverride {
+  asn: string
+  contactEmails: string[]
+}
+
 interface CymruOrigin {
   asn: string | null
   country: string | null
@@ -41,6 +46,22 @@ function uniqueSortedEmails(emails: Iterable<string>): string[] {
     const rightRank = emailRank(right)
     return leftRank - rightRank || left.localeCompare(right)
   })
+}
+
+export function mergeContactEmails(...emailGroups: string[][]): string[] {
+  const contacts: string[] = []
+  const seen = new Set<string>()
+  for (const group of emailGroups) {
+    for (const email of group) {
+      const trimmed = email.trim()
+      if (trimmed === '') continue
+      const key = trimmed.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      contacts.push(trimmed)
+    }
+  }
+  return contacts
 }
 
 function emailRank(email: string): number {
@@ -103,6 +124,21 @@ export function cleanAsName(raw: string | null): string | null {
 export function formatNetworkOwnerLabel(owner: NetworkOwnerInfo): string {
   const displayName = cleanAsName(owner.asName) ?? owner.rdapName ?? owner.prefix ?? owner.ip
   return owner.asn == null ? displayName : `${displayName} (${owner.asn})`
+}
+
+export function applyNetworkOwnerContactOverrides(
+  owner: NetworkOwnerInfo,
+  overrides: NetworkOwnerContactOverride[],
+): NetworkOwnerInfo {
+  const override = overrides.find((entry) => entry.asn === owner.asn)
+  if (override == null || override.contactEmails.length === 0) {
+    return owner
+  }
+
+  return {
+    ...owner,
+    contactEmails: mergeContactEmails(override.contactEmails, owner.contactEmails),
+  }
 }
 
 function parseCymruOrigin(record: string | null): CymruOrigin {

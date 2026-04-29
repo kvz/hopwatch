@@ -36,6 +36,17 @@ h1, h2 { margin: 0 0 12px; line-height: 1.1; }
 p, li { line-height: 1.5; }
 a { color: var(--accent); }
 
+.network-token {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid rgba(24, 77, 71, 0.16);
+  border-radius: 5px;
+  background: var(--code);
+  color: var(--text);
+  font-size: 0.94em;
+  line-height: 1.35;
+}
+
 .topnav {
   position: sticky;
   top: 0;

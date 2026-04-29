@@ -21,6 +21,7 @@ import { deriveTargetVariant } from '../lib/target-variant.ts'
 import { ChartCard } from './ChartCard.tsx'
 import { Layout } from './Layout.tsx'
 import { RelativeTime } from './RelativeTime.tsx'
+import { RichNetworkText } from './RichNetworkText.tsx'
 import { TopNav } from './TopNav.tsx'
 
 const SEVERITY_SORT_RANK: Record<SeverityBadge['className'], number> = {
@@ -108,7 +109,7 @@ export function RootIndexPage({
           <span className={`loss ${crossTargetDiagnosis.className}`}>
             {crossTargetDiagnosis.label}
           </span>{' '}
-          {crossTargetDiagnosis.summary}
+          <RichNetworkText text={crossTargetDiagnosis.summary} />
         </p>
       </section>
       <section className="panel">

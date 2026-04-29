@@ -319,9 +319,8 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
         },
       ],
     })
-    // Production order: page.tsx reverses listSnapshotFileNames to pass snapshots
-    // newest-first. If summarizeHopIssues picked latestHopIndex by iteration
-    // order, the oldest (index 2) would win. It must use collectedAt instead.
+    // Production order is newest-first. If summarizeHopIssues picked latestHopIndex
+    // by iteration order, the oldest (index 2) would win. It must use collectedAt instead.
     const issues = summarizeHopIssues(selectSnapshotsInWindow([newest, oldest], now, 4 * HOUR))
     const router = issues.find((hop) => hop.host === 'router.example')
     expect(router?.latestHopIndex).toBe(5)

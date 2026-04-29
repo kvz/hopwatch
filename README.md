@@ -221,29 +221,23 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
   samples, and rollups are stored in relational SQLite tables. Page renders read
   live data directly from SQLite without an HTML cache, so hot-reloaded binaries
   and new probe cycles are visible immediately.
-- **Safe JSON-to-SQLite import.** `hopwatch storage import` copies existing JSON
-  snapshots and rollups into SQLite, then verifies count + SHA-256 parity before
-  operators remove the legacy JSON files.
+- **SQLite-native verification.** `hopwatch storage verify` checks the live
+  database for integrity, legacy blob columns, and orphaned relational rows.
 - **One binary.** `bun build --compile` produces a self-contained executable
   per platform. Linux needs `mtr` in `PATH`; that's it. `engine='native'` also
   requires a glibc Linux (the built-in prober `dlopen`s `libc.so.6` via
   `bun:ffi`) - on musl distros (Alpine) stay on the default `engine='mtr'`.
 
-### SQLite storage migration
+### SQLite storage
 
-SQLite is the runtime storage backend. Existing JSON snapshot files can be
-imported once, verified, backed up, and removed after the daemon is running from
-the database. JSON is only a migration/input format; the runtime database stores
+SQLite is the runtime storage backend and source of truth. The database stores
 snapshots and rollups as rows and reconstructs raw text or JSON responses on
-demand from those rows.
+demand from those rows. Legacy JSON snapshot files and JSON-blob SQLite schemas
+were one-time migration formats; current builds intentionally do not support
+them.
 
 ```bash
-# Import current JSON snapshots into data_dir/hopwatch.sqlite and verify parity.
-hopwatch storage import --config /etc/hopwatch/hopwatch.toml --strict-extra
-
-# Verify again before deleting JSON files. Extra SQLite rows are tolerated by
-# default because the database may intentionally retain older snapshots after
-# JSON retention prunes.
+# Verify SQLite integrity and relational consistency.
 hopwatch storage verify --config /etc/hopwatch/hopwatch.toml
 ```
 

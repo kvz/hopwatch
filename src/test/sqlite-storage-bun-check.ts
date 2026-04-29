@@ -1,16 +1,11 @@
 import { Database } from 'bun:sqlite'
 import { strict as assert } from 'node:assert'
-import { createHash } from 'node:crypto'
 import { mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
 import type { MtrRollupFile } from '../lib/rollups.ts'
 import { HopwatchSqliteStore } from '../lib/sqlite-storage.ts'
-
-function sha256(contents: string): string {
-  return createHash('sha256').update(contents).digest('hex')
-}
 
 function destinationEvents(): RawMtrEvent[] {
   return [
@@ -145,12 +140,21 @@ async function checkRelationalStorage(rootDir: string): Promise<void> {
     rawSnapshot,
   )
   assert.deepEqual(store.getRollupFile('example', 'hour'), rollupFile())
+  assert.deepEqual(store.verify(), {
+    legacyBlobColumns: [],
+    ok: true,
+    orphanedRollupRows: 0,
+    orphanedSnapshotDetailRows: 0,
+    sqliteIntegrity: 'ok',
+    sqliteSnapshotCount: 1,
+    targets: [{ sqliteCount: 1, targetSlug: 'example' }],
+  })
   store.close()
 
   assertNoJsonBlobColumns(dbPath)
 }
 
-async function checkLegacyMigration(rootDir: string): Promise<void> {
+async function checkLegacyBlobSchemasFailFast(rootDir: string): Promise<void> {
   const dbPath = path.join(rootDir, 'legacy.sqlite')
   const rawSnapshot = snapshot()
   const contents = snapshotJson(rawSnapshot)
@@ -184,7 +188,7 @@ async function checkLegacyMigration(rootDir: string): Promise<void> {
     'example',
     rawSnapshot.fileName,
     `/tmp/${rawSnapshot.fileName}`,
-    sha256(contents),
+    'legacy-sha256',
     '2026-04-29T12:02:00.000Z',
     contents,
     '{}',
@@ -203,12 +207,10 @@ async function checkLegacyMigration(rootDir: string): Promise<void> {
   ).run('example', 'hour', '2026-04-29T12:01:00.000Z', `${JSON.stringify(rollupFile(), null, 2)}\n`)
   db.close()
 
-  const store = await HopwatchSqliteStore.open(dbPath)
-  assert.equal(store.listSnapshotSummaries('example').length, 1)
-  assert.deepEqual(store.getRollupFile('example', 'hour'), rollupFile())
-  store.close()
-
-  assertNoJsonBlobColumns(dbPath)
+  await assert.rejects(
+    HopwatchSqliteStore.open(dbPath),
+    /Unsupported legacy SQLite schema: snapshots still contains json\/summary_json columns/,
+  )
 }
 
 async function main(): Promise<void> {
@@ -219,7 +221,7 @@ async function main(): Promise<void> {
   await mkdir(rootDir, { recursive: true })
   try {
     await checkRelationalStorage(rootDir)
-    await checkLegacyMigration(rootDir)
+    await checkLegacyBlobSchemasFailFast(rootDir)
   } finally {
     await rm(rootDir, { force: true, recursive: true })
   }

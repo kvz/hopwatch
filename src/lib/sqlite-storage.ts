@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { MtrHistoryTarget } from './collector.ts'
 import type { ProbeEngine, ProbeMode, ProbeProtocol } from './config.ts'
-import type { Logger } from './logger.ts'
 import { parseStoredRawSnapshot, type RawMtrEvent, type StoredRawSnapshot } from './raw.ts'
 import {
   aggregateSnapshotsToRollupBuckets,
@@ -20,7 +19,6 @@ import {
   diagnoseSnapshot,
   formatCompactCollectedAt,
   type HopRecord,
-  listSnapshotFileNames,
   renderSnapshotRawText,
   type SnapshotSummary,
   summarizeStoredRawSnapshot,
@@ -149,49 +147,27 @@ type RollupHopStatementParams = [
 
 type RollupHopIndexStatementParams = [string, string, string, string, number]
 
-export interface SqliteImportFailure {
-  error: string
-  file: string
-}
-
-export interface SqliteImportResult {
-  failed: SqliteImportFailure[]
-  imported: number
-  rollupsImported: number
-  rollupsScanned: number
-  scanned: number
-}
-
 export interface SqliteVerifyTarget {
-  fileCount: number
   sqliteCount: number
   targetSlug: string
 }
 
 export interface SqliteVerifyResult {
-  extraInSqlite: string[]
-  fileSnapshotCount: number
-  missingInSqlite: string[]
+  legacyBlobColumns: string[]
   ok: boolean
-  shaMismatches: string[]
+  orphanedRollupRows: number
+  orphanedSnapshotDetailRows: number
   sqliteIntegrity: string
   sqliteSnapshotCount: number
   targets: SqliteVerifyTarget[]
 }
 
-interface SnapshotKey {
-  fileName: string
-  targetSlug: string
+interface CountRow {
+  count: number
 }
 
 interface SnapshotCountRow {
   count: number
-  target_slug: string
-}
-
-interface SnapshotHashRow {
-  file_name: string
-  sha256: string
   target_slug: string
 }
 
@@ -313,21 +289,6 @@ interface IntegrityRow {
   integrity_check: string
 }
 
-interface LegacySnapshotRow {
-  file_name: string
-  imported_at: string | null
-  json: string
-  sha256: string | null
-  source_path: string | null
-  target_slug: string
-}
-
-interface LegacyRollupRow {
-  granularity: RollupGranularity
-  json: string
-  target_slug: string
-}
-
 interface TableInfoRow {
   name: string
 }
@@ -354,10 +315,6 @@ async function loadSqlite(): Promise<SqliteModule> {
 
 function sha256(contents: string): string {
   return createHash('sha256').update(contents).digest('hex')
-}
-
-function snapshotKey(input: SnapshotKey): string {
-  return `${input.targetSlug}/${input.fileName}`
 }
 
 function prepareSnapshotInput(
@@ -538,8 +495,9 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     }
 
     if (columns.has('json') || columns.has('summary_json')) {
-      this.migrateLegacySnapshotJsonTable()
-      return
+      throw new Error(
+        'Unsupported legacy SQLite schema: snapshots still contains json/summary_json columns. Migrate it with Hopwatch v0.3.0 before running this build.',
+      )
     }
 
     this.createSnapshotDetailTables()
@@ -620,51 +578,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     `)
   }
 
-  private migrateLegacySnapshotJsonTable(): void {
-    const rows = this.db
-      .query<LegacySnapshotRow, []>(
-        `
-          SELECT target_slug, file_name, source_path, sha256, imported_at, json
-          FROM snapshots
-          ORDER BY target_slug ASC, file_name ASC
-        `,
-      )
-      .all()
-
-    this.db.run('DROP TABLE IF EXISTS snapshot_hops')
-    this.db.run('DROP TABLE IF EXISTS snapshot_destination_samples')
-    this.db.run('DROP TABLE IF EXISTS snapshot_events')
-    this.db.run('DROP TABLE IF EXISTS snapshots_v3')
-    this.createSnapshotsTable('snapshots_v3')
-    this.createSnapshotDetailTables()
-
-    const migrate = this.db.transaction((items: LegacySnapshotRow[]) => {
-      for (const row of items) {
-        const sourcePath = row.source_path ?? `sqlite://${row.target_slug}/${row.file_name}`
-        const prepared = prepareSnapshotInput(
-          {
-            contents: row.json,
-            fileName: row.file_name,
-            sourcePath,
-            targetSlug: row.target_slug,
-          },
-          undefined,
-          row.imported_at ?? new Date().toISOString(),
-        )
-        this.insertPreparedSnapshotInto('snapshots_v3', prepared)
-      }
-    })
-    migrate.immediate(rows)
-
-    this.db.run('DROP TABLE snapshots')
-    this.db.run('ALTER TABLE snapshots_v3 RENAME TO snapshots')
-  }
-
   private initializeRollupTables(): void {
     const columns = this.tableColumns('rollups')
     if (columns.size > 0 && columns.has('json')) {
-      this.migrateLegacyRollupJsonTable()
-      return
+      throw new Error(
+        'Unsupported legacy SQLite schema: rollups still contains a json column. Migrate it with Hopwatch v0.3.0 before running this build.',
+      )
     }
 
     this.createRollupTables()
@@ -746,25 +665,6 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     `)
   }
 
-  private migrateLegacyRollupJsonTable(): void {
-    const rows = this.db
-      .query<LegacyRollupRow, []>(
-        `
-          SELECT target_slug, granularity, json
-          FROM rollups
-          ORDER BY target_slug ASC, granularity ASC
-        `,
-      )
-      .all()
-    this.db.run('DROP TABLE rollups')
-    this.createRollupTables()
-
-    for (const row of rows) {
-      const rollupFile = mtrRollupFileSchema.parse(JSON.parse(row.json))
-      this.upsertRollupFile(row.target_slug, rollupFile)
-    }
-  }
-
   private createIndexes(): void {
     this.db.run(`
       CREATE INDEX IF NOT EXISTS snapshots_target_collected_at_idx
@@ -788,10 +688,6 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     `)
   }
 
-  upsertSnapshot(input: ImportSnapshotInput): void {
-    this.upsertPreparedSnapshot(prepareSnapshotInput(input))
-  }
-
   upsertRawSnapshot(input: ImportSnapshotInput, rawSnapshot: StoredRawSnapshot): void {
     this.upsertPreparedSnapshot(prepareSnapshotInput(input, rawSnapshot))
   }
@@ -807,15 +703,6 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       }
       throw err
     }
-  }
-
-  upsertPreparedSnapshots(inputs: PreparedSnapshotInput[]): void {
-    const insertMany = this.db.transaction((snapshots: PreparedSnapshotInput[]) => {
-      for (const snapshot of snapshots) {
-        this.upsertPreparedSnapshotInto('snapshots', snapshot)
-      }
-    })
-    insertMany.immediate(inputs)
   }
 
   private upsertPreparedSnapshot(input: PreparedSnapshotInput): void {
@@ -1604,198 +1491,121 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     return new Map(rows.map((row) => [row.target_slug, row.count]))
   }
 
-  getSnapshotHashes(): Map<string, string> {
-    const rows = this.db
-      .query<SnapshotHashRow, []>('SELECT target_slug, file_name, sha256 FROM snapshots')
-      .all()
-    return new Map(
-      rows.map((row) => [
-        snapshotKey({ targetSlug: row.target_slug, fileName: row.file_name }),
-        row.sha256,
-      ]),
-    )
-  }
-
   integrityCheck(): string {
     return (
       this.db.query<IntegrityRow, []>('PRAGMA integrity_check').get()?.integrity_check ??
       'missing integrity_check result'
     )
   }
-}
 
-async function listTargetDirs(dataDir: string): Promise<string[]> {
-  const entries = await readdir(dataDir, { withFileTypes: true }).catch(
-    (err: NodeJS.ErrnoException) => {
-      if (err.code === 'ENOENT') return []
-      throw err
-    },
-  )
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort()
-}
+  verify(): SqliteVerifyResult {
+    const sqliteCounts = this.getSnapshotCountsByTarget()
+    const targets = [...sqliteCounts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([targetSlug, sqliteCount]) => ({ sqliteCount, targetSlug }))
+    const sqliteSnapshotCount = [...sqliteCounts.values()].reduce((sum, count) => sum + count, 0)
+    const sqliteIntegrity = this.integrityCheck()
+    const legacyBlobColumns = this.legacyBlobColumns()
+    const orphanedSnapshotDetailRows = this.countOrphanedSnapshotDetailRows()
+    const orphanedRollupRows = this.countOrphanedRollupRows()
+    const ok =
+      sqliteIntegrity === 'ok' &&
+      legacyBlobColumns.length === 0 &&
+      orphanedSnapshotDetailRows === 0 &&
+      orphanedRollupRows === 0
 
-async function collectFileHashes(dataDir: string): Promise<{
-  countsByTarget: Map<string, number>
-  hashes: Map<string, string>
-  total: number
-}> {
-  const countsByTarget = new Map<string, number>()
-  const hashes = new Map<string, string>()
-  let total = 0
-
-  for (const targetSlug of await listTargetDirs(dataDir)) {
-    const targetDir = path.join(dataDir, targetSlug)
-    const fileNames = await listSnapshotFileNames(targetDir)
-    countsByTarget.set(targetSlug, fileNames.length)
-    total += fileNames.length
-
-    for (const fileName of fileNames) {
-      const contents = await readFile(path.join(targetDir, fileName), 'utf8')
-      hashes.set(snapshotKey({ fileName, targetSlug }), sha256(contents))
+    return {
+      legacyBlobColumns,
+      ok,
+      orphanedRollupRows,
+      orphanedSnapshotDetailRows,
+      sqliteIntegrity,
+      sqliteSnapshotCount,
+      targets,
     }
   }
 
-  return { countsByTarget, hashes, total }
-}
-
-async function importRollupIfPresent(
-  store: HopwatchSqliteStore,
-  targetDir: string,
-  targetSlug: string,
-  granularity: RollupGranularity,
-): Promise<boolean> {
-  const fileName = `${granularity === 'hour' ? 'hourly' : 'daily'}.rollup.json`
-  const filePath = path.join(targetDir, fileName)
-  let contents: string
-  try {
-    contents = await readFile(filePath, 'utf8')
-  } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-      return false
+  private legacyBlobColumns(): string[] {
+    const snapshotColumns = this.tableColumns('snapshots')
+    const rollupColumns = this.tableColumns('rollups')
+    const columns: string[] = []
+    for (const columnName of ['json', 'summary_json']) {
+      if (snapshotColumns.has(columnName)) columns.push(`snapshots.${columnName}`)
     }
-    throw err
-  }
-  const rollup = mtrRollupFileSchema.parse(JSON.parse(contents))
-  if (rollup.granularity !== granularity) {
-    throw new Error(`Expected ${filePath} to be ${granularity}, got ${rollup.granularity}`)
-  }
-  store.upsertRollupFile(targetSlug, rollup)
-  return true
-}
-
-export async function importSnapshotsFromDataDir(
-  store: HopwatchSqliteStore,
-  dataDir: string,
-  logger?: Logger,
-): Promise<SqliteImportResult> {
-  const result: SqliteImportResult = {
-    failed: [],
-    imported: 0,
-    rollupsImported: 0,
-    rollupsScanned: 0,
-    scanned: 0,
+    if (rollupColumns.has('json')) columns.push('rollups.json')
+    return columns
   }
 
-  for (const targetSlug of await listTargetDirs(dataDir)) {
-    const targetDir = path.join(dataDir, targetSlug)
-    const fileNames = await listSnapshotFileNames(targetDir)
-    const preparedSnapshots: PreparedSnapshotInput[] = []
-    for (const fileName of fileNames) {
-      result.scanned += 1
-      const sourcePath = path.join(targetDir, fileName)
-      try {
-        const contents = await readFile(sourcePath, 'utf8')
-        preparedSnapshots.push(prepareSnapshotInput({ contents, fileName, sourcePath, targetSlug }))
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err)
-        result.failed.push({ error, file: sourcePath })
-        logger?.error('sqlite snapshot import failed', { error, file: sourcePath })
-      }
-    }
-
-    try {
-      store.upsertPreparedSnapshots(preparedSnapshots)
-      result.imported += preparedSnapshots.length
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      for (const snapshot of preparedSnapshots) {
-        result.failed.push({ error, file: snapshot.sourcePath })
-      }
-      logger?.error('sqlite target import transaction failed', { error, target: targetSlug })
-    }
-
-    for (const granularity of ['hour', 'day'] as const) {
-      result.rollupsScanned += 1
-      const fileName = `${granularity === 'hour' ? 'hourly' : 'daily'}.rollup.json`
-      try {
-        if (await importRollupIfPresent(store, targetDir, targetSlug, granularity)) {
-          result.rollupsImported += 1
-        }
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err)
-        result.failed.push({ error, file: path.join(targetDir, fileName) })
-        logger?.error('sqlite rollup import failed', { error, target: targetSlug })
-      }
-    }
+  private countOrphanedSnapshotDetailRows(): number {
+    return (
+      this.db
+        .query<CountRow, []>(
+          `
+            SELECT (
+              SELECT COUNT(*)
+              FROM snapshot_hops AS detail
+              LEFT JOIN snapshots AS snapshot
+                ON snapshot.target_slug = detail.target_slug
+                AND snapshot.file_name = detail.file_name
+              WHERE snapshot.file_name IS NULL
+            ) + (
+              SELECT COUNT(*)
+              FROM snapshot_destination_samples AS detail
+              LEFT JOIN snapshots AS snapshot
+                ON snapshot.target_slug = detail.target_slug
+                AND snapshot.file_name = detail.file_name
+              WHERE snapshot.file_name IS NULL
+            ) + (
+              SELECT COUNT(*)
+              FROM snapshot_events AS detail
+              LEFT JOIN snapshots AS snapshot
+                ON snapshot.target_slug = detail.target_slug
+                AND snapshot.file_name = detail.file_name
+              WHERE snapshot.file_name IS NULL
+            ) AS count
+          `,
+        )
+        .get()?.count ?? 0
+    )
   }
 
-  return result
-}
-
-export async function verifySqliteAgainstDataDir(
-  store: HopwatchSqliteStore,
-  dataDir: string,
-  options: { strictExtra?: boolean } = {},
-): Promise<SqliteVerifyResult> {
-  const fileState = await collectFileHashes(dataDir)
-  const sqliteCounts = store.getSnapshotCountsByTarget()
-  const sqliteHashes = store.getSnapshotHashes()
-  const targetSlugs = new Set([...fileState.countsByTarget.keys(), ...sqliteCounts.keys()])
-  const targets = [...targetSlugs].sort().map((targetSlug) => ({
-    fileCount: fileState.countsByTarget.get(targetSlug) ?? 0,
-    sqliteCount: sqliteCounts.get(targetSlug) ?? 0,
-    targetSlug,
-  }))
-
-  const missingInSqlite: string[] = []
-  const shaMismatches: string[] = []
-  for (const [key, fileHash] of fileState.hashes) {
-    const sqliteHash = sqliteHashes.get(key)
-    if (sqliteHash == null) {
-      missingInSqlite.push(key)
-      continue
-    }
-    if (sqliteHash !== fileHash) {
-      shaMismatches.push(key)
-    }
-  }
-
-  const extraInSqlite: string[] = []
-  for (const key of sqliteHashes.keys()) {
-    if (!fileState.hashes.has(key)) {
-      extraInSqlite.push(key)
-    }
-  }
-
-  const sqliteSnapshotCount = [...sqliteCounts.values()].reduce((sum, count) => sum + count, 0)
-  const sqliteIntegrity = store.integrityCheck()
-  const ok =
-    sqliteIntegrity === 'ok' &&
-    missingInSqlite.length === 0 &&
-    shaMismatches.length === 0 &&
-    (!options.strictExtra || extraInSqlite.length === 0)
-
-  return {
-    extraInSqlite,
-    fileSnapshotCount: fileState.total,
-    missingInSqlite,
-    ok,
-    shaMismatches,
-    sqliteIntegrity,
-    sqliteSnapshotCount,
-    targets,
+  private countOrphanedRollupRows(): number {
+    return (
+      this.db
+        .query<CountRow, []>(
+          `
+            SELECT (
+              SELECT COUNT(*)
+              FROM rollup_buckets AS detail
+              LEFT JOIN rollups AS rollup
+                ON rollup.target_slug = detail.target_slug
+                AND rollup.granularity = detail.granularity
+              WHERE rollup.target_slug IS NULL
+            ) + (
+              SELECT COUNT(*)
+              FROM rollup_histogram_bins AS detail
+              LEFT JOIN rollups AS rollup
+                ON rollup.target_slug = detail.target_slug
+                AND rollup.granularity = detail.granularity
+              WHERE rollup.target_slug IS NULL
+            ) + (
+              SELECT COUNT(*)
+              FROM rollup_hops AS detail
+              LEFT JOIN rollups AS rollup
+                ON rollup.target_slug = detail.target_slug
+                AND rollup.granularity = detail.granularity
+              WHERE rollup.target_slug IS NULL
+            ) + (
+              SELECT COUNT(*)
+              FROM rollup_hop_indexes AS detail
+              LEFT JOIN rollups AS rollup
+                ON rollup.target_slug = detail.target_slug
+                AND rollup.granularity = detail.granularity
+              WHERE rollup.target_slug IS NULL
+            ) AS count
+          `,
+        )
+        .get()?.count ?? 0
+    )
   }
 }

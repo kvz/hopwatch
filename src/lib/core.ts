@@ -35,7 +35,6 @@ export {
   type HopRecord,
   parseCollectedAt,
   parseHopLine,
-  parseSnapshotSummary,
   parseStoredSnapshotSummary,
   renderSnapshotRawText,
   type SnapshotDiagnosis,

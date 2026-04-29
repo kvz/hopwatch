@@ -711,6 +711,74 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain('Prefix: 132.147.112.0/24')
   })
 
+  test('diagnosis routes source-owned suspect hops to the source provider network team', () => {
+    const sourceOwnedIssue = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com', 'google.com'],
+      asn: null,
+      averageLossPct: 51,
+      host: '5.161.8.130',
+      icmpAverageLossPct: 51,
+      icmpTargetCount: 2,
+      tcpAverageLossPct: 52,
+      tcpTargetCount: 2,
+      targetCount: 4,
+      targets: ['s3-us-west-2-tcp-mtr', 's3-us-west-2-tcp-native', 'google-com', 'google-com'],
+      totalDownstreamLoss: 1252,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 2000,
+    }
+    const hetznerCloudOwner = {
+      asName: 'HETZNER-CLOUD2-AS',
+      asn: 'AS213230',
+      contactEmails: [],
+      country: 'US',
+      fetchedAt: '2026-04-29T00:00:00.000Z',
+      ip: '5.161.8.130',
+      prefix: '5.161.8.0/21',
+      rdapName: 'HETZNER-CLOUD',
+      registry: 'arin',
+      source: 'test',
+    }
+
+    const diagnosis = getCrossTargetDiagnosis([sourceOwnedIssue], undefined, {
+      networkOwnersByHopHost: new Map([['5.161.8.130', hetznerCloudOwner]]),
+      sourceIdentity: {
+        datacenter: 'ash-dc1',
+        egressIp: '5.161.82.43',
+        hostname: 'ho14up.transloadit.com',
+        location: 'Ashburn, VA (ash)',
+        provider: 'Hetzner Cloud',
+        publicHostname: 'observer1-us-east-1-production.transloadit.com',
+        siteLabel: 'us-east-1-hetzner',
+      },
+      sourceNetworkOwner: {
+        ...hetznerCloudOwner,
+        ip: '5.161.82.43',
+        prefix: '5.161.82.0/24',
+      },
+    })
+
+    expect(diagnosis.summary).toContain(
+      'recommended escalation: Hetzner Cloud network team / AS213230',
+    )
+    expect(diagnosis.summary).toContain('source and suspect hop are in the same network')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Recommended escalation: Hetzner Cloud network team / AS213230.',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'The source egress IP and suspect hop are both announced by HETZNER-CLOUD2-AS (AS213230)',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'the pattern affects 2 external destinations across 4 probe paths from ash-dc1',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Contact: No public NOC contact found in RDAP; open this through the source provider',
+    )
+    expect(diagnosis.escalation?.copyText).not.toContain(
+      'use the owner/ASN as the escalation target',
+    )
+  })
+
   test('does NOT flag protocol-selective when ICMP is also lossy (real capacity problem)', () => {
     // Both protocols see substantial loss - that's not policy-driven, it's
     // the classic "sick router drops packets" signature. Fall through to

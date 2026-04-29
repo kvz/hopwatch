@@ -307,6 +307,7 @@ export interface CrossTargetEscalation {
   contactEmails: string[]
   copyText: string
   ownerLabel: string
+  summaryAction: string
 }
 
 interface PerTargetHopInput {
@@ -833,6 +834,104 @@ export interface CrossTargetDiagnosisContext {
   now?: number
 }
 
+interface EscalationRoute {
+  contactLine: string
+  rationaleLine: string
+  recommendedLine: string
+  summaryAction: string
+}
+
+function sameAsn(left: NetworkOwnerInfo | null | undefined, right: NetworkOwnerInfo): boolean {
+  return left?.asn != null && right.asn != null && left.asn === right.asn
+}
+
+function formatSourceSite(identity: SourceIdentity | null | undefined): string | null {
+  return identity?.datacenter ?? identity?.location ?? identity?.siteLabel ?? null
+}
+
+function formatDestinationScope(primary: CrossTargetHopIssue): string {
+  const destinationCount = primary.affectedDestinations.length
+  const destinationNoun = destinationCount === 1 ? 'destination' : 'destinations'
+  if (destinationCount === 0) return `${primary.targetCount} probe paths`
+  if (destinationCount === primary.targetCount) {
+    return `${destinationCount} external ${destinationNoun}`
+  }
+  return `${destinationCount} external ${destinationNoun} across ${primary.targetCount} probe paths`
+}
+
+function formatSourceProviderEscalationTarget(
+  sourceIdentity: SourceIdentity | null | undefined,
+  owner: NetworkOwnerInfo,
+): string {
+  const ownerLabel = formatNetworkOwnerLabel(owner)
+  const sourceProvider = sourceIdentity?.provider
+  if (sourceProvider != null && owner.asn != null) {
+    return `${sourceProvider} network team / ${owner.asn}`
+  }
+  if (sourceProvider != null) {
+    return `${sourceProvider} network team`
+  }
+  return owner.asn == null
+    ? `${ownerLabel} network team`
+    : `${ownerLabel} network team / ${owner.asn}`
+}
+
+function determineEscalationRoute({
+  owner,
+  primary,
+  shapeKind,
+  sourceIdentity,
+  sourceNetworkOwner,
+}: {
+  owner: NetworkOwnerInfo
+  primary: CrossTargetHopIssue
+  shapeKind: CrossTargetShapeKind
+  sourceIdentity?: SourceIdentity
+  sourceNetworkOwner?: NetworkOwnerInfo
+}): EscalationRoute {
+  const ownerLabel = formatNetworkOwnerLabel(owner)
+  const destinationScope = formatDestinationScope(primary)
+  const sourceSite = formatSourceSite(sourceIdentity)
+  const siteSuffix = sourceSite == null ? '' : ` from ${sourceSite}`
+  const sourceOwned = sameAsn(sourceNetworkOwner, owner)
+
+  if (sourceOwned) {
+    const target = formatSourceProviderEscalationTarget(sourceIdentity, owner)
+    const asnSuffix = owner.asn == null ? '' : ` and cite ${owner.asn}`
+    return {
+      contactLine:
+        owner.contactEmails.length === 0
+          ? `No public NOC contact found in RDAP; open this through the source provider's network/support escalation path${asnSuffix}.`
+          : owner.contactEmails.join(', '),
+      rationaleLine: `The source egress IP and suspect hop are both announced by ${ownerLabel}, and the pattern affects ${destinationScope}${siteSuffix}.`,
+      recommendedLine: `Recommended escalation: ${target}.`,
+      summaryAction: `recommended escalation: ${target} because the source and suspect hop are in the same network`,
+    }
+  }
+
+  const upstreamFallback =
+    sourceIdentity?.provider == null
+      ? 'ask your upstream/provider to escalate there'
+      : `ask ${sourceIdentity.provider} to escalate there`
+  const protocolRationale =
+    shapeKind === 'protocol_selective'
+      ? ' The loss is protocol-selective, so ask the owner to inspect TCP traceroute policers, middleboxes, or ECMP behavior rather than plain capacity.'
+      : ''
+
+  return {
+    contactLine:
+      owner.contactEmails.length === 0
+        ? `No public NOC contact found in RDAP; use the owner/ASN as the escalation target, or ${upstreamFallback}.`
+        : owner.contactEmails.join(', '),
+    rationaleLine: `The suspect hop is owned by ${ownerLabel} and coincides with downstream loss on ${destinationScope}.${protocolRationale}`,
+    recommendedLine: `Recommended escalation: ${ownerLabel}.`,
+    summaryAction:
+      owner.contactEmails.length === 0
+        ? `recommended escalation: ${ownerLabel}; if they do not accept direct reports, ${upstreamFallback}`
+        : `report this to ${ownerLabel} (${owner.contactEmails.join(', ')})`,
+  }
+}
+
 function buildCrossTargetEscalation({
   destinationList,
   hopDisplay,
@@ -859,10 +958,13 @@ function buildCrossTargetEscalation({
   if (owner == null) return null
 
   const ownerLabel = formatNetworkOwnerLabel(owner)
-  const contacts =
-    owner.contactEmails.length === 0
-      ? 'No public NOC contact found in RDAP; use the owner/ASN as the escalation target.'
-      : owner.contactEmails.join(', ')
+  const route = determineEscalationRoute({
+    owner,
+    primary,
+    shapeKind,
+    sourceIdentity,
+    sourceNetworkOwner,
+  })
   const protocolLine =
     shapeKind === 'protocol_selective'
       ? `TCP loss is ~${(primary.tcpAverageLossPct ?? 0).toFixed(1)}% while ICMP loss is ~${(primary.icmpAverageLossPct ?? 0).toFixed(1)}% on the same hop.`
@@ -881,6 +983,10 @@ function buildCrossTargetEscalation({
       ...formatSourceIdentityLines(sourceIdentity),
       sourceNetworkLine,
       '',
+      'Escalation route:',
+      route.recommendedLine,
+      `Reason: ${route.rationaleLine}`,
+      '',
       'Destination:',
       `Destination host: ${destinationList}`,
       shapeKind === 'protocol_selective' ? 'Destination service: TCP/443 HTTPS' : null,
@@ -888,7 +994,7 @@ function buildCrossTargetEscalation({
       'Suspect hop:',
       `Hop: ${hopDisplay}`,
       `Owner: ${ownerLabel}`,
-      `Contact: ${contacts}`,
+      `Contact: ${route.contactLine}`,
       owner.prefix == null ? null : `Prefix: ${owner.prefix}`,
       '',
       'Evidence:',
@@ -899,6 +1005,7 @@ function buildCrossTargetEscalation({
       .filter((line): line is string => line != null)
       .join('\n'),
     ownerLabel,
+    summaryAction: route.summaryAction,
   }
 }
 
@@ -906,6 +1013,10 @@ function formatEnglishList(items: string[]): string {
   if (items.length <= 1) return items[0] ?? ''
   if (items.length === 2) return `${items[0]} and ${items[1]}`
   return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
+function capitalizeSentence(text: string): string {
+  return text.length === 0 ? text : `${text[0].toUpperCase()}${text.slice(1)}`
 }
 
 function normalizePublicBaseUrl(publicBaseUrl: string | undefined): string | null {
@@ -1166,7 +1277,7 @@ export function getCrossTargetDiagnosis(
     const escalationSuffix =
       escalation == null
         ? ' The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.'
-        : ` Report this to ${escalation.ownerLabel}${escalation.contactEmails.length === 0 ? '' : ` (${escalation.contactEmails.join(', ')})`}, or ask your upstream/provider to escalate there.`
+        : ` ${capitalizeSentence(escalation.summaryAction)}.`
     return {
       className: 'bad',
       escalation,
@@ -1193,9 +1304,7 @@ export function getCrossTargetDiagnosis(
     timelineLine,
   })
   const escalationSuffix =
-    escalation == null
-      ? 'consider escalating with the upstream network'
-      : `consider escalating with ${escalation.ownerLabel}${escalation.contactEmails.length === 0 ? '' : ` (${escalation.contactEmails.join(', ')})`}`
+    escalation == null ? 'consider escalating with the upstream network' : escalation.summaryAction
   return {
     className: severe ? 'bad' : 'warn',
     escalation,

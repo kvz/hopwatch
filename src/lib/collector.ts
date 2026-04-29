@@ -1,23 +1,10 @@
 import { lookup } from 'node:dns/promises'
-import {
-  link,
-  lstat,
-  mkdir,
-  readdir,
-  readlink,
-  rename,
-  rm,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
-import path from 'node:path'
 import { execa } from 'execa'
 import type { LoadedConfig, ProbeEngine, ProbeMode, ProbeProtocol, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
 import { parseRawMtrOutput, parseStoredRawSnapshot, type RawMtrEvent } from './raw.ts'
-import { updateTargetRollups } from './rollups.ts'
-import { formatCompactCollectedAt, RESERVED_TARGET_FILES } from './snapshot.ts'
-import { HopwatchSqliteStore } from './sqlite-storage.ts'
+import { formatCompactCollectedAt } from './snapshot.ts'
+import { HopwatchSqliteStore, type HopwatchStorage } from './sqlite-storage.ts'
 
 export interface MtrHistoryTarget {
   slug: string
@@ -106,7 +93,6 @@ export interface CollectorOptions {
   concurrency: number
   ipVersion: '4' | '6'
   keepDays: number
-  logDir: string
   mtrBin: string
   namespaceDir: string
   netnsMount: boolean
@@ -117,6 +103,7 @@ export interface CollectorOptions {
 
 export interface CollectorDependencies {
   getNow?: () => Date
+  openStoreFn?: (dbPath: string) => Promise<HopwatchStorage>
   runCommand?: RunCommand
   runNativeProbeFn?: RunNativeProbeFn
   // Calls warmupNativeEngine() from prober-native.ts; injectable so tests
@@ -138,7 +125,6 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
     concurrency: config.probe.concurrency,
     ipVersion: String(config.probe.ip_version) as '4' | '6',
     keepDays: config.probe.keep_days,
-    logDir: config.resolvedDataDir,
     mtrBin: config.probe.mtr_bin,
     namespaceDir: config.probe.namespace_dir,
     netnsMount: config.probe.netns_mount,
@@ -146,135 +132,6 @@ export function collectorOptionsFromConfig(config: LoadedConfig): CollectorOptio
     probeTimeoutMs,
     targets: config.target.map(targetFromConfig),
   }
-}
-
-export function getTargetSlug(target: string): string {
-  return target.replaceAll(/[^A-Za-z0-9._:-]/g, '-')
-}
-
-export function getLegacyTargetSlug(targetSlug: string): string {
-  return `${targetSlug}-`
-}
-
-export async function removeOldSnapshots(
-  targetDir: string,
-  keepDays: number,
-  now = Date.now(),
-): Promise<void> {
-  const entries = await readdir(targetDir, { withFileTypes: true })
-  const maxAgeMs = keepDays * 24 * 60 * 60 * 1000
-  const cutoff = now - maxAgeMs
-
-  for (const entry of entries) {
-    // Orphaned staging symlinks from updateLatestSymlink (if the process
-    // crashed between `symlink` and `rename`) and orphaned rollup/snapshot
-    // tmp files would otherwise accumulate indefinitely because neither
-    // ends in `.txt` or `.json`. Pick them up here once they are older
-    // than the retention window.
-    const isStaleStaging =
-      entry.name.startsWith('latest.json.new.') ||
-      entry.name.includes('.tmp.') ||
-      entry.name.endsWith('.tmp')
-    const isRetainable = entry.name.endsWith('.txt') || entry.name.endsWith('.json')
-    if (!entry.isFile() && !entry.isSymbolicLink()) {
-      continue
-    }
-    if (!isRetainable && !isStaleStaging) {
-      continue
-    }
-
-    if (RESERVED_TARGET_FILES.has(entry.name)) {
-      continue
-    }
-
-    const entryPath = path.join(targetDir, entry.name)
-    // lstat so a dangling symlink doesn't throw ENOENT via stat().
-    const entryStat = await lstat(entryPath)
-    if (entryStat.mtimeMs >= cutoff) {
-      continue
-    }
-
-    await rm(entryPath, { force: true })
-  }
-}
-
-async function updateLatestSymlink(outputFile: string, latestFile: string): Promise<void> {
-  // Point at the snapshot by its basename so the link stays valid if the
-  // whole data directory is moved or restored under a different absolute path
-  // (e.g. `/var/lib/hopwatch` → `/mnt/backup/hopwatch`). Using the absolute
-  // `outputFile` here worked in place but broke after relocation.
-  const relativeTarget = path.basename(outputFile)
-  try {
-    const existingTarget = await readlink(latestFile)
-    if (existingTarget === relativeTarget) {
-      return
-    }
-  } catch {
-    // No existing symlink to preserve.
-  }
-
-  // Create under a unique sibling name and rename over `latest.json` so the
-  // dashboard never sees a missing file. Before this, an `rm` followed by a
-  // `symlink` left a brief window where concurrent readers got 404. rename()
-  // replaces the old inode atomically on the same filesystem.
-  const stagingFile = `${latestFile}.new.${process.pid}.${Date.now()}`
-  await rm(stagingFile, { force: true })
-  await symlink(relativeTarget, stagingFile)
-  await rename(stagingFile, latestFile)
-}
-
-async function pathExists(pathname: string): Promise<boolean> {
-  try {
-    await lstat(pathname)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function moveMissingEntries(sourceDir: string, destinationDir: string): Promise<void> {
-  const entries = await readdir(sourceDir, { withFileTypes: true })
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry.name)
-    const destinationPath = path.join(destinationDir, entry.name)
-    if (await pathExists(destinationPath)) {
-      continue
-    }
-
-    await rename(sourcePath, destinationPath)
-  }
-}
-
-async function ensureLegacyAlias(logDir: string, targetSlug: string): Promise<string> {
-  const canonicalSlug = getTargetSlug(targetSlug)
-  const legacySlug = getLegacyTargetSlug(canonicalSlug)
-  const canonicalDir = path.join(logDir, canonicalSlug)
-  const legacyDir = path.join(logDir, legacySlug)
-
-  if (canonicalSlug === legacySlug) {
-    await mkdir(canonicalDir, { recursive: true })
-    return canonicalDir
-  }
-
-  const canonicalExists = await pathExists(canonicalDir)
-  const legacyExists = await pathExists(legacyDir)
-
-  if (!canonicalExists && legacyExists) {
-    await rename(legacyDir, canonicalDir)
-  } else {
-    await mkdir(canonicalDir, { recursive: true })
-    if (legacyExists) {
-      const legacyStat = await lstat(legacyDir)
-      if (legacyStat.isDirectory()) {
-        await moveMissingEntries(legacyDir, canonicalDir)
-        await rm(legacyDir, { recursive: true, force: true })
-      }
-    }
-  }
-
-  await rm(legacyDir, { force: true, recursive: true })
-  await symlink(canonicalSlug, legacyDir)
-  return canonicalDir
 }
 
 async function mapWithConcurrency<T>(
@@ -300,7 +157,7 @@ async function mapWithConcurrency<T>(
 export interface CollectSnapshotDeps {
   runCommand?: RunCommand
   runNativeProbeFn?: RunNativeProbeFn
-  sqliteStore?: HopwatchSqliteStore
+  sqliteStore?: HopwatchStorage
 }
 
 // Promise.race-based timeout wrapper. Node's DNS resolver and Bun's reverse
@@ -331,13 +188,9 @@ export async function collectSnapshot(
 ): Promise<void> {
   const runCommand = deps.runCommand ?? execFileAsync
   const runNativeProbeFn = deps.runNativeProbeFn ?? defaultRunNativeProbe
-
-  const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
-  const jsonFile = path.join(targetDir, `${timestamp}.json`)
-  // pid+random suffix prevents two overlapping cycles from the same target
-  // slug colliding on the staging file and publishing a partial write.
-  const tmpJsonFile = `${jsonFile}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 10)}`
-  const latestJsonFile = path.join(targetDir, 'latest.json')
+  if (deps.sqliteStore == null) {
+    throw new Error('collectSnapshot requires an open SQLite store')
+  }
 
   let rawEvents: RawMtrEvent[]
   if (target.engine === 'native') {
@@ -420,7 +273,7 @@ export async function collectSnapshot(
     schemaVersion: 2 as const,
     collectedAt: timestamp,
     engine: target.engine,
-    fileName: path.basename(jsonFile),
+    fileName: `${timestamp}.json`,
     host: target.host,
     label: target.label,
     netns: target.netns,
@@ -433,48 +286,22 @@ export async function collectSnapshot(
   }
   const snapshotContents = `${JSON.stringify(storedSnapshot, null, 2)}\n`
   const parsedSnapshot = parseStoredRawSnapshot(snapshotContents)
-  await writeFile(tmpJsonFile, snapshotContents)
-  // Publish atomically via link() instead of rename() so a second process
-  // probing the same target in the same wall-clock second collides on
-  // EEXIST instead of silently overwriting the first snapshot. The common
-  // single-writer case is unaffected - link()+unlink() is one extra syscall.
-  try {
-    await link(tmpJsonFile, jsonFile)
-  } catch (err) {
-    if (err instanceof Error && 'code' in err && err.code === 'EEXIST') {
-      await rm(tmpJsonFile, { force: true })
-      throw new Error(
-        `snapshot collision at ${jsonFile}: another process already wrote this timestamp`,
-      )
-    }
-    throw err
-  } finally {
-    await rm(tmpJsonFile, { force: true })
-  }
-  await updateLatestSymlink(jsonFile, latestJsonFile)
-  if (deps.sqliteStore != null) {
-    try {
-      deps.sqliteStore.upsertRawSnapshot(
-        {
-          contents: snapshotContents,
-          fileName: path.basename(jsonFile),
-          sourcePath: jsonFile,
-          targetSlug: path.basename(targetDir),
-        },
-        parsedSnapshot,
-      )
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      logger?.error('sqlite sidecar write failed', { error, file: jsonFile, target: target.slug })
-    }
-  }
-  await removeOldSnapshots(targetDir, options.keepDays)
-  logger?.info('snapshot saved', { file: jsonFile, target: target.slug })
+  deps.sqliteStore.insertRawSnapshot(
+    {
+      contents: snapshotContents,
+      fileName: storedSnapshot.fileName,
+      sourcePath: `sqlite://${target.slug}/${storedSnapshot.fileName}`,
+      targetSlug: target.slug,
+    },
+    parsedSnapshot,
+  )
+  logger?.info('snapshot saved', { fileName: storedSnapshot.fileName, target: target.slug })
 }
 
 async function updateRollupsForTargets(
   nodeLabel: string,
   options: CollectorOptions,
+  store: HopwatchStorage,
   nowDate: Date,
   fullRebuild = false,
   logger?: Logger,
@@ -482,20 +309,8 @@ async function updateRollupsForTargets(
   const failedTargetSlugs: string[] = []
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
     try {
-      const targetDir = await ensureLegacyAlias(options.logDir, target.slug)
-      await updateTargetRollups(
-        targetDir,
-        {
-          host: target.host,
-          label: target.label,
-          observer: nodeLabel,
-          probeMode: target.probeMode,
-          target: target.host,
-        },
-        nowDate,
-        undefined,
-        { fullRebuild },
-      )
+      store.updateRollupsForTarget(target, nodeLabel, nowDate, undefined, fullRebuild)
+      store.pruneRawSnapshots(target.slug, options.keepDays, nowDate.getTime())
     } catch (err) {
       // Isolate rollup failures per-target. Without this a single unparseable
       // snapshot or transient write error aborted the rollup phase for every
@@ -564,9 +379,6 @@ export async function runCollector(
   }
 
   const options = collectorOptionsFromConfig(config)
-
-  await mkdir(options.logDir, { recursive: true })
-
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
   const timestamp = getTimestamp(nowDate)
@@ -574,22 +386,13 @@ export async function runCollector(
     runCommand: deps.runCommand,
     runNativeProbeFn: deps.runNativeProbeFn,
   }
-  let sqliteStore: HopwatchSqliteStore | null = null
-  if (config.storage.sqlite_write) {
-    try {
-      sqliteStore = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      logger.error('sqlite sidecar disabled for this cycle', {
-        dbPath: config.resolvedSqlitePath,
-        error,
-      })
-    }
-  }
-  if (sqliteStore != null) {
-    snapshotDeps.sqliteStore = sqliteStore
-  }
+  const openStore =
+    deps.openStoreFn ??
+    ((dbPath: string): Promise<HopwatchStorage> => HopwatchSqliteStore.open(dbPath))
+  const sqliteStore = await openStore(config.resolvedSqlitePath)
+  snapshotDeps.sqliteStore = sqliteStore
   const failedTargetSlugs: string[] = []
+  let failedRollupSlugs: string[] = []
 
   try {
     await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
@@ -603,17 +406,17 @@ export async function runCollector(
         logger.error('snapshot failed', { error: err.message, target: target.slug })
       }
     })
+    failedRollupSlugs = await updateRollupsForTargets(
+      nodeLabel,
+      options,
+      sqliteStore,
+      nowDate,
+      false,
+      logger,
+    )
   } finally {
-    sqliteStore?.close()
+    sqliteStore.close()
   }
-
-  const failedRollupSlugs = await updateRollupsForTargets(
-    nodeLabel,
-    options,
-    nowDate,
-    false,
-    logger,
-  )
 
   return { failedTargetSlugs, failedRollupSlugs }
 }
@@ -628,10 +431,25 @@ export async function refreshRollups(
   deps: CollectorDependencies = {},
 ): Promise<RefreshRollupsResult> {
   const options = collectorOptionsFromConfig(config)
-  await mkdir(options.logDir, { recursive: true })
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const nowDate = (deps.getNow ?? (() => new Date()))()
-  // `hopwatch rollup` is the recovery escape hatch - always do a full rebuild.
-  const failedTargetSlugs = await updateRollupsForTargets(nodeLabel, options, nowDate, true, logger)
+  const openStore =
+    deps.openStoreFn ??
+    ((dbPath: string): Promise<HopwatchStorage> => HopwatchSqliteStore.open(dbPath))
+  const sqliteStore = await openStore(config.resolvedSqlitePath)
+  let failedTargetSlugs: string[]
+  try {
+    // `hopwatch rollup` is the recovery escape hatch - always do a full rebuild.
+    failedTargetSlugs = await updateRollupsForTargets(
+      nodeLabel,
+      options,
+      sqliteStore,
+      nowDate,
+      true,
+      logger,
+    )
+  } finally {
+    sqliteStore.close()
+  }
   return { failedTargetSlugs }
 }

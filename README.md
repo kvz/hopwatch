@@ -217,38 +217,38 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
 - **12-factor.** Config via TOML. Log to stdout in simple structured format.
   Graceful shutdown on SIGTERM. Let systemd handle the background, logging,
   and privileges.
-- **Stateless rendering.** Every page render reads from the on-disk JSON
-  snapshots and rollups. Hot-reload the binary and the UI picks up immediately.
-- **Safe SQLite migration path.** JSON remains the source of truth by default,
-  but `hopwatch storage import` can copy snapshots into a SQLite sidecar and
-  verify count + SHA-256 parity before operators opt into dual-writing new
-  snapshots with `storage.sqlite_write = true`.
+- **SQLite source of truth.** Probe snapshots and rollups are stored in one
+  SQLite database. Page renders read live data directly from SQLite without an
+  HTML cache, so hot-reloaded binaries and new probe cycles are visible
+  immediately.
+- **Safe JSON-to-SQLite import.** `hopwatch storage import` copies existing JSON
+  snapshots and rollups into SQLite, then verifies count + SHA-256 parity before
+  operators remove the legacy JSON files.
 - **One binary.** `bun build --compile` produces a self-contained executable
   per platform. Linux needs `mtr` in `PATH`; that's it. `engine='native'` also
   requires a glibc Linux (the built-in prober `dlopen`s `libc.so.6` via
   `bun:ffi`) - on musl distros (Alpine) stay on the default `engine='mtr'`.
 
-### SQLite sidecar migration
+### SQLite storage migration
 
-SQLite is optional and deliberately starts as a sidecar. Existing JSON snapshot
-files are not deleted or replaced, and the dashboard read-path still uses the
-JSON files until a later migration step switches it over.
+SQLite is the runtime storage backend. Existing JSON snapshot files can be
+imported once, verified, backed up, and removed after the daemon is running from
+the database.
 
 ```bash
 # Import current JSON snapshots into data_dir/hopwatch.sqlite and verify parity.
 hopwatch storage import --config /etc/hopwatch/hopwatch.toml --strict-extra
 
-# Verify again later. Extra SQLite rows are tolerated by default because the
-# database may intentionally retain older snapshots after JSON retention prunes.
+# Verify again before deleting JSON files. Extra SQLite rows are tolerated by
+# default because the database may intentionally retain older snapshots after
+# JSON retention prunes.
 hopwatch storage verify --config /etc/hopwatch/hopwatch.toml
 ```
 
-To dual-write future probe cycles while retaining JSON as the rollback source:
+To place the database somewhere other than `<data_dir>/hopwatch.sqlite`:
 
 ```toml
 [storage]
-sqlite_write = true
-# Optional. Defaults to <data_dir>/hopwatch.sqlite.
 sqlite_path = "/var/lib/hopwatch/hopwatch.sqlite"
 ```
 
@@ -415,10 +415,10 @@ that's easier to drop onto a host. Pick whichever matches your situation.
   matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that,
   and probably never will - alerting belongs in the alerting system you
   already run.
-- **Decade-plus historical rollups on a small disk.** rrdtool's pre-sized
-  round-robin archives are hard to beat for long retention on tiny storage.
-  hopwatch keeps raw snapshots on disk (pruned at `keep_days`) plus
-  JSON hourly/daily rollups - correct and human-readable, but bulkier.
+- **Decade-plus historical rollups on a tiny disk.** rrdtool's pre-sized
+  round-robin archives are hard to beat for long retention on constrained
+  storage. hopwatch keeps recent raw snapshots plus hourly/daily rollups in
+  SQLite - easier to query and migrate, but not as compact as RRAs.
 - **The ecosystem.** Plugins, recipes, Stack Overflow answers, existing
   Puppet/Ansible modules - SmokePing has a 20-year head start.
 

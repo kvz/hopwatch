@@ -1,5 +1,3 @@
-import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
 // value is always a string and Bun.Transpiler handles the rest.
@@ -7,9 +5,10 @@ import relativeTimeSource from '../client/relative-time.ts' with { type: 'text' 
 // @ts-expect-error see note on relativeTimeSource - same import-attribute shape.
 import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
 import type { LoadedConfig } from './config.ts'
-import { type RenderedTarget, renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
+import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import { parseListenAddress } from './listen.ts'
 import type { Logger } from './logger.ts'
+import { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 // Lazily transpile the sortable-tables client to browser JS on first request.
 // Kept lazy so vitest (running under Node without globalThis.Bun) can import
@@ -36,132 +35,6 @@ function getRelativeTimeJs(): string {
   return relativeTimeJsCache
 }
 
-const CONTENT_TYPES: Record<string, string> = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.ico': 'image/x-icon',
-  '.js': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.txt': 'text/plain; charset=utf-8',
-}
-
-function contentTypeFor(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase()
-  return CONTENT_TYPES[ext] ?? 'application/octet-stream'
-}
-
-function safeResolve(root: string, urlPath: string): string | null {
-  // decodeURIComponent throws URIError on malformed percent-encoding (e.g.
-  // `/%E0%A4`). A probe or attacker hitting such a URL must not bubble up to
-  // the fetch handler and produce a generic 500 - return null so the caller
-  // can respond with a 4xx.
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(urlPath)
-  } catch {
-    return null
-  }
-
-  const trimmed = decoded.replace(/^\/+/, '')
-  const resolved = path.resolve(root, trimmed)
-  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-    return null
-  }
-
-  return resolved
-}
-
-// Shared symlink-escape guard for both entry points. safeResolve() only checks
-// the lexical path, but stat() and Bun.file() follow symlinks - so a symlink
-// under data_dir pointing at /etc/passwd would otherwise be happily used. We
-// realpath both the root and the resolved target and require the target stay
-// within the root's realpath. `allowRoot=false` additionally rejects the bare
-// root itself (target dashboards need a leaf). Returns the realpath of the
-// target, or null if blocked / missing / escaping.
-async function realpathContained(
-  root: string,
-  lexical: string,
-  allowRoot: boolean,
-): Promise<string | null> {
-  let realRoot: string
-  let realTarget: string
-  try {
-    realRoot = await realpath(root)
-    realTarget = await realpath(lexical)
-  } catch {
-    return null
-  }
-
-  if (realTarget === realRoot) return allowRoot ? realTarget : null
-  if (!realTarget.startsWith(`${realRoot}${path.sep}`)) return null
-
-  return realTarget
-}
-
-// Resolves a target-dashboard slug to its on-disk directory while guarding
-// against symlink escape. The daemon's target route previously only applied
-// the lexical `safeResolve()` check, so a symlink under data_dir pointing at
-// /var/log or /etc would render - the page code then enumerated and parsed
-// JSON files from outside the data tree.
-export async function resolveTargetDirPath(root: string, slug: string): Promise<string | null> {
-  const lexical = safeResolve(root, slug)
-  if (lexical == null) return null
-
-  try {
-    const info = await stat(lexical)
-    if (!info.isDirectory()) return null
-  } catch {
-    return null
-  }
-
-  return realpathContained(root, lexical, false)
-}
-
-// Resolves a URL path to a file on disk while guarding against symlink escape.
-export async function resolveServeFilePath(root: string, urlPath: string): Promise<string | null> {
-  const lexical = safeResolve(root, urlPath)
-  if (lexical == null) return null
-
-  let filePath = lexical
-  try {
-    const info = await stat(filePath)
-    if (info.isDirectory()) {
-      filePath = path.join(filePath, 'index.html')
-    }
-  } catch {
-    return null
-  }
-
-  return realpathContained(root, filePath, true)
-}
-
-async function serveFile(root: string, urlPath: string): Promise<Response> {
-  // Collapse "lexically outside root" (was 403) and "not resolvable under root"
-  // (404) into a single 404 response. The split let a caller probing
-  // `/../etc/passwd` distinguish "existed but denied" (403) from
-  // "didn't exist" (404) - a minor oracle that leaked whether a given path
-  // was even on disk outside the data dir. 404 for every failure mode
-  // removes the signal without changing any legitimate response.
-  const realFile = await resolveServeFilePath(root, urlPath)
-  if (realFile == null) {
-    return new Response('not found', { status: 404 })
-  }
-
-  const file = Bun.file(realFile)
-  if (!(await file.exists())) {
-    return new Response('not found', { status: 404 })
-  }
-
-  return new Response(file, {
-    headers: {
-      'cache-control': 'no-cache',
-      'content-type': contentTypeFor(realFile),
-    },
-  })
-}
-
 export interface SchedulerHandle {
   drain: () => Promise<void>
   runNow: () => Promise<void>
@@ -178,63 +51,6 @@ export interface SchedulerDependencies {
     // biome-ignore lint/suspicious/noConfusingVoidType: see note above.
   ) => Promise<{ failedTargetSlugs: string[]; failedRollupSlugs: string[] } | void>
   onCycleComplete?: () => void
-}
-
-interface RenderCacheEntry<T> {
-  generation: number
-  promise: Promise<T>
-}
-
-export interface RenderCache<T> {
-  clear: () => void
-  get: (key: string, render: () => Promise<T>) => Promise<T>
-  size: () => number
-}
-
-export function createRenderCache<T>(): RenderCache<T> {
-  const entries = new Map<string, RenderCacheEntry<T>>()
-  let generation = 0
-
-  return {
-    clear(): void {
-      generation += 1
-      entries.clear()
-    },
-    get(key: string, render: () => Promise<T>): Promise<T> {
-      const existing = entries.get(key)
-      if (existing != null) {
-        return existing.promise
-      }
-
-      const entryGeneration = generation
-      const promise = render().catch((err: unknown) => {
-        const current = entries.get(key)
-        if (current?.promise === promise) {
-          entries.delete(key)
-        }
-        throw err
-      })
-      entries.set(key, { generation: entryGeneration, promise })
-
-      promise.then(
-        () => {
-          const current = entries.get(key)
-          if (current?.promise !== promise) {
-            return
-          }
-          if (current.generation !== generation) {
-            entries.delete(key)
-          }
-        },
-        () => {},
-      )
-
-      return promise
-    },
-    size(): number {
-      return entries.size
-    },
-  }
 }
 
 export function startScheduler(
@@ -346,98 +162,9 @@ export function startScheduler(
 export async function startDaemon(config: LoadedConfig, logger: Logger): Promise<void> {
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const signature = config.chart.signature
-  const dataDir = config.resolvedDataDir
-  const rootRenderCache = createRenderCache<string>()
-  const targetRenderCache = createRenderCache<RenderedTarget>()
-  const lastGoodRootHtmlByHost = new Map<string, string>()
-  let rootWarmPromise: Promise<void> | null = null
-  let rootRenderGeneration = 0
-  const warmSelfHost =
-    config.server.public_url == null ? null : new URL(config.server.public_url).host
+  const store = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
 
-  function clearRenderCaches(): void {
-    rootRenderGeneration += 1
-    rootRenderCache.clear()
-    targetRenderCache.clear()
-  }
-
-  async function renderCachedRootIndex(selfHost: string | null): Promise<string> {
-    const cacheKey = selfHost ?? ''
-    const generation = rootRenderGeneration
-    return rootRenderCache.get(cacheKey, async () => {
-      const html = await renderRootIndex(
-        dataDir,
-        config.peer,
-        nodeLabel,
-        selfHost,
-        config.probe.keep_days,
-        Date.now(),
-        signature,
-      )
-
-      if (generation === rootRenderGeneration) {
-        lastGoodRootHtmlByHost.set(cacheKey, html)
-        await writeFile(path.join(dataDir, 'index.html'), html).catch(() => {})
-      }
-
-      return html
-    })
-  }
-
-  async function readStaleRootIndex(selfHost: string | null): Promise<string | null> {
-    const cacheKey = selfHost ?? ''
-    const memoryHtml = lastGoodRootHtmlByHost.get(cacheKey)
-    if (memoryHtml != null) {
-      return memoryHtml
-    }
-
-    try {
-      const diskHtml = await readFile(path.join(dataDir, 'index.html'), 'utf8')
-      lastGoodRootHtmlByHost.set(cacheKey, diskHtml)
-      return diskHtml
-    } catch {
-      return null
-    }
-  }
-
-  async function getRootIndexForRequest(selfHost: string | null): Promise<string> {
-    const staleHtml = await readStaleRootIndex(selfHost)
-    if (staleHtml != null) {
-      warmRootIndex('request')
-      return staleHtml
-    }
-
-    return renderCachedRootIndex(selfHost)
-  }
-
-  function warmRootIndex(reason: string): void {
-    if (rootWarmPromise != null) {
-      return
-    }
-
-    const started = Date.now()
-    rootWarmPromise = renderCachedRootIndex(warmSelfHost)
-      .then(() => {
-        logger.info('root render cache warmed', {
-          elapsedMs: Date.now() - started,
-          reason,
-        })
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : `Was thrown a non-error: ${err}`
-        logger.error('root render cache warm failed', { message, reason })
-      })
-      .finally(() => {
-        rootWarmPromise = null
-      })
-  }
-
-  const scheduler = startScheduler(config, logger, {
-    onCycleComplete: () => {
-      clearRenderCaches()
-      warmRootIndex('cycle')
-    },
-  })
+  const scheduler = startScheduler(config, logger)
 
   const server = Bun.serve({
     fetch: async (request): Promise<Response> => {
@@ -477,15 +204,57 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? null
 
       if (url.pathname === '/' || url.pathname === '/index.html') {
-        const html = await getRootIndexForRequest(selfHost)
+        const html = await renderRootIndex(
+          store,
+          config.peer,
+          nodeLabel,
+          selfHost,
+          config.probe.keep_days,
+          Date.now(),
+          signature,
+        )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
         })
       }
 
-      // Target dashboards live at `/<slug>/` or `/<slug>/index.html`. Everything else
-      // (snapshot JSONs, latest.json, favicon, nested assets) still falls through to
-      // the static file server below.
+      const jsonMatch = /^\/([^/]+)\/([^/]+\.json)$/.exec(url.pathname)
+      if (jsonMatch != null) {
+        let targetSlug: string
+        let fileName: string
+        try {
+          targetSlug = decodeURIComponent(jsonMatch[1])
+          fileName = decodeURIComponent(jsonMatch[2])
+        } catch {
+          return new Response('bad request', { status: 400 })
+        }
+
+        let json: string | null
+        if (fileName === 'latest.json') {
+          json = store.getLatestSnapshotJson(targetSlug)
+        } else if (fileName === 'hourly.rollup.json') {
+          const rollup = store.getRollupFile(targetSlug, 'hour')
+          json = rollup == null ? null : `${JSON.stringify(rollup, null, 2)}\n`
+        } else if (fileName === 'daily.rollup.json') {
+          const rollup = store.getRollupFile(targetSlug, 'day')
+          json = rollup == null ? null : `${JSON.stringify(rollup, null, 2)}\n`
+        } else {
+          json = store.getSnapshotJson(targetSlug, fileName)
+        }
+
+        if (json == null) {
+          return new Response('not found', { status: 404 })
+        }
+
+        return new Response(json, {
+          headers: {
+            'cache-control': 'no-cache',
+            'content-type': 'application/json; charset=utf-8',
+          },
+        })
+      }
+
+      // Target dashboards live at `/<slug>/` or `/<slug>/index.html`.
       const targetMatch = /^\/([^/]+)\/(?:(?:index\.html)?$)/.exec(url.pathname)
       if (targetMatch != null) {
         let targetSlug: string
@@ -494,35 +263,21 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         } catch {
           return new Response('bad request', { status: 400 })
         }
-        const targetDir = await resolveTargetDirPath(dataDir, targetSlug)
-        if (targetDir == null) {
-          return new Response('not found', { status: 404 })
-        }
-
-        const cacheKey = `${selfHost ?? ''}\0${targetSlug}`
-        const rendered = await targetRenderCache
-          .get(cacheKey, async () => {
-            const target = await renderTargetIndex(
-              targetDir,
-              config.peer,
-              nodeLabel,
-              selfHost,
-              targetSlug,
-              Date.now(),
-              signature,
-            )
-            if (target == null) {
-              throw new Error('target has no snapshots')
-            }
-            return target
-          })
-          .catch((err: unknown) => {
-            if (!(err instanceof Error)) {
-              throw new Error(`Was thrown a non-error: ${err}`)
-            }
-            logger.error('render target failed', { message: err.message, target: targetSlug })
-            return null
-          })
+        const rendered = await renderTargetIndex(
+          store,
+          config.peer,
+          nodeLabel,
+          selfHost,
+          targetSlug,
+          Date.now(),
+          signature,
+        ).catch((err: unknown) => {
+          if (!(err instanceof Error)) {
+            throw new Error(`Was thrown a non-error: ${err}`)
+          }
+          logger.error('render target failed', { message: err.message, target: targetSlug })
+          return null
+        })
         if (rendered == null) {
           return new Response('not found', { status: 404 })
         }
@@ -532,7 +287,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         })
       }
 
-      return serveFile(dataDir, url.pathname)
+      return new Response('not found', { status: 404 })
     },
     hostname: parseHostname(config.server.listen),
     // Bun.serve defaults idleTimeout to 10s; the root dashboard render
@@ -545,12 +300,11 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   })
 
   logger.info('http server ready', {
-    dataDir,
+    dbPath: config.resolvedSqlitePath,
     hostname: server.hostname,
     port: server.port,
   })
 
-  warmRootIndex('startup')
   void scheduler.runNow().catch((err: unknown) => {
     if (!(err instanceof Error)) {
       throw new Error(`Was thrown a non-error: ${err}`)
@@ -577,6 +331,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       new Promise<void>((resolve) => setTimeout(resolve, drainDeadlineMs).unref()),
     ])
     await server.stop()
+    store.close()
     process.exit(0)
   }
 

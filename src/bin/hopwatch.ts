@@ -98,7 +98,7 @@ class StorageImportCommand extends BaseCommand {
   static paths = [['storage', 'import']]
 
   static usage = Command.Usage({
-    description: 'Import existing JSON snapshots into the SQLite sidecar database.',
+    description: 'Import existing JSON snapshots and rollups into the SQLite database.',
   })
 
   db = Option.String('--db', {

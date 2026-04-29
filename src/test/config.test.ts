@@ -192,7 +192,7 @@ host = "example.com"
     expect(config.resolvedDataDir).toBe(dir)
   })
 
-  test('defaults sqlite storage to an opt-in sidecar under data_dir', async () => {
+  test('defaults sqlite storage to a database under data_dir', async () => {
     const configPath = await writeConfig(`
 [server]
 listen = ":0"
@@ -204,12 +204,11 @@ label = "t1"
 host = "example.com"
 `)
     const config = await loadConfig(configPath)
-    expect(config.storage.sqlite_write).toBe(false)
     expect(config.resolvedSqlitePath).toBe(path.join(dir, 'hopwatch.sqlite'))
-    expect(formatConfigSummary(config)).toContain('sqlite:    disabled')
+    expect(formatConfigSummary(config)).toContain(`sqlite:    ${path.join(dir, 'hopwatch.sqlite')}`)
   })
 
-  test('accepts explicit sqlite sidecar settings', async () => {
+  test('accepts an explicit sqlite path', async () => {
     const dbPath = path.join(dir, 'custom.sqlite')
     const configPath = await writeConfig(`
 [server]
@@ -218,7 +217,6 @@ data_dir = "${dir}"
 
 [storage]
 sqlite_path = "${dbPath}"
-sqlite_write = true
 
 [[target]]
 id = "t1"
@@ -226,7 +224,6 @@ label = "t1"
 host = "example.com"
 `)
     const config = await loadConfig(configPath)
-    expect(config.storage.sqlite_write).toBe(true)
     expect(config.resolvedSqlitePath).toBe(dbPath)
     expect(formatConfigSummary(config)).toContain(`sqlite:    ${dbPath}`)
   })

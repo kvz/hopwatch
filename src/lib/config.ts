@@ -121,7 +121,6 @@ export type ChartSettings = z.infer<typeof chartSchema>
 
 const storageSchema = z.object({
   sqlite_path: z.string().default(''),
-  sqlite_write: z.boolean().default(false),
 })
 export type StorageSettings = z.infer<typeof storageSchema>
 
@@ -139,12 +138,6 @@ export interface LoadedConfig extends HopwatchConfig {
   resolvedSqlitePath: string
   sourcePath: string
   resolvedDataDir: string
-}
-
-function parseBooleanEnv(value: string, name: string): boolean {
-  if (/^(1|true|yes|on)$/i.test(value)) return true
-  if (/^(0|false|no|off)$/i.test(value)) return false
-  throw new Error(`${name} must be a boolean-like value (true/false/1/0/yes/no/on/off)`)
 }
 
 function applyEnvOverrides(raw: unknown): unknown {
@@ -198,13 +191,6 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   if (env.HOPWATCH_SQLITE_PATH) {
     overrides.storage.sqlite_path = env.HOPWATCH_SQLITE_PATH
-  }
-
-  if (env.HOPWATCH_SQLITE_WRITE) {
-    overrides.storage.sqlite_write = parseBooleanEnv(
-      env.HOPWATCH_SQLITE_WRITE,
-      'HOPWATCH_SQLITE_WRITE',
-    )
   }
 
   if (typeof raw !== 'object' || raw === null) {
@@ -341,7 +327,7 @@ export function formatConfigSummary(config: LoadedConfig): string {
     `targets:   ${config.target.length}`,
     `peers:     ${config.peer.length}`,
     `cadence:   ${config.probe.interval_seconds}s, ${config.probe.packets} packets`,
-    `sqlite:    ${config.storage.sqlite_write ? config.resolvedSqlitePath : 'disabled'}`,
+    `sqlite:    ${config.resolvedSqlitePath}`,
   ]
   return lines.join('\n')
 }

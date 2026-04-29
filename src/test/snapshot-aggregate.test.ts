@@ -638,12 +638,12 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(getCrossTargetDiagnosis([onlyTcp]).shape.kind).toBe('downstream_from_hop')
   })
 
-  test('hopProtocolStats sidecar can supply a clean ICMP traversal that the lossy-only aggregate missed', () => {
+  test('hopProtocolStats supplement can supply a clean ICMP traversal that the lossy-only aggregate missed', () => {
     // The lossy-only CrossTargetHopIssue only sees a hop when lossPct > 0
     // (upstream summarizeHopIssues filters zeros out). In production, an
     // ICMP-clean + TCP-lossy hop therefore has icmpTargetCount=0 in the
     // aggregate - classifyCrossTargetShape would fall back to
-    // downstream_from_hop without the sidecar. Feeding the sidecar unblocks
+    // downstream_from_hop without the supplement. Feeding the supplement unblocks
     // the protocol_selective classification that is the whole point.
     const tcpOnlyIssue: CrossTargetHopIssue = {
       affectedDestinations: ['s3.us-west-2.amazonaws.com'],

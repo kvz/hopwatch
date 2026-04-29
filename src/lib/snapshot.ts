@@ -19,6 +19,10 @@ const nullableString = z
   .string()
   .nullish()
   .transform((value) => value ?? null)
+const nullableNumberArray = z
+  .array(z.number())
+  .nullish()
+  .transform((value) => value ?? null)
 
 const hopRecordSchema = z.object({
   asn: nullableString,
@@ -86,6 +90,35 @@ export interface SnapshotSummary {
   rawText: string
   target: string
   worstHopLossPct: number | null
+}
+
+const snapshotSummarySchema = z.object({
+  collectedAt: z.string(),
+  destinationAvgRttMs: nullableNumber,
+  destinationHopIndex: nullableNumber,
+  destinationLossPct: nullableNumber,
+  destinationRttMaxMs: nullableNumber,
+  destinationRttMinMs: nullableNumber,
+  destinationRttP50Ms: nullableNumber,
+  destinationRttP90Ms: nullableNumber,
+  destinationRttSamplesMs: nullableNumberArray,
+  diagnosis: snapshotDiagnosisSchema,
+  engine: z.enum(['mtr', 'native'] satisfies [ProbeEngine, ProbeEngine]),
+  fileName: z.string(),
+  hopCount: z.number(),
+  hops: z.array(hopRecordSchema),
+  host: z.string(),
+  netns: nullableString,
+  port: z.number().int().min(1).max(65535),
+  probeMode: z.enum(['default', 'netns'] satisfies [ProbeMode, ProbeMode]),
+  protocol: z.enum(['icmp', 'tcp'] satisfies [ProbeProtocol, ProbeProtocol]),
+  rawText: z.string(),
+  target: z.string(),
+  worstHopLossPct: nullableNumber,
+})
+
+export function parseSnapshotSummaryJson(contents: string): SnapshotSummary {
+  return snapshotSummarySchema.parse(JSON.parse(contents))
 }
 
 function parseNullableNumber(value: string | undefined): number | null {

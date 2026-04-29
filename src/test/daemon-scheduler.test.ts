@@ -1,14 +1,7 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import type { LoadedConfig } from '../lib/config.ts'
-import {
-  createRenderCache,
-  resolveServeFilePath,
-  resolveTargetDirPath,
-  startScheduler,
-} from '../lib/daemon.ts'
+import { startScheduler } from '../lib/daemon.ts'
 import { parseListenAddress } from '../lib/listen.ts'
 import { createLogger } from '../lib/logger.ts'
 
@@ -33,7 +26,6 @@ function buildConfig(overrides: { jitterSeconds?: number } = {}): LoadedConfig {
     sourcePath: '/tmp/config.toml',
     storage: {
       sqlite_path: '',
-      sqlite_write: false,
     },
     target: [],
   }
@@ -139,53 +131,6 @@ describe('startScheduler', () => {
   })
 })
 
-describe('createRenderCache', () => {
-  test('coalesces concurrent renders for the same key', async () => {
-    const cache = createRenderCache<string>()
-    let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const render = vi.fn(async () => {
-      await gate
-      return 'html'
-    })
-
-    const first = cache.get('root', render)
-    const second = cache.get('root', render)
-    release()
-
-    await expect(first).resolves.toBe('html')
-    await expect(second).resolves.toBe('html')
-    expect(render).toHaveBeenCalledTimes(1)
-  })
-
-  test('clear invalidates cached renders', async () => {
-    const cache = createRenderCache<string>()
-    const render = vi.fn(async () => `html-${render.mock.calls.length}`)
-
-    await expect(cache.get('root', render)).resolves.toBe('html-1')
-    await expect(cache.get('root', render)).resolves.toBe('html-1')
-    cache.clear()
-    await expect(cache.get('root', render)).resolves.toBe('html-2')
-
-    expect(render).toHaveBeenCalledTimes(2)
-  })
-
-  test('does not cache failed renders', async () => {
-    const cache = createRenderCache<string>()
-    const render = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce('html')
-
-    await expect(cache.get('root', render)).rejects.toThrow('boom')
-    await expect(cache.get('root', render)).resolves.toBe('html')
-
-    expect(render).toHaveBeenCalledTimes(2)
-  })
-})
-
 describe('parseListenAddress', () => {
   test('bind-all listen leaves hostname undefined', () => {
     expect(parseListenAddress(':8080')).toEqual({ hostname: undefined, port: 8080 })
@@ -225,110 +170,5 @@ describe('parseListenAddress', () => {
     expect(() => parseListenAddress('127.0.0.1:')).toThrow(/Invalid listen port/)
     expect(() => parseListenAddress(':')).toThrow(/Invalid listen port/)
     expect(() => parseListenAddress('[::1]:')).toThrow(/Invalid listen address|Invalid listen port/)
-  })
-})
-
-describe('resolveServeFilePath', () => {
-  let rootDir: string
-  let outsideDir: string
-
-  beforeEach(async () => {
-    rootDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-serve-root-'))
-    outsideDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-serve-outside-'))
-  })
-
-  afterEach(async () => {
-    await rm(rootDir, { recursive: true, force: true })
-    await rm(outsideDir, { recursive: true, force: true })
-  })
-
-  test('serves files inside the root via their realpath', async () => {
-    await mkdir(path.join(rootDir, 'sub'), { recursive: true })
-    await writeFile(path.join(rootDir, 'sub', 'ok.txt'), 'inside')
-
-    const resolved = await resolveServeFilePath(rootDir, '/sub/ok.txt')
-    expect(resolved).not.toBeNull()
-    expect(resolved).toMatch(/sub.*ok\.txt$/)
-  })
-
-  test('refuses to follow a symlink that escapes the root', async () => {
-    // Without the realpath check, safeResolve would allow the request
-    // (lexically the path stays under rootDir), and stat()/Bun.file() would
-    // transparently follow the symlink to /outside-dir/secret.txt and serve
-    // its contents. This is the exact vector the P2 finding called out.
-    await writeFile(path.join(outsideDir, 'secret.txt'), 'sensitive')
-    await symlink(path.join(outsideDir, 'secret.txt'), path.join(rootDir, 'escape.txt'))
-
-    const resolved = await resolveServeFilePath(rootDir, '/escape.txt')
-    expect(resolved).toBeNull()
-  })
-
-  test('allows a symlink that stays inside the root', async () => {
-    await mkdir(path.join(rootDir, 'real'), { recursive: true })
-    await writeFile(path.join(rootDir, 'real', 'ok.txt'), 'inside')
-    await symlink(path.join(rootDir, 'real', 'ok.txt'), path.join(rootDir, 'alias.txt'))
-
-    const resolved = await resolveServeFilePath(rootDir, '/alias.txt')
-    expect(resolved).not.toBeNull()
-  })
-
-  test('returns null for a missing path', async () => {
-    expect(await resolveServeFilePath(rootDir, '/nope.txt')).toBeNull()
-  })
-
-  test('returns null for a lexically-escaping path so serveFile answers 404 (not 403)', async () => {
-    // serveFile used to return 403 when safeResolve rejected lexically and 404
-    // when resolveServeFilePath rejected after realpath. That split let a
-    // prober distinguish "existed outside the root" from "did not exist",
-    // which is a small information leak. Both failure modes now collapse to
-    // 404 - resolveServeFilePath must therefore return null on the lexical
-    // escape just like it does on missing files.
-    expect(await resolveServeFilePath(rootDir, '/../etc/passwd')).toBeNull()
-  })
-
-  test('returns null for a malformed percent-encoding (decodeURIComponent throws)', async () => {
-    expect(await resolveServeFilePath(rootDir, '/%E0%A4')).toBeNull()
-  })
-})
-
-describe('resolveTargetDirPath', () => {
-  let rootDir: string
-  let outsideDir: string
-
-  beforeEach(async () => {
-    rootDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-target-root-'))
-    outsideDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-target-outside-'))
-  })
-
-  afterEach(async () => {
-    await rm(rootDir, { recursive: true, force: true })
-    await rm(outsideDir, { recursive: true, force: true })
-  })
-
-  test('resolves a normal target slug to its on-disk directory', async () => {
-    await mkdir(path.join(rootDir, 'cloudflare'), { recursive: true })
-    const resolved = await resolveTargetDirPath(rootDir, 'cloudflare')
-    expect(resolved).not.toBeNull()
-    expect(resolved).toMatch(/cloudflare$/)
-  })
-
-  test('refuses a slug whose on-disk directory is a symlink pointing outside the root', async () => {
-    // Before the fix, the target dashboard route only applied the lexical
-    // safeResolve check - it never took the realpath. An operator (or an
-    // attacker who can write into data_dir) could create a symlink pointing
-    // at /etc or /var/log, and rendering /<slug>/ would enumerate and parse
-    // JSON files from that external location.
-    await symlink(outsideDir, path.join(rootDir, 'escape'))
-    const resolved = await resolveTargetDirPath(rootDir, 'escape')
-    expect(resolved).toBeNull()
-  })
-
-  test('rejects a slug that traverses out of the root', async () => {
-    expect(await resolveTargetDirPath(rootDir, '..')).toBeNull()
-    expect(await resolveTargetDirPath(rootDir, '')).toBeNull()
-  })
-
-  test('returns null when the directory does not exist yet', async () => {
-    expect(await resolveTargetDirPath(rootDir, 'never-created')).toBeNull()
   })
 })

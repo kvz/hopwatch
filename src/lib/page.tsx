@@ -178,7 +178,7 @@ export async function renderRootIndex(
         // protocols without a config edit + rolling restart, so the
         // latest snapshot is representative of the window.
         protocol: entry.summary.protocol,
-        target: entry.summary.target,
+        target: entry.targetSlug,
       }
     }),
   )
@@ -191,14 +191,14 @@ export async function renderRootIndex(
     targetSummaries.map((entry) => ({
       protocol: entry.summary.protocol,
       snapshots: entry.lastWeekSnapshots,
-      target: entry.summary.target,
+      target: entry.targetSlug,
     })),
   )
   const rollupBucketsByTarget = targetSummaries.map((entry) => entry.hourlyBuckets)
   const perTargetSnapshots = targetSummaries.map((entry) => ({
     protocol: entry.summary.protocol,
     snapshots: entry.lastWeekSnapshots,
-    target: entry.summary.target,
+    target: entry.targetSlug,
   }))
   const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
     now,

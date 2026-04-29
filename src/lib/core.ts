@@ -15,23 +15,15 @@ export { renderChartSvg } from './chart-svg.ts'
 export {
   collectorOptionsFromConfig,
   collectSnapshot,
-  getLegacyTargetSlug,
-  getTargetSlug,
   getTimestamp,
   type MtrHistoryTarget,
   refreshRollups,
-  removeOldSnapshots,
   runCollector,
   targetFromConfig,
 } from './collector.ts'
 export type { ProbeMode } from './config.ts'
 export { escapeHtml, getPeerNavLinks } from './layout.ts'
-export {
-  listTargetSnapshots,
-  type RenderedTarget,
-  renderRootIndex,
-  renderTargetIndex,
-} from './page.tsx'
+export { type RenderedTarget, renderRootIndex, renderTargetIndex } from './page.tsx'
 export {
   diagnoseSnapshot,
   formatAbsoluteCollectedAt,
@@ -43,9 +35,7 @@ export {
   type HopRecord,
   parseCollectedAt,
   parseHopLine,
-  parseSnapshotSummary,
   parseStoredSnapshotSummary,
-  readSnapshotSummary,
   renderSnapshotRawText,
   type SnapshotDiagnosis,
   type SnapshotSummary,

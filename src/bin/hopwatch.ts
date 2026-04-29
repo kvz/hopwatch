@@ -5,6 +5,7 @@ import { formatConfigSummary, type LoadedConfig, loadConfig } from '../lib/confi
 import { refreshRollups, runCollector } from '../lib/core.ts'
 import { startDaemon } from '../lib/daemon.ts'
 import { createLogger, type Logger } from '../lib/logger.ts'
+import { HopwatchSqliteStore } from '../lib/sqlite-storage.ts'
 
 // Source the CLI version from package.json (bumped by Changesets on release)
 // so `hopwatch --version` cannot drift from the npm metadata.
@@ -89,6 +90,39 @@ class RollupCommand extends BaseCommand {
   }
 }
 
+class StorageVerifyCommand extends BaseCommand {
+  static paths = [['storage', 'verify']]
+
+  static usage = Command.Usage({
+    description: 'Verify SQLite integrity and relational consistency.',
+  })
+
+  db = Option.String('--db', {
+    description: 'SQLite path; defaults to storage.sqlite_path or data_dir/hopwatch.sqlite',
+  })
+
+  async execute(): Promise<number> {
+    const { config, logger } = await this.resolve()
+    const dbPath = this.db ?? config.resolvedSqlitePath
+    const store = await HopwatchSqliteStore.open(dbPath)
+    try {
+      const verify = store.verify()
+      logger.info('sqlite verification completed', {
+        dbPath,
+        legacyBlobColumns: verify.legacyBlobColumns,
+        orphanedRollupRows: verify.orphanedRollupRows,
+        orphanedSnapshotDetailRows: verify.orphanedSnapshotDetailRows,
+        sqliteIntegrity: verify.sqliteIntegrity,
+        sqliteSnapshotCount: verify.sqliteSnapshotCount,
+        targetCount: verify.targets.length,
+      })
+      return verify.ok ? 0 : 1
+    } finally {
+      store.close()
+    }
+  }
+}
+
 class ConfigCheckCommand extends BaseCommand {
   static paths = [['config-check']]
 
@@ -114,6 +148,7 @@ cli.register(Builtins.VersionCommand)
 cli.register(DaemonCommand)
 cli.register(ProbeOnceCommand)
 cli.register(RollupCommand)
+cli.register(StorageVerifyCommand)
 cli.register(ConfigCheckCommand)
 
 cli

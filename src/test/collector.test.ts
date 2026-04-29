@@ -1,54 +1,13 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { removeOldSnapshots, runCollector } from '../lib/collector.ts'
+import type { MtrHistoryTarget } from '../lib/collector.ts'
+import { runCollector } from '../lib/collector.ts'
 import type { LoadedConfig } from '../lib/config.ts'
 import { createLogger } from '../lib/logger.ts'
-import type { RawMtrEvent } from '../lib/raw.ts'
-
-describe('removeOldSnapshots', () => {
-  let dir: string
-
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'hopwatch-remove-'))
-  })
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true })
-  })
-
-  test('removes stale snapshot files beyond keep_days', async () => {
-    const stalePath = path.join(dir, '20240101T000000Z.json')
-    await writeFile(stalePath, '{}')
-    const staleTime = Date.now() - 40 * 24 * 60 * 60 * 1000
-    await utimes(stalePath, new Date(staleTime), new Date(staleTime))
-
-    await removeOldSnapshots(dir, 7)
-    const remaining = await readdir(dir)
-    expect(remaining).not.toContain('20240101T000000Z.json')
-  })
-
-  test('preserves rollup and alert-state files even when mtime is older than keep_days', async () => {
-    const names = [
-      'hourly.rollup.json',
-      'daily.rollup.json',
-      'alert-state.json',
-      '20240101T000000Z.json',
-    ]
-    const stalenessMs = Date.now() - 40 * 24 * 60 * 60 * 1000
-    for (const name of names) {
-      const p = path.join(dir, name)
-      await writeFile(p, '{}')
-      await utimes(p, new Date(stalenessMs), new Date(stalenessMs))
-    }
-
-    await removeOldSnapshots(dir, 7)
-
-    const remaining = (await readdir(dir)).sort()
-    expect(remaining).toEqual(['alert-state.json', 'daily.rollup.json', 'hourly.rollup.json'])
-  })
-})
+import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
+import type { HopwatchStorage, ImportSnapshotInput } from '../lib/sqlite-storage.ts'
 
 function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
   return {
@@ -66,12 +25,16 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
       packets: 20,
     },
     resolvedDataDir: dataDir,
+    resolvedSqlitePath: path.join(dataDir, 'hopwatch.sqlite'),
     server: {
       data_dir: dataDir,
       listen: ':8080',
       node_label: 'test-observer',
     },
     sourcePath: path.join(dataDir, 'config.toml'),
+    storage: {
+      sqlite_path: '',
+    },
     target: targetHosts.map((host) => ({
       engine: 'mtr',
       group: 'default',
@@ -86,6 +49,55 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
 }
 
 const MTR_OUTPUT = ['x 0 1', 'h 0 final.example', 'p 0 1000 1'].join('\n')
+
+class FakeHopwatchStore implements HopwatchStorage {
+  closedCount = 0
+  failRollupsFor = new Set<string>()
+  prunedTargetSlugs: string[] = []
+  rollupTargetSlugs: string[] = []
+  snapshots = new Map<string, StoredRawSnapshot>()
+
+  close(): void {
+    this.closedCount += 1
+  }
+
+  insertRawSnapshot(input: ImportSnapshotInput, rawSnapshot: StoredRawSnapshot): void {
+    const key = `${input.targetSlug}/${input.fileName}`
+    if (this.snapshots.has(key)) {
+      throw new Error(`snapshot collision at sqlite://${key}`)
+    }
+    this.snapshots.set(key, rawSnapshot)
+  }
+
+  pruneRawSnapshots(targetSlug: string): number {
+    this.prunedTargetSlugs.push(targetSlug)
+    return 0
+  }
+
+  snapshotFor(targetSlug: string): StoredRawSnapshot | undefined {
+    return [...this.snapshots.entries()].find(([key]) => key.startsWith(`${targetSlug}/`))?.[1]
+  }
+
+  updateRollupsForTarget(target: MtrHistoryTarget): void {
+    if (this.failRollupsFor.has(target.slug)) {
+      throw new Error('rollup boom')
+    }
+    if (this.snapshotFor(target.slug) == null) {
+      return
+    }
+    this.rollupTargetSlugs.push(target.slug)
+  }
+}
+
+function withStore(
+  store: HopwatchStorage,
+  deps: Parameters<typeof runCollector>[2] = {},
+): NonNullable<Parameters<typeof runCollector>[2]> {
+  return {
+    ...deps,
+    openStoreFn: async () => store,
+  }
+}
 
 describe('runCollector', () => {
   let dataDir: string
@@ -102,6 +114,7 @@ describe('runCollector', () => {
     const config = buildConfig(dataDir, ['bad.example', 'good.example'])
     const logger = createLogger({ level: 'error', pretty: false })
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const store = new FakeHopwatchStore()
 
     const runCommand = async (
       _file: string,
@@ -113,67 +126,80 @@ describe('runCollector', () => {
       return { stdout: MTR_OUTPUT, stderr: '' }
     }
 
-    const result = await runCollector(config, logger, { runCommand })
+    const result = await runCollector(config, logger, withStore(store, { runCommand }))
 
-    const goodDir = path.join(dataDir, 'good.example')
-    const goodEntries = await readdir(goodDir)
-    expect(goodEntries.some((name) => /^\d{8}T\d{6}Z\.json$/.test(name))).toBe(true)
-    expect(goodEntries).toContain('hourly.rollup.json')
-    expect(goodEntries).toContain('daily.rollup.json')
-
+    expect(store.snapshotFor('good.example')).toBeDefined()
+    expect(store.rollupTargetSlugs).toEqual(['good.example'])
     expect(errorSpy).toHaveBeenCalled()
     expect(result.failedTargetSlugs).toEqual(['bad.example'])
   })
 
-  test('one target with an unrollable snapshot does not abort rollups for other targets', async () => {
-    // Seeds target "bad.example" with a snapshot whose collectedAt passes the
-    // Zod schema but fails getCollectedAtDate's strict format check. Before the
-    // fix, the resulting throw inside aggregateSnapshotsToRollupBuckets
-    // propagated out of updateRollupsForTargets and turned the whole collector
-    // cycle into a failure, even though "good.example" had succeeded.
+  test('one target with a rollup failure does not abort rollups for other targets', async () => {
     const config = buildConfig(dataDir, ['bad.example', 'good.example'])
     const logger = createLogger({ level: 'error', pretty: false })
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
-
-    const badDir = path.join(dataDir, 'bad.example')
-    await mkdir(badDir, { recursive: true })
-    const malformedSnapshot = {
-      collectedAt: 'not-a-real-timestamp',
-      fileName: 'legacy.json',
-      host: 'bad.example',
-      label: 'bad.example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      rawEvents: [{ kind: 'host', hopIndex: 0, host: 'final.example' }],
-      schemaVersion: 2,
-      target: 'bad.example',
-    }
-    await writeFile(path.join(badDir, 'legacy.json'), JSON.stringify(malformedSnapshot))
+    const store = new FakeHopwatchStore()
+    store.failRollupsFor.add('bad.example')
 
     const runCommand = async (): Promise<{ stderr: string; stdout: string }> => ({
       stdout: MTR_OUTPUT,
       stderr: '',
     })
 
-    await expect(runCollector(config, logger, { runCommand })).resolves.toBeDefined()
+    const result = await runCollector(config, logger, withStore(store, { runCommand }))
 
-    const goodEntries = await readdir(path.join(dataDir, 'good.example'))
-    expect(goodEntries).toContain('hourly.rollup.json')
-    expect(goodEntries).toContain('daily.rollup.json')
-
+    expect(result.failedRollupSlugs).toEqual(['bad.example'])
+    expect(store.rollupTargetSlugs).toEqual(['good.example'])
     expect(errorSpy).toHaveBeenCalled()
   })
 
   test('returns an empty failedTargetSlugs list when every target succeeds', async () => {
     const config = buildConfig(dataDir, ['good.example'])
     const logger = createLogger({ level: 'error', pretty: false })
+    const store = new FakeHopwatchStore()
     const runCommand = async (): Promise<{ stderr: string; stdout: string }> => ({
       stdout: MTR_OUTPUT,
       stderr: '',
     })
 
-    const result = await runCollector(config, logger, { runCommand })
+    const result = await runCollector(config, logger, withStore(store, { runCommand }))
     expect(result.failedTargetSlugs).toEqual([])
+  })
+
+  test('fails before probing when SQLite cannot be opened', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    const logger = createLogger({ level: 'error', pretty: false })
+    const runCommand = vi.fn(
+      async (): Promise<{ stderr: string; stdout: string }> => ({
+        stdout: MTR_OUTPUT,
+        stderr: '',
+      }),
+    )
+
+    await expect(
+      runCollector(config, logger, {
+        openStoreFn: async () => {
+          throw new Error('sqlite open failed')
+        },
+        runCommand,
+      }),
+    ).rejects.toThrow('sqlite open failed')
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
+  test('closes the SQLite store after a successful cycle', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    const logger = createLogger({ level: 'error', pretty: false })
+    const store = new FakeHopwatchStore()
+
+    await runCollector(
+      config,
+      logger,
+      withStore(store, {
+        runCommand: async () => ({ stdout: MTR_OUTPUT, stderr: '' }),
+      }),
+    )
+    expect(store.closedCount).toBe(1)
   })
 
   test('passes --tcp -P <port> to mtr when the target uses protocol="tcp"', async () => {
@@ -181,6 +207,7 @@ describe('runCollector', () => {
     config.target[0].protocol = 'tcp'
     config.target[0].port = 8443
     const logger = createLogger({ level: 'error', pretty: false })
+    const store = new FakeHopwatchStore()
     let capturedArgs: string[] = []
     const runCommand = async (
       _file: string,
@@ -190,7 +217,7 @@ describe('runCollector', () => {
       return { stdout: MTR_OUTPUT, stderr: '' }
     }
 
-    await runCollector(config, logger, { runCommand })
+    await runCollector(config, logger, withStore(store, { runCommand }))
 
     expect(capturedArgs).toContain('--tcp')
     const portIndex = capturedArgs.indexOf('-P')
@@ -203,6 +230,7 @@ describe('runCollector', () => {
   test('omits --tcp and -P when the target uses the default protocol="icmp"', async () => {
     const config = buildConfig(dataDir, ['good.example'])
     const logger = createLogger({ level: 'error', pretty: false })
+    const store = new FakeHopwatchStore()
     let capturedArgs: string[] = []
     const runCommand = async (
       _file: string,
@@ -212,7 +240,7 @@ describe('runCollector', () => {
       return { stdout: MTR_OUTPUT, stderr: '' }
     }
 
-    await runCollector(config, logger, { runCommand })
+    await runCollector(config, logger, withStore(store, { runCommand }))
 
     expect(capturedArgs).not.toContain('--tcp')
     expect(capturedArgs).not.toContain('-P')
@@ -253,13 +281,13 @@ describe('runCollector', () => {
     config.target[0].host = '127.0.0.1'
     const logger = createLogger({ level: 'error', pretty: false })
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const store = new FakeHopwatchStore()
     const runNativeProbeFn = vi.fn(async () => [] as RawMtrEvent[])
 
-    const result = await runCollector(config, logger, { runNativeProbeFn })
+    const result = await runCollector(config, logger, withStore(store, { runNativeProbeFn }))
     expect(result.failedTargetSlugs).toEqual(['native.example'])
     expect(errorSpy).toHaveBeenCalled()
-    const entries = await readdir(path.join(dataDir, 'native.example')).catch(() => [])
-    expect(entries.some((name) => /^\d{8}T\d{6}Z.*\.json$/.test(name))).toBe(false)
+    expect(store.snapshotFor('native.example')).toBeUndefined()
   })
 
   test('surfaces same-second snapshot collisions instead of silently overwriting', async () => {
@@ -274,6 +302,7 @@ describe('runCollector', () => {
     config.target[0].host = '127.0.0.1'
     const logger = createLogger({ level: 'error', pretty: false })
     vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const store = new FakeHopwatchStore()
 
     const fixedNow = new Date('2026-04-21T09:45:00Z')
     const runNativeProbeFn = vi.fn(async () => [
@@ -283,27 +312,25 @@ describe('runCollector', () => {
     ])
 
     // First probe "wins" and writes the snapshot.
-    await runCollector(config, logger, { getNow: () => fixedNow, runNativeProbeFn })
-    const firstSnapshot = (await readdir(path.join(dataDir, 'native.example')))
-      .filter((name) => /^20260421T094500Z.*\.json$/.test(name))
-      .sort()[0]
-    expect(firstSnapshot).toBeDefined()
-    const originalContents = await readFile(
-      path.join(dataDir, 'native.example', firstSnapshot),
-      'utf8',
+    await runCollector(
+      config,
+      logger,
+      withStore(store, { getNow: () => fixedNow, runNativeProbeFn }),
     )
+    const originalSnapshot = store.snapshotFor('native.example')
+    expect(originalSnapshot).toBeDefined()
 
     // Second probe in the same second must not silently overwrite.
-    const result = await runCollector(config, logger, {
-      getNow: () => fixedNow,
-      runNativeProbeFn,
-    })
-    expect(result.failedTargetSlugs).toEqual(['native.example'])
-    const preservedContents = await readFile(
-      path.join(dataDir, 'native.example', firstSnapshot),
-      'utf8',
+    const result = await runCollector(
+      config,
+      logger,
+      withStore(store, {
+        getNow: () => fixedNow,
+        runNativeProbeFn,
+      }),
     )
-    expect(preservedContents).toBe(originalContents)
+    expect(result.failedTargetSlugs).toEqual(['native.example'])
+    expect(store.snapshotFor('native.example')).toBe(originalSnapshot)
   })
 
   test('engine="native" skips runCommand and writes the injected RawMtrEvent stream', async () => {
@@ -311,6 +338,7 @@ describe('runCollector', () => {
     config.target[0].engine = 'native'
     config.target[0].host = '127.0.0.1' // bypass DNS resolution in the collector
     const logger = createLogger({ level: 'error', pretty: false })
+    const store = new FakeHopwatchStore()
 
     const nativeEvents: RawMtrEvent[] = [
       { kind: 'sent', hopIndex: 0, probeId: 1 },
@@ -323,7 +351,11 @@ describe('runCollector', () => {
       throw new Error('mtr path must not be called for engine=native')
     })
 
-    const result = await runCollector(config, logger, { runCommand, runNativeProbeFn })
+    const result = await runCollector(
+      config,
+      logger,
+      withStore(store, { runCommand, runNativeProbeFn }),
+    )
 
     expect(result.failedTargetSlugs).toEqual([])
     expect(runCommand).not.toHaveBeenCalled()
@@ -331,14 +363,6 @@ describe('runCollector', () => {
       expect.objectContaining({ hostIp: '127.0.0.1', packets: 20, maxHops: 30 }),
     )
 
-    const entries = await readdir(path.join(dataDir, 'native.example'))
-    const snapshotFile = entries.find((name) => /^\d{8}T\d{6}Z\.json$/.test(name))
-    expect(snapshotFile).toBeDefined()
-    if (snapshotFile == null) throw new Error('no snapshot file found')
-
-    const contents = JSON.parse(
-      await readFile(path.join(dataDir, 'native.example', snapshotFile), 'utf8'),
-    )
-    expect(contents.rawEvents).toEqual(nativeEvents)
+    expect(store.snapshotFor('native.example')?.rawEvents).toEqual(nativeEvents)
   })
 })

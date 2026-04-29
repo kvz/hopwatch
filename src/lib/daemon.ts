@@ -1,5 +1,3 @@
-import { realpath, stat } from 'node:fs/promises'
-import path from 'node:path'
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
 // value is always a string and Bun.Transpiler handles the rest.
@@ -10,6 +8,7 @@ import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import { parseListenAddress } from './listen.ts'
 import type { Logger } from './logger.ts'
+import { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 // Lazily transpile the sortable-tables client to browser JS on first request.
 // Kept lazy so vitest (running under Node without globalThis.Bun) can import
@@ -36,132 +35,6 @@ function getRelativeTimeJs(): string {
   return relativeTimeJsCache
 }
 
-const CONTENT_TYPES: Record<string, string> = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.ico': 'image/x-icon',
-  '.js': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.txt': 'text/plain; charset=utf-8',
-}
-
-function contentTypeFor(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase()
-  return CONTENT_TYPES[ext] ?? 'application/octet-stream'
-}
-
-function safeResolve(root: string, urlPath: string): string | null {
-  // decodeURIComponent throws URIError on malformed percent-encoding (e.g.
-  // `/%E0%A4`). A probe or attacker hitting such a URL must not bubble up to
-  // the fetch handler and produce a generic 500 - return null so the caller
-  // can respond with a 4xx.
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(urlPath)
-  } catch {
-    return null
-  }
-
-  const trimmed = decoded.replace(/^\/+/, '')
-  const resolved = path.resolve(root, trimmed)
-  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-    return null
-  }
-
-  return resolved
-}
-
-// Shared symlink-escape guard for both entry points. safeResolve() only checks
-// the lexical path, but stat() and Bun.file() follow symlinks - so a symlink
-// under data_dir pointing at /etc/passwd would otherwise be happily used. We
-// realpath both the root and the resolved target and require the target stay
-// within the root's realpath. `allowRoot=false` additionally rejects the bare
-// root itself (target dashboards need a leaf). Returns the realpath of the
-// target, or null if blocked / missing / escaping.
-async function realpathContained(
-  root: string,
-  lexical: string,
-  allowRoot: boolean,
-): Promise<string | null> {
-  let realRoot: string
-  let realTarget: string
-  try {
-    realRoot = await realpath(root)
-    realTarget = await realpath(lexical)
-  } catch {
-    return null
-  }
-
-  if (realTarget === realRoot) return allowRoot ? realTarget : null
-  if (!realTarget.startsWith(`${realRoot}${path.sep}`)) return null
-
-  return realTarget
-}
-
-// Resolves a target-dashboard slug to its on-disk directory while guarding
-// against symlink escape. The daemon's target route previously only applied
-// the lexical `safeResolve()` check, so a symlink under data_dir pointing at
-// /var/log or /etc would render - the page code then enumerated and parsed
-// JSON files from outside the data tree.
-export async function resolveTargetDirPath(root: string, slug: string): Promise<string | null> {
-  const lexical = safeResolve(root, slug)
-  if (lexical == null) return null
-
-  try {
-    const info = await stat(lexical)
-    if (!info.isDirectory()) return null
-  } catch {
-    return null
-  }
-
-  return realpathContained(root, lexical, false)
-}
-
-// Resolves a URL path to a file on disk while guarding against symlink escape.
-export async function resolveServeFilePath(root: string, urlPath: string): Promise<string | null> {
-  const lexical = safeResolve(root, urlPath)
-  if (lexical == null) return null
-
-  let filePath = lexical
-  try {
-    const info = await stat(filePath)
-    if (info.isDirectory()) {
-      filePath = path.join(filePath, 'index.html')
-    }
-  } catch {
-    return null
-  }
-
-  return realpathContained(root, filePath, true)
-}
-
-async function serveFile(root: string, urlPath: string): Promise<Response> {
-  // Collapse "lexically outside root" (was 403) and "not resolvable under root"
-  // (404) into a single 404 response. The split let a caller probing
-  // `/../etc/passwd` distinguish "existed but denied" (403) from
-  // "didn't exist" (404) - a minor oracle that leaked whether a given path
-  // was even on disk outside the data dir. 404 for every failure mode
-  // removes the signal without changing any legitimate response.
-  const realFile = await resolveServeFilePath(root, urlPath)
-  if (realFile == null) {
-    return new Response('not found', { status: 404 })
-  }
-
-  const file = Bun.file(realFile)
-  if (!(await file.exists())) {
-    return new Response('not found', { status: 404 })
-  }
-
-  return new Response(file, {
-    headers: {
-      'cache-control': 'no-cache',
-      'content-type': contentTypeFor(realFile),
-    },
-  })
-}
-
 export interface SchedulerHandle {
   drain: () => Promise<void>
   runNow: () => Promise<void>
@@ -177,6 +50,7 @@ export interface SchedulerDependencies {
     logger: Logger,
     // biome-ignore lint/suspicious/noConfusingVoidType: see note above.
   ) => Promise<{ failedTargetSlugs: string[]; failedRollupSlugs: string[] } | void>
+  onCycleComplete?: () => void
 }
 
 export function startScheduler(
@@ -237,6 +111,8 @@ export function startScheduler(
         }
 
         logger.error('cycle failed', { message: err.message, stack: err.stack })
+      } finally {
+        deps.onCycleComplete?.()
       }
     })()
     activeRun = run
@@ -284,11 +160,11 @@ export function startScheduler(
 }
 
 export async function startDaemon(config: LoadedConfig, logger: Logger): Promise<void> {
-  const scheduler = startScheduler(config, logger)
-
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const signature = config.chart.signature
-  const dataDir = config.resolvedDataDir
+  const store = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
+
+  const scheduler = startScheduler(config, logger)
 
   const server = Bun.serve({
     fetch: async (request): Promise<Response> => {
@@ -329,7 +205,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
 
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const html = await renderRootIndex(
-          dataDir,
+          store,
           config.peer,
           nodeLabel,
           selfHost,
@@ -342,9 +218,43 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         })
       }
 
-      // Target dashboards live at `/<slug>/` or `/<slug>/index.html`. Everything else
-      // (snapshot JSONs, latest.json, favicon, nested assets) still falls through to
-      // the static file server below.
+      const jsonMatch = /^\/([^/]+)\/([^/]+\.json)$/.exec(url.pathname)
+      if (jsonMatch != null) {
+        let targetSlug: string
+        let fileName: string
+        try {
+          targetSlug = decodeURIComponent(jsonMatch[1])
+          fileName = decodeURIComponent(jsonMatch[2])
+        } catch {
+          return new Response('bad request', { status: 400 })
+        }
+
+        let json: string | null
+        if (fileName === 'latest.json') {
+          json = store.getLatestSnapshotJson(targetSlug)
+        } else if (fileName === 'hourly.rollup.json') {
+          const rollup = store.getRollupFile(targetSlug, 'hour')
+          json = rollup == null ? null : `${JSON.stringify(rollup, null, 2)}\n`
+        } else if (fileName === 'daily.rollup.json') {
+          const rollup = store.getRollupFile(targetSlug, 'day')
+          json = rollup == null ? null : `${JSON.stringify(rollup, null, 2)}\n`
+        } else {
+          json = store.getSnapshotJson(targetSlug, fileName)
+        }
+
+        if (json == null) {
+          return new Response('not found', { status: 404 })
+        }
+
+        return new Response(json, {
+          headers: {
+            'cache-control': 'no-cache',
+            'content-type': 'application/json; charset=utf-8',
+          },
+        })
+      }
+
+      // Target dashboards live at `/<slug>/` or `/<slug>/index.html`.
       const targetMatch = /^\/([^/]+)\/(?:(?:index\.html)?$)/.exec(url.pathname)
       if (targetMatch != null) {
         let targetSlug: string
@@ -353,13 +263,8 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         } catch {
           return new Response('bad request', { status: 400 })
         }
-        const targetDir = await resolveTargetDirPath(dataDir, targetSlug)
-        if (targetDir == null) {
-          return new Response('not found', { status: 404 })
-        }
-
         const rendered = await renderTargetIndex(
-          targetDir,
+          store,
           config.peer,
           nodeLabel,
           selfHost,
@@ -382,14 +287,20 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         })
       }
 
-      return serveFile(dataDir, url.pathname)
+      return new Response('not found', { status: 404 })
     },
     hostname: parseHostname(config.server.listen),
+    // Bun.serve defaults idleTimeout to 10s; the root dashboard render
+    // walks all targets and easily exceeds that on production observers
+    // (27 targets × 14 days of snapshots), so the connection was getting
+    // closed without a response and haproxy turned that into a 502. Bump
+    // it well above measured render time. Bun caps idleTimeout at 255s.
+    idleTimeout: 240,
     port: parsePort(config.server.listen),
   })
 
   logger.info('http server ready', {
-    dataDir,
+    dbPath: config.resolvedSqlitePath,
     hostname: server.hostname,
     port: server.port,
   })
@@ -420,6 +331,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       new Promise<void>((resolve) => setTimeout(resolve, drainDeadlineMs).unref()),
     ])
     await server.stop()
+    store.close()
     process.exit(0)
   }
 

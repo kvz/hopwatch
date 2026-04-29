@@ -1,7 +1,7 @@
-import path from 'node:path'
 import { quantile } from './raw.ts'
-import { type MtrRollupBucket, readRollupFile } from './rollups.ts'
+import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
+import type { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 export interface ChartPoint {
   destinationLossPct: number | null
@@ -124,12 +124,13 @@ export function buildThumbnailChartDefinition(
 }
 
 export async function loadChartDefinitions(
-  targetDir: string,
+  store: HopwatchSqliteStore,
+  targetSlug: string,
   snapshots: SnapshotSummary[],
   now: number,
 ): Promise<ChartDefinition[]> {
-  const hourlyRollup = await readRollupFile(path.join(targetDir, 'hourly.rollup.json'), 'hour')
-  const dailyRollup = await readRollupFile(path.join(targetDir, 'daily.rollup.json'), 'day')
+  const hourlyRollup = store.getRollupFile(targetSlug, 'hour')
+  const dailyRollup = store.getRollupFile(targetSlug, 'day')
 
   return [
     {

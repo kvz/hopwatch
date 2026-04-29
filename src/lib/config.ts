@@ -119,26 +119,34 @@ const chartSchema = z.object({
 })
 export type ChartSettings = z.infer<typeof chartSchema>
 
+const storageSchema = z.object({
+  sqlite_path: z.string().default(''),
+})
+export type StorageSettings = z.infer<typeof storageSchema>
+
 const configSchema = z.object({
   server: serverSchema.default({}),
   probe: probeSchema.default({}),
   chart: chartSchema.default({}),
+  storage: storageSchema.default({}),
   target: z.array(targetSchema).default([]),
   peer: z.array(peerSchema).default([]),
 })
 export type HopwatchConfig = z.infer<typeof configSchema>
 
 export interface LoadedConfig extends HopwatchConfig {
+  resolvedSqlitePath: string
   sourcePath: string
   resolvedDataDir: string
 }
 
 function applyEnvOverrides(raw: unknown): unknown {
   const env = process.env
-  const overrides: Record<string, Record<string, string | number>> = {
+  const overrides: Record<string, Record<string, boolean | number | string>> = {
     server: {},
     probe: {},
     chart: {},
+    storage: {},
   }
 
   if (env.HOPWATCH_LISTEN) {
@@ -181,13 +189,17 @@ function applyEnvOverrides(raw: unknown): unknown {
     overrides.chart = { signature: env.HOPWATCH_CHART_SIGNATURE }
   }
 
+  if (env.HOPWATCH_SQLITE_PATH) {
+    overrides.storage.sqlite_path = env.HOPWATCH_SQLITE_PATH
+  }
+
   if (typeof raw !== 'object' || raw === null) {
     return { ...overrides }
   }
 
   const rawRecord = raw as Record<string, unknown>
   const merged: Record<string, unknown> = { ...rawRecord }
-  for (const section of ['server', 'probe', 'chart'] as const) {
+  for (const section of ['server', 'probe', 'chart', 'storage'] as const) {
     const current = (rawRecord[section] as Record<string, unknown> | undefined) ?? {}
     const layer = overrides[section]
     if (Object.keys(layer).length > 0) {
@@ -296,8 +308,15 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
   const resolvedDataDir = path.isAbsolute(config.server.data_dir)
     ? path.resolve(config.server.data_dir)
     : path.resolve(path.dirname(absolute), config.server.data_dir)
+  const sqlitePath =
+    config.storage.sqlite_path.trim() === ''
+      ? path.join(resolvedDataDir, 'hopwatch.sqlite')
+      : config.storage.sqlite_path
+  const resolvedSqlitePath = path.isAbsolute(sqlitePath)
+    ? path.resolve(sqlitePath)
+    : path.resolve(path.dirname(absolute), sqlitePath)
 
-  return { ...config, sourcePath: absolute, resolvedDataDir }
+  return { ...config, sourcePath: absolute, resolvedDataDir, resolvedSqlitePath }
 }
 
 export function formatConfigSummary(config: LoadedConfig): string {
@@ -308,6 +327,7 @@ export function formatConfigSummary(config: LoadedConfig): string {
     `targets:   ${config.target.length}`,
     `peers:     ${config.peer.length}`,
     `cadence:   ${config.probe.interval_seconds}s, ${config.probe.packets} packets`,
+    `sqlite:    ${config.resolvedSqlitePath}`,
   ]
   return lines.join('\n')
 }

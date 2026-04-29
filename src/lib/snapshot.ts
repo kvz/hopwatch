@@ -1,5 +1,3 @@
-import { readdir, readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { z } from 'zod'
 import type { ProbeEngine, ProbeMode, ProbeProtocol } from './config.ts'
 import {
@@ -44,20 +42,6 @@ const snapshotDiagnosisSchema = z.object({
 })
 
 export type SnapshotDiagnosis = z.infer<typeof snapshotDiagnosisSchema>
-
-const legacyStoredSnapshotSummarySchema = z.object({
-  collectedAt: z.string(),
-  destinationLossPct: nullableNumber,
-  diagnosis: snapshotDiagnosisSchema,
-  fileName: z.string(),
-  host: z.string(),
-  hopCount: z.number(),
-  hops: z.array(hopRecordSchema),
-  probeMode: z.enum(['default', 'netns'] as const satisfies readonly ProbeMode[]),
-  rawText: z.string(),
-  target: z.string(),
-  worstHopLossPct: nullableNumber,
-})
 
 export interface SnapshotSummary {
   collectedAt: string
@@ -152,103 +136,67 @@ export function renderSnapshotRawText(
   ].join('\n')
 }
 
-export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
-  const parsed = JSON.parse(contents) as unknown
-  if (
-    typeof parsed === 'object' &&
-    parsed != null &&
-    'schemaVersion' in parsed &&
-    parsed.schemaVersion === 2
-  ) {
-    const rawSnapshot = parseStoredRawSnapshot(contents)
-    const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
-    const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
-    const destinationHop =
-      destinationHopIndex == null
-        ? null
-        : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
-    const destinationAvgRttMs = destinationHop?.avgMs ?? null
-    // Blackholed traces (`sent` events but no `reply`/`host` events at all)
-    // have destinationHopIndex == null. Treat them as 100% destination loss
-    // instead of "unknown" - otherwise full outages vanish from the 3h/30h
-    // charts and the weekly status logic records them as "no destination
-    // loss observed". Preserve null for the genuinely-empty case (probe
-    // tool errored and we have zero events to work with).
-    let destinationLossPct = destinationHop?.lossPct ?? null
-    if (destinationLossPct == null && hasAnySentEvent(rawSnapshot.rawEvents)) {
-      destinationLossPct = 100
-    }
-    const destinationHopIndex1Based = destinationHop?.index ?? null
-    const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
-    const destinationRttSamplesMs = summarizeDestinationSamples(
-      rawSnapshot.rawEvents,
-      destinationHopIndex,
-    ).rttSamplesMs.sort((left, right) => left - right)
-    const destinationRttMinMs =
-      destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
-    const destinationRttMaxMs =
-      destinationRttSamplesMs.length === 0
-        ? null
-        : destinationRttSamplesMs[destinationRttSamplesMs.length - 1]
-    const destinationRttP50Ms = quantile(destinationRttSamplesMs, 0.5)
-    const destinationRttP90Ms = quantile(destinationRttSamplesMs, 0.9)
-
-    return {
-      collectedAt: rawSnapshot.collectedAt,
-      destinationAvgRttMs,
-      destinationHopIndex: destinationHopIndex1Based,
-      destinationLossPct,
-      destinationRttMaxMs,
-      destinationRttMinMs,
-      destinationRttP50Ms,
-      destinationRttP90Ms,
-      destinationRttSamplesMs:
-        destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
-      diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based),
-      fileName: rawSnapshot.fileName,
-      host: rawSnapshot.host,
-      hopCount: hops.length,
-      hops,
-      engine: rawSnapshot.engine,
-      netns: rawSnapshot.netns,
-      port: rawSnapshot.port,
-      probeMode: rawSnapshot.probeMode,
-      protocol: rawSnapshot.protocol,
-      rawText: renderSnapshotRawText(rawSnapshot, hops),
-      target: rawSnapshot.label,
-      worstHopLossPct,
-    }
+export function summarizeStoredRawSnapshot(rawSnapshot: StoredRawSnapshot): SnapshotSummary {
+  const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
+  const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
+  const destinationHop =
+    destinationHopIndex == null
+      ? null
+      : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
+  const destinationAvgRttMs = destinationHop?.avgMs ?? null
+  // Blackholed traces (`sent` events but no `reply`/`host` events at all)
+  // have destinationHopIndex == null. Treat them as 100% destination loss
+  // instead of "unknown" - otherwise full outages vanish from the 3h/30h
+  // charts and the weekly status logic records them as "no destination
+  // loss observed". Preserve null for the genuinely-empty case (probe
+  // tool errored and we have zero events to work with).
+  let destinationLossPct = destinationHop?.lossPct ?? null
+  if (destinationLossPct == null && hasAnySentEvent(rawSnapshot.rawEvents)) {
+    destinationLossPct = 100
   }
-
-  const legacy = legacyStoredSnapshotSummarySchema.parse(parsed)
-  const destinationHop = legacy.hops.at(-1) ?? null
+  const destinationHopIndex1Based = destinationHop?.index ?? null
+  const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
+  const destinationRttSamplesMs = summarizeDestinationSamples(
+    rawSnapshot.rawEvents,
+    destinationHopIndex,
+  ).rttSamplesMs.sort((left, right) => left - right)
+  const destinationRttMinMs =
+    destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
+  const destinationRttMaxMs =
+    destinationRttSamplesMs.length === 0
+      ? null
+      : destinationRttSamplesMs[destinationRttSamplesMs.length - 1]
+  const destinationRttP50Ms = quantile(destinationRttSamplesMs, 0.5)
+  const destinationRttP90Ms = quantile(destinationRttSamplesMs, 0.9)
 
   return {
-    collectedAt: legacy.collectedAt,
-    destinationAvgRttMs: destinationHop?.avgMs ?? null,
-    destinationHopIndex: destinationHop?.index ?? null,
-    destinationLossPct: legacy.destinationLossPct,
-    destinationRttMaxMs: destinationHop?.worstMs ?? null,
-    destinationRttMinMs: destinationHop?.bestMs ?? null,
-    destinationRttP50Ms: null,
-    destinationRttP90Ms: null,
-    destinationRttSamplesMs: null,
-    diagnosis: legacy.diagnosis,
-    fileName: legacy.fileName,
-    host: legacy.host,
-    hopCount: legacy.hopCount,
-    hops: legacy.hops,
-    engine: 'mtr' as const,
-    netns: null,
-    port: 443,
-    probeMode: legacy.probeMode,
-    // No stored protocol on legacy snapshots - they predate protocol-aware
-    // probing, so they were definitionally ICMP.
-    protocol: 'icmp' as const,
-    rawText: legacy.rawText,
-    target: legacy.target,
-    worstHopLossPct: legacy.worstHopLossPct,
+    collectedAt: rawSnapshot.collectedAt,
+    destinationAvgRttMs,
+    destinationHopIndex: destinationHopIndex1Based,
+    destinationLossPct,
+    destinationRttMaxMs,
+    destinationRttMinMs,
+    destinationRttP50Ms,
+    destinationRttP90Ms,
+    destinationRttSamplesMs: destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
+    diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based),
+    engine: rawSnapshot.engine,
+    fileName: rawSnapshot.fileName,
+    hopCount: hops.length,
+    hops,
+    host: rawSnapshot.host,
+    netns: rawSnapshot.netns,
+    port: rawSnapshot.port,
+    probeMode: rawSnapshot.probeMode,
+    protocol: rawSnapshot.protocol,
+    rawText: renderSnapshotRawText(rawSnapshot, hops),
+    target: rawSnapshot.label,
+    worstHopLossPct,
   }
+}
+
+export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
+  return summarizeStoredRawSnapshot(parseStoredRawSnapshot(contents))
 }
 
 function hasAnySentEvent(rawEvents: readonly { kind: string }[]): boolean {
@@ -374,82 +322,6 @@ export function diagnoseSnapshot(
     suspectHopHost: null,
     suspectHopIndex: null,
   }
-}
-
-export function parseSnapshotSummary(fileName: string, rawText: string): SnapshotSummary {
-  const targetMatch = rawText.match(/^# target=(.+)$/m)
-  const hostMatch = rawText.match(/^# host=(.+)$/m)
-  const labelMatch = rawText.match(/^# label=(.+)$/m)
-  const probeModeMatch = rawText.match(/^# probe_mode=(.+)$/m)
-  const collectedAtMatch = rawText.match(/^# collected_at=(.+)$/m)
-  const hops = rawText.split('\n').flatMap((line) => {
-    const hop = parseHopLine(line)
-    if (!hop) {
-      return []
-    }
-
-    return [hop]
-  })
-  const destinationHop = hops.at(-1) ?? null
-  const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
-  const destinationLossPct = destinationHop?.lossPct ?? null
-
-  return {
-    collectedAt: collectedAtMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
-    destinationAvgRttMs: destinationHop?.avgMs ?? null,
-    destinationHopIndex: destinationHop?.index ?? null,
-    destinationLossPct,
-    destinationRttMaxMs: destinationHop?.worstMs ?? null,
-    destinationRttMinMs: destinationHop?.bestMs ?? null,
-    destinationRttP50Ms: null,
-    destinationRttP90Ms: null,
-    destinationRttSamplesMs: null,
-    diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHop?.index ?? null),
-    fileName,
-    host: hostMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
-    hopCount: hops.length,
-    hops,
-    engine: 'mtr' as const,
-    netns: null,
-    port: 443,
-    probeMode: probeModeMatch?.[1] === 'netns' ? 'netns' : 'default',
-    // Legacy .txt snapshots predate protocol-aware probing; treat as ICMP.
-    protocol: 'icmp' as const,
-    rawText,
-    target: labelMatch?.[1] ?? targetMatch?.[1] ?? fileName.replace(/\.txt$/, ''),
-    worstHopLossPct,
-  }
-}
-
-export const RESERVED_TARGET_FILES: ReadonlySet<string> = new Set([
-  'latest.json',
-  'hourly.rollup.json',
-  'daily.rollup.json',
-  'alert-state.json',
-])
-
-export async function listSnapshotFileNames(targetDir: string): Promise<string[]> {
-  const entries = await readdir(targetDir, { withFileTypes: true })
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-    .map((entry) => entry.name)
-    .filter((name) => !RESERVED_TARGET_FILES.has(name))
-    .sort()
-}
-
-export async function readSnapshotSummary(
-  targetDir: string,
-  fileName: string,
-): Promise<SnapshotSummary> {
-  // Only .json snapshots land here (listSnapshotFileNames filters for that
-  // extension). Any parse failure therefore signals corruption or schema
-  // drift, not a legacy raw-text snapshot - let the error propagate so the
-  // caller can log + skip + quarantine. Swallowing it and re-parsing the
-  // same file as legacy text would hide on-disk data loss by producing a
-  // synthetic "unknown" snapshot that pollutes the dashboard.
-  const jsonFile = path.join(targetDir, fileName)
-  const jsonContents = await readFile(jsonFile, 'utf8')
-  return parseStoredSnapshotSummary(jsonContents)
 }
 
 export function formatLoss(lossPct: number | null): string {

@@ -319,9 +319,8 @@ describe('summarizeHopIssues + getRootSuspectHop', () => {
         },
       ],
     })
-    // Production order: page.tsx reverses listSnapshotFileNames to pass snapshots
-    // newest-first. If summarizeHopIssues picked latestHopIndex by iteration
-    // order, the oldest (index 2) would win. It must use collectedAt instead.
+    // Production order is newest-first. If summarizeHopIssues picked latestHopIndex
+    // by iteration order, the oldest (index 2) would win. It must use collectedAt instead.
     const issues = summarizeHopIssues(selectSnapshotsInWindow([newest, oldest], now, 4 * HOUR))
     const router = issues.find((hop) => hop.host === 'router.example')
     expect(router?.latestHopIndex).toBe(5)
@@ -638,12 +637,12 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(getCrossTargetDiagnosis([onlyTcp]).shape.kind).toBe('downstream_from_hop')
   })
 
-  test('hopProtocolStats sidecar can supply a clean ICMP traversal that the lossy-only aggregate missed', () => {
+  test('hopProtocolStats supplement can supply a clean ICMP traversal that the lossy-only aggregate missed', () => {
     // The lossy-only CrossTargetHopIssue only sees a hop when lossPct > 0
     // (upstream summarizeHopIssues filters zeros out). In production, an
     // ICMP-clean + TCP-lossy hop therefore has icmpTargetCount=0 in the
     // aggregate - classifyCrossTargetShape would fall back to
-    // downstream_from_hop without the sidecar. Feeding the sidecar unblocks
+    // downstream_from_hop without the supplement. Feeding the supplement unblocks
     // the protocol_selective classification that is the whole point.
     const tcpOnlyIssue: CrossTargetHopIssue = {
       affectedDestinations: ['s3.us-west-2.amazonaws.com'],

@@ -1,12 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
 import {
   aggregateSnapshotsToRollupBuckets,
+  type MtrRollupBucket,
+  mergeRollupBuckets,
   mtrRollupFileSchema,
-  updateTargetRollups,
 } from '../lib/rollups.ts'
 
 function snap(collectedAt: string, rawEvents: RawMtrEvent[]): StoredRawSnapshot {
@@ -241,60 +239,24 @@ describe('aggregateSnapshotsToRollupBuckets', () => {
     const [bucket] = aggregateSnapshotsToRollupBuckets([snap('20260420T100000Z', events)], 'day')
     expect(bucket.hops).toEqual([])
   })
-})
 
-describe('updateTargetRollups daily RTT fidelity', () => {
-  let targetDir: string
-
-  beforeEach(async () => {
-    targetDir = await mkdtemp(path.join(tmpdir(), 'hopwatch-rollup-'))
-  })
-
-  afterEach(async () => {
-    await rm(targetDir, { recursive: true, force: true })
-  })
-
-  test('daily rttAvgMs matches the raw samples instead of being biased to histogram upper bounds', async () => {
-    // 1500us = 1.5ms. The (1ms, 2ms] histogram bucket's upperBoundMs is 2ms. When
-    // daily buckets are rebuilt by expanding hourly histograms, 1.5ms becomes 2ms.
-    const rttUs = [1500, 1500, 1500, 1500]
-    const snapshot = {
-      collectedAt: '20260420T100000Z',
-      fileName: '20260420T100000Z.json',
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      rawEvents: destinationEvents(4, rttUs),
-      schemaVersion: 2,
-      target: 'example.com',
-    }
-    await writeFile(
-      path.join(targetDir, '20260420T100000Z.json'),
-      JSON.stringify(snapshot, null, 2),
+  test('daily rttAvgMs is derived from raw samples rather than histogram upper bounds', () => {
+    const [bucket] = aggregateSnapshotsToRollupBuckets(
+      [snap('20260420T100000Z', destinationEvents(4, [1500, 1500, 1500, 1500]))],
+      'day',
     )
-
-    await updateTargetRollups(targetDir, {
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      target: 'example.com',
-    })
-
-    const daily = JSON.parse(await readFile(path.join(targetDir, 'daily.rollup.json'), 'utf8'))
-    expect(daily.buckets).toHaveLength(1)
-    expect(daily.buckets[0].rttAvgMs).toBeCloseTo(1.5, 6)
-    expect(daily.buckets[0].rttP50Ms).toBeCloseTo(1.5, 6)
+    expect(bucket.rttAvgMs).toBeCloseTo(1.5, 6)
+    expect(bucket.rttP50Ms).toBeCloseTo(1.5, 6)
   })
 
-  test('preserves a fuller historical hourly bucket instead of overwriting with a partial regeneration', async () => {
+  test('mergeRollupBuckets preserves a fuller historical bucket over a partial regeneration', () => {
     const fullBucket = {
       bucketStart: '2026-04-20T10:00:00.000Z',
       destinationLossPct: 0,
       destinationReplyCount: 40,
       destinationSentCount: 40,
       histogram: [{ count: 40, upperBoundMs: 10 }],
+      hops: [],
       rttAvgMs: 5,
       rttMaxMs: 5,
       rttMinMs: 5,
@@ -302,271 +264,20 @@ describe('updateTargetRollups daily RTT fidelity', () => {
       rttP90Ms: 5,
       rttP99Ms: 5,
       snapshotCount: 4,
-    }
-    const existingHourly = {
-      buckets: [fullBucket],
-      generatedAt: '2026-04-20T11:00:00.000Z',
-      granularity: 'hour',
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      schemaVersion: 1,
-      target: 'example.com',
-    }
-    await writeFile(
-      path.join(targetDir, 'hourly.rollup.json'),
-      JSON.stringify(existingHourly, null, 2),
+    } satisfies MtrRollupBucket
+    const [partialBucket] = aggregateSnapshotsToRollupBuckets(
+      [snap('20260420T104500Z', destinationEvents(10, [5000]))],
+      'hour',
     )
 
-    // Only one snapshot survives raw pruning for this hour - regenerated bucket would
-    // have snapshotCount=1, overwriting the stored snapshotCount=4 bucket.
-    const partial = {
-      collectedAt: '20260420T104500Z',
-      fileName: '20260420T104500Z.json',
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      rawEvents: destinationEvents(10, [5000]),
-      schemaVersion: 2,
-      target: 'example.com',
-    }
-    await writeFile(path.join(targetDir, '20260420T104500Z.json'), JSON.stringify(partial, null, 2))
-
-    await updateTargetRollups(targetDir, {
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      target: 'example.com',
-    })
-
-    const hourly = JSON.parse(await readFile(path.join(targetDir, 'hourly.rollup.json'), 'utf8'))
-    const bucket = hourly.buckets.find(
-      (b: { bucketStart: string }) => b.bucketStart === '2026-04-20T10:00:00.000Z',
-    )
-    expect(bucket).toBeDefined()
-    expect(bucket.snapshotCount).toBe(4)
-    expect(bucket.destinationSentCount).toBe(40)
-  })
-
-  test('only reads snapshots newer than the latest hourly bucket on incremental runs', async () => {
-    // Seed with an established hourly rollup through 09:00. The next
-    // updateTargetRollups call should only re-aggregate snapshots from 09:00
-    // onward (latest hourly bucketStart), not reparse the entire retention
-    // window. We assert by counting how many raw snapshot files are opened.
-    const existingHourly = {
-      buckets: [
-        {
-          bucketStart: '2026-04-20T08:00:00.000Z',
-          destinationLossPct: 0,
-          destinationReplyCount: 4,
-          destinationSentCount: 4,
-          histogram: [{ count: 4, upperBoundMs: 10 }],
-          rttAvgMs: 5,
-          rttMaxMs: 5,
-          rttMinMs: 5,
-          rttP50Ms: 5,
-          rttP90Ms: 5,
-          rttP99Ms: 5,
-          snapshotCount: 4,
-        },
-        {
-          bucketStart: '2026-04-20T09:00:00.000Z',
-          destinationLossPct: 0,
-          destinationReplyCount: 4,
-          destinationSentCount: 4,
-          histogram: [{ count: 4, upperBoundMs: 10 }],
-          rttAvgMs: 5,
-          rttMaxMs: 5,
-          rttMinMs: 5,
-          rttP50Ms: 5,
-          rttP90Ms: 5,
-          rttP99Ms: 5,
-          snapshotCount: 4,
-        },
-      ],
-      generatedAt: '2026-04-20T09:45:00.000Z',
-      granularity: 'hour',
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      schemaVersion: 1,
-      target: 'example.com',
-    }
-    await writeFile(
-      path.join(targetDir, 'hourly.rollup.json'),
-      JSON.stringify(existingHourly, null, 2),
+    const [merged] = mergeRollupBuckets(
+      [fullBucket],
+      [partialBucket],
+      Date.parse('2026-04-21T00:00:00Z'),
+      90,
     )
 
-    for (const stamp of ['20260420T080000Z', '20260420T081500Z', '20260420T090000Z']) {
-      await writeFile(
-        path.join(targetDir, `${stamp}.json`),
-        JSON.stringify({
-          collectedAt: stamp,
-          fileName: `${stamp}.json`,
-          host: 'example.com',
-          label: 'example',
-          observer: 'test-observer',
-          probeMode: 'default',
-          rawEvents: destinationEvents(1, [5000]),
-          schemaVersion: 2,
-          target: 'example.com',
-        }),
-      )
-    }
-
-    const filesRead: string[] = []
-    await updateTargetRollups(
-      targetDir,
-      {
-        host: 'example.com',
-        label: 'example',
-        observer: 'test-observer',
-        probeMode: 'default',
-        target: 'example.com',
-      },
-      new Date('2026-04-20T09:30:00Z'),
-      { dailyKeepDays: 365, hourlyKeepDays: 90 },
-      { onReadSnapshot: (fileName) => filesRead.push(fileName) },
-    )
-
-    // Only the 09:00 snapshot is newer than the latest-bucket cutoff (inclusive).
-    // The 08:00 and 08:15 snapshots must NOT be reparsed on this incremental run.
-    expect(filesRead).toEqual(['20260420T090000Z.json'])
-  })
-
-  test('daily bucket keeps growing as new hourly snapshots arrive within the same day', async () => {
-    // Regression: the incremental `sinceFileName` was derived only from the latest
-    // hourly bucket, so once the current hour advanced past the day's first hour
-    // the regenerated daily bucket covered fewer snapshots than the stored one.
-    // mergeRollupBuckets' snapshotCount guard then kept the stale daily bucket
-    // and the long-range chart stopped updating until a full rebuild.
-    const existingHourly = {
-      buckets: [
-        {
-          bucketStart: '2026-04-20T09:00:00.000Z',
-          destinationLossPct: 0,
-          destinationReplyCount: 4,
-          destinationSentCount: 4,
-          histogram: [{ count: 4, upperBoundMs: 10 }],
-          rttAvgMs: 5,
-          rttMaxMs: 5,
-          rttMinMs: 5,
-          rttP50Ms: 5,
-          rttP90Ms: 5,
-          rttP99Ms: 5,
-          snapshotCount: 4,
-        },
-        {
-          bucketStart: '2026-04-20T10:00:00.000Z',
-          destinationLossPct: 0,
-          destinationReplyCount: 4,
-          destinationSentCount: 4,
-          histogram: [{ count: 4, upperBoundMs: 10 }],
-          rttAvgMs: 5,
-          rttMaxMs: 5,
-          rttMinMs: 5,
-          rttP50Ms: 5,
-          rttP90Ms: 5,
-          rttP99Ms: 5,
-          snapshotCount: 4,
-        },
-      ],
-      generatedAt: '2026-04-20T10:45:00.000Z',
-      granularity: 'hour',
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      schemaVersion: 1,
-      target: 'example.com',
-    }
-    const existingDaily = {
-      buckets: [
-        {
-          bucketStart: '2026-04-20T00:00:00.000Z',
-          destinationLossPct: 0,
-          destinationReplyCount: 8,
-          destinationSentCount: 8,
-          histogram: [{ count: 8, upperBoundMs: 10 }],
-          rttAvgMs: 5,
-          rttMaxMs: 5,
-          rttMinMs: 5,
-          rttP50Ms: 5,
-          rttP90Ms: 5,
-          rttP99Ms: 5,
-          snapshotCount: 8,
-        },
-      ],
-      generatedAt: '2026-04-20T10:45:00.000Z',
-      granularity: 'day',
-      host: 'example.com',
-      label: 'example',
-      observer: 'test-observer',
-      probeMode: 'default',
-      schemaVersion: 1,
-      target: 'example.com',
-    }
-    await writeFile(
-      path.join(targetDir, 'hourly.rollup.json'),
-      JSON.stringify(existingHourly, null, 2),
-    )
-    await writeFile(
-      path.join(targetDir, 'daily.rollup.json'),
-      JSON.stringify(existingDaily, null, 2),
-    )
-
-    // The raw snapshots that backed the stored rollups are still on disk (pruning
-    // has not yet run), plus one new snapshot at 11:00.
-    const snapshotStamps = [
-      '20260420T090000Z',
-      '20260420T091500Z',
-      '20260420T093000Z',
-      '20260420T094500Z',
-      '20260420T100000Z',
-      '20260420T101500Z',
-      '20260420T103000Z',
-      '20260420T104500Z',
-      '20260420T110000Z',
-    ]
-    for (const stamp of snapshotStamps) {
-      await writeFile(
-        path.join(targetDir, `${stamp}.json`),
-        JSON.stringify({
-          collectedAt: stamp,
-          fileName: `${stamp}.json`,
-          host: 'example.com',
-          label: 'example',
-          observer: 'test-observer',
-          probeMode: 'default',
-          rawEvents: destinationEvents(1, [5000]),
-          schemaVersion: 2,
-          target: 'example.com',
-        }),
-      )
-    }
-
-    await updateTargetRollups(
-      targetDir,
-      {
-        host: 'example.com',
-        label: 'example',
-        observer: 'test-observer',
-        probeMode: 'default',
-        target: 'example.com',
-      },
-      new Date('2026-04-20T11:15:00Z'),
-    )
-
-    const daily = JSON.parse(await readFile(path.join(targetDir, 'daily.rollup.json'), 'utf8'))
-    const todayBucket = daily.buckets.find(
-      (b: { bucketStart: string }) => b.bucketStart === '2026-04-20T00:00:00.000Z',
-    )
-    expect(todayBucket).toBeDefined()
-    expect(todayBucket.snapshotCount).toBe(9)
-    expect(todayBucket.destinationSentCount).toBe(9)
+    expect(merged.snapshotCount).toBe(4)
+    expect(merged.destinationSentCount).toBe(40)
   })
 })

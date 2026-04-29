@@ -217,12 +217,36 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
 - **12-factor.** Config via TOML. Log to stdout in simple structured format.
   Graceful shutdown on SIGTERM. Let systemd handle the background, logging,
   and privileges.
-- **Stateless rendering.** Every page render reads from the on-disk JSON
-  snapshots and rollups. Hot-reload the binary and the UI picks up immediately.
+- **SQLite source of truth.** Probe snapshots, hop rows, raw probe events, RTT
+  samples, and rollups are stored in relational SQLite tables. Page renders read
+  live data directly from SQLite without an HTML cache, so hot-reloaded binaries
+  and new probe cycles are visible immediately.
+- **SQLite-native verification.** `hopwatch storage verify` checks the live
+  database for integrity, legacy blob columns, and orphaned relational rows.
 - **One binary.** `bun build --compile` produces a self-contained executable
   per platform. Linux needs `mtr` in `PATH`; that's it. `engine='native'` also
   requires a glibc Linux (the built-in prober `dlopen`s `libc.so.6` via
   `bun:ffi`) - on musl distros (Alpine) stay on the default `engine='mtr'`.
+
+### SQLite storage
+
+SQLite is the runtime storage backend and source of truth. The database stores
+snapshots and rollups as rows and reconstructs raw text or JSON responses on
+demand from those rows. Legacy JSON snapshot files and JSON-blob SQLite schemas
+were one-time migration formats; current builds intentionally do not support
+them.
+
+```bash
+# Verify SQLite integrity and relational consistency.
+hopwatch storage verify --config /etc/hopwatch/hopwatch.toml
+```
+
+To place the database somewhere other than `<data_dir>/hopwatch.sqlite`:
+
+```toml
+[storage]
+sqlite_path = "/var/lib/hopwatch/hopwatch.sqlite"
+```
 
 ## Building from source
 
@@ -387,10 +411,10 @@ that's easier to drop onto a host. Pick whichever matches your situation.
   matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that,
   and probably never will - alerting belongs in the alerting system you
   already run.
-- **Decade-plus historical rollups on a small disk.** rrdtool's pre-sized
-  round-robin archives are hard to beat for long retention on tiny storage.
-  hopwatch keeps raw snapshots on disk (pruned at `keep_days`) plus
-  JSON hourly/daily rollups - correct and human-readable, but bulkier.
+- **Decade-plus historical rollups on a tiny disk.** rrdtool's pre-sized
+  round-robin archives are hard to beat for long retention on constrained
+  storage. hopwatch keeps recent raw snapshots plus hourly/daily rollups in
+  SQLite - easier to query and migrate, but not as compact as RRAs.
 - **The ecosystem.** Plugins, recipes, Stack Overflow answers, existing
   Puppet/Ansible modules - SmokePing has a 20-year head start.
 

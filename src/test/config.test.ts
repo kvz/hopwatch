@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { formatConfigSummary, loadConfig } from '../lib/config.ts'
 
 describe('loadConfig netns validation', () => {
@@ -12,6 +12,7 @@ describe('loadConfig netns validation', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -99,6 +100,23 @@ engine = "native"
 `)
     const config = await loadConfig(configPath)
     expect(config.target[0].engine).toBe('native')
+  })
+
+  test('accepts engine="connect" for TCP probes with the default probe mode', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "connect"
+protocol = "tcp"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.target[0].engine).toBe('connect')
   })
 
   test('defaults protocol to "icmp" and port to 443', async () => {
@@ -228,6 +246,133 @@ host = "example.com"
     expect(formatConfigSummary(config)).toContain(`sqlite:    ${dbPath}`)
   })
 
+  test('loads source identity from config', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[identity]
+hostname = "probe-1.example.net"
+public_hostname = "hopwatch.example.net"
+provider = "Example Cloud"
+provider_contact_emails = ["noc@example.net", "abuse@example.net"]
+location = "Example City (ex1)"
+datacenter = "ex1-dc1"
+site_label = "dc-1"
+egress_ip = "203.0.113.10"
+egress_ip_lookup_url = "https://ip.example.net"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.identity).toEqual({
+      datacenter: 'ex1-dc1',
+      egress_ip: '203.0.113.10',
+      egress_ip_lookup_url: 'https://ip.example.net',
+      hostname: 'probe-1.example.net',
+      location: 'Example City (ex1)',
+      provider: 'Example Cloud',
+      provider_contact_emails: ['noc@example.net', 'abuse@example.net'],
+      public_hostname: 'hopwatch.example.net',
+      site_label: 'dc-1',
+    })
+  })
+
+  test('loads network owner contact overrides from config', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[network_owner_contact]]
+asn = "1299"
+contact_emails = ["support@arelion.com"]
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.network_owner_contact).toEqual([
+      {
+        asn: 'AS1299',
+        contact_emails: ['support@arelion.com'],
+      },
+    ])
+  })
+
+  test('rejects invalid network owner contact ASNs', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[network_owner_contact]]
+asn = "arelion"
+contact_emails = ["support@arelion.com"]
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+
+    await expect(loadConfig(configPath)).rejects.toThrow(/asn/)
+  })
+
+  test('overrides source identity from environment', async () => {
+    vi.stubEnv('HOPWATCH_IDENTITY_HOSTNAME', 'env-probe.example.net')
+    vi.stubEnv('HOPWATCH_IDENTITY_PUBLIC_HOSTNAME', 'env-hopwatch.example.net')
+    vi.stubEnv('HOPWATCH_IDENTITY_PROVIDER', 'Env Cloud')
+    vi.stubEnv(
+      'HOPWATCH_IDENTITY_PROVIDER_CONTACT_EMAILS',
+      'noc-env@example.net, abuse-env@example.net',
+    )
+    vi.stubEnv('HOPWATCH_IDENTITY_LOCATION', 'Env City (env1)')
+    vi.stubEnv('HOPWATCH_IDENTITY_DATACENTER', 'env1-dc1')
+    vi.stubEnv('HOPWATCH_IDENTITY_SITE_LABEL', 'env-dc')
+    vi.stubEnv('HOPWATCH_IDENTITY_EGRESS_IP', '198.51.100.20')
+    vi.stubEnv('HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL', 'https://env-ip.example.net')
+
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[identity]
+hostname = "probe-1.example.net"
+public_hostname = "hopwatch.example.net"
+provider = "Example Cloud"
+location = "Example City (ex1)"
+datacenter = "ex1-dc1"
+site_label = "dc-1"
+egress_ip = "203.0.113.10"
+egress_ip_lookup_url = "https://ip.example.net"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.identity).toEqual({
+      datacenter: 'env1-dc1',
+      egress_ip: '198.51.100.20',
+      egress_ip_lookup_url: 'https://env-ip.example.net',
+      hostname: 'env-probe.example.net',
+      location: 'Env City (env1)',
+      provider: 'Env Cloud',
+      provider_contact_emails: ['noc-env@example.net', 'abuse-env@example.net'],
+      public_hostname: 'env-hopwatch.example.net',
+      site_label: 'env-dc',
+    })
+  })
+
   test('rejects engine="native" combined with probe_mode="netns"', async () => {
     const configPath = await writeConfig(`
 [server]
@@ -243,6 +388,39 @@ probe_mode = "netns"
 netns = "ns-uk-1"
 `)
     await expect(loadConfig(configPath)).rejects.toThrow(/not yet supported/)
+  })
+
+  test('rejects engine="connect" combined with probe_mode="netns"', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "connect"
+protocol = "tcp"
+probe_mode = "netns"
+netns = "ns-uk-1"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/not yet supported/)
+  })
+
+  test('rejects engine="connect" unless protocol is TCP', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+engine = "connect"
+`)
+    await expect(loadConfig(configPath)).rejects.toThrow(/requires protocol='tcp'/)
   })
 
   test('rejects target IDs that differ only in case, which collide on case-insensitive filesystems', async () => {

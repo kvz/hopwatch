@@ -101,7 +101,16 @@ function formatReportNumber(value: number | null, precision = 1): string {
 export function renderSnapshotRawText(
   snapshot: Pick<
     StoredRawSnapshot,
-    'collectedAt' | 'host' | 'label' | 'observer' | 'probeMode' | 'target' | 'rawEvents'
+    | 'collectedAt'
+    | 'engine'
+    | 'host'
+    | 'label'
+    | 'observer'
+    | 'port'
+    | 'probeMode'
+    | 'protocol'
+    | 'target'
+    | 'rawEvents'
   >,
   hops: HopRecord[],
 ): string {
@@ -126,6 +135,9 @@ export function renderSnapshotRawText(
     `# target=${snapshot.target}`,
     `# host=${snapshot.host}`,
     `# label=${snapshot.label}`,
+    `# engine=${snapshot.engine}`,
+    `# protocol=${snapshot.protocol}`,
+    `# port=${snapshot.port}`,
     `# probe_mode=${snapshot.probeMode}`,
     `# collected_at=${snapshot.collectedAt}`,
     '',

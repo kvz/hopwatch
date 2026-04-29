@@ -579,6 +579,66 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       icmpAverageLossPct: 0.5,
       icmpTargetCount: 1,
       tcpAverageLossPct: 51,
+      tcpTargetCount: 3,
+      targetCount: 4,
+      targets: [
+        's3-us-west-2-tcp-mtr',
+        's3-us-west-2-via-namespace-tcp',
+        's3-us-west-2-tcp-native',
+        's3-us-west-2',
+      ],
+      totalDownstreamLoss: 12,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 30,
+    }
+    const diagnosis = getCrossTargetDiagnosis([protocolSelective], undefined, {
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+            snapshot({
+              collectedAt: '20260420T111500Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+          ],
+          target: 's3-us-west-2-tcp-connect',
+        },
+      ],
+    })
+    expect(diagnosis.shape.kind).toBe('protocol_selective')
+    expect(diagnosis.label).toBe('Protocol-selective loss')
+    expect(diagnosis.summary).toContain('51.0%')
+    expect(diagnosis.summary).toContain('0.5%')
+    expect(diagnosis.summary).toContain('middlebox')
+    expect(diagnosis.summary).toContain(
+      'TCP/443 probes to s3.us-west-2.amazonaws.com stayed healthy',
+    )
+    expect(diagnosis.summary).not.toContain('across 1 destination')
+    expect(diagnosis.summary).not.toContain('TCP connect check')
+  })
+
+  test('diagnosis includes escalation owner and copy text when hop ownership is known', () => {
+    const protocolSelective = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com'],
+      asn: null,
+      averageLossPct: 30,
+      host: '132.147.112.101',
+      icmpAverageLossPct: 0.5,
+      icmpTargetCount: 1,
+      tcpAverageLossPct: 51,
       tcpTargetCount: 2,
       targetCount: 3,
       targets: ['tcp-mtr', 'tcp-native', 'icmp'],
@@ -586,12 +646,194 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       totalIsolatedLoss: 0,
       totalSampleCount: 30,
     }
-    const diagnosis = getCrossTargetDiagnosis([protocolSelective])
-    expect(diagnosis.shape.kind).toBe('protocol_selective')
-    expect(diagnosis.label).toBe('Protocol-selective loss')
-    expect(diagnosis.summary).toContain('51.0%')
-    expect(diagnosis.summary).toContain('0.5%')
-    expect(diagnosis.summary).toContain('middlebox')
+    const diagnosis = getCrossTargetDiagnosis([protocolSelective], undefined, {
+      networkOwnersByHopHost: new Map([
+        [
+          '132.147.112.101',
+          {
+            asName: 'VIEWQWEST-SG-AP Viewqwest Pte Ltd, SG',
+            asn: 'AS18106',
+            contactEmails: ['noc.sg@viewqwest.com', 'abuse@viewqwest.com'],
+            country: 'SG',
+            fetchedAt: '2026-04-29T00:00:00.000Z',
+            ip: '132.147.112.101',
+            prefix: '132.147.112.0/24',
+            rdapName: 'VIEWQWEST-NET',
+            registry: 'apnic',
+            source: 'test',
+          },
+        ],
+      ]),
+      publicBaseUrl: 'https://hopwatch.example.net/hopwatch/',
+      rawMtrSamplesByTarget: new Map([
+        [
+          'tcp-mtr',
+          {
+            collectedAt: '20260429T183507Z',
+            destinationLossPct: 50,
+            rawText: [
+              '# observer=probe-1',
+              '# target=s3.us-west-2.amazonaws.com',
+              '# engine=mtr',
+              '# protocol=tcp',
+              '',
+              'Start: 2026-04-29T18:35:07Z',
+              'HOST: probe-1                                Loss%   Snt   Last    Avg   Best   Wrst  StDev',
+              '  1.|-- 132.147.112.101                      50.0%    10     2.3     2.1     1.9     2.8     0.3',
+            ].join('\n'),
+            worstHopLossPct: 50,
+          },
+        ],
+      ]),
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+          ],
+          target: 's3-us-west-2-tcp-connect',
+        },
+      ],
+      sourceNetworkOwner: {
+        asName: 'HETZNER-CLOUD4-AS, DE',
+        asn: 'AS215859',
+        contactEmails: [],
+        country: 'DE',
+        fetchedAt: '2026-04-29T00:00:00.000Z',
+        ip: '203.0.113.10',
+        prefix: '203.0.113.0/24',
+        rdapName: 'HETZNER-CLOUD',
+        registry: 'ripencc',
+        source: 'test',
+      },
+      sourceIdentity: {
+        datacenter: 'sin-dc1',
+        egressIp: '203.0.113.10',
+        hostname: 'probe-1.example.net',
+        location: 'Singapore (sin)',
+        provider: 'Hetzner Cloud',
+        providerContactEmails: [],
+        publicHostname: 'hopwatch.example.net',
+        siteLabel: 'dc-1',
+      },
+    })
+
+    expect(diagnosis.summary).toContain('Report this to Viewqwest Pte Ltd (AS18106)')
+    expect(diagnosis.summary).toContain('noc.sg@viewqwest.com')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'persistent packet loss observed by continuous MTR-style probes from probe-1.example.net, egress 203.0.113.10, Hetzner Cloud Singapore (sin) / sin-dc1',
+    )
+    expect(diagnosis.escalation?.copyText).toContain('Source:')
+    expect(diagnosis.escalation?.copyText).toContain('Source hostname: probe-1.example.net')
+    expect(diagnosis.escalation?.copyText).toContain('Source public hostname: hopwatch.example.net')
+    expect(diagnosis.escalation?.copyText).toContain('Source egress IP: 203.0.113.10')
+    expect(diagnosis.escalation?.copyText).toContain('Source provider: Hetzner Cloud')
+    expect(diagnosis.escalation?.copyText).toContain('Source location: Singapore (sin)')
+    expect(diagnosis.escalation?.copyText).toContain('Source datacenter: sin-dc1')
+    expect(diagnosis.escalation?.copyText).toContain('Internal site label: dc-1')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Source ASN/prefix: HETZNER-CLOUD4-AS (AS215859), 203.0.113.0/24',
+    )
+    expect(diagnosis.escalation?.copyText).toContain('Destination:')
+    expect(diagnosis.escalation?.copyText).toContain('Suspect hop:')
+    expect(diagnosis.escalation?.copyText).toContain('Evidence:')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'External evidence paths: direct TCP/443 MTR, direct TCP/443 native raw-socket cross-check, and direct ICMP MTR comparison.',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Live latest raw MTR output (may differ by the time this message is read): https://hopwatch.example.net/hopwatch/tcp-mtr/latest.txt, https://hopwatch.example.net/hopwatch/icmp/latest.txt',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Problematic raw MTR example (direct TCP/443 MTR, collected 2026-04-29 18:35:07 UTC, destination loss 50.0%, worst-hop loss 50.0%):',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Application impact: TCP/443 probes to s3.us-west-2.amazonaws.com stayed healthy',
+    )
+    expect(diagnosis.escalation?.copyText).toContain('```text')
+    expect(diagnosis.escalation?.copyText).toContain('132.147.112.101')
+    expect(diagnosis.escalation?.copyText).not.toContain('Hopwatch loss')
+    expect(diagnosis.escalation?.copyText).not.toContain('our observer')
+    expect(diagnosis.escalation?.copyText).not.toContain('via-namespace')
+    expect(diagnosis.escalation?.copyText).not.toContain('Affected probe paths')
+    expect(diagnosis.escalation?.copyText).toContain('Contact: noc.sg@viewqwest.com')
+    expect(diagnosis.escalation?.copyText).toContain('Prefix: 132.147.112.0/24')
+  })
+
+  test('diagnosis routes source-owned suspect hops to the source provider network team', () => {
+    const sourceOwnedIssue = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com', 'google.com'],
+      asn: null,
+      averageLossPct: 51,
+      host: '5.161.8.130',
+      icmpAverageLossPct: 51,
+      icmpTargetCount: 2,
+      tcpAverageLossPct: 52,
+      tcpTargetCount: 2,
+      targetCount: 4,
+      targets: ['s3-us-west-2-tcp-mtr', 's3-us-west-2-tcp-native', 'google-com', 'google-com'],
+      totalDownstreamLoss: 1252,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 2000,
+    }
+    const hetznerCloudOwner = {
+      asName: 'HETZNER-CLOUD2-AS',
+      asn: 'AS213230',
+      contactEmails: ['abuse@hetzner.com'],
+      country: 'US',
+      fetchedAt: '2026-04-29T00:00:00.000Z',
+      ip: '5.161.8.130',
+      prefix: '5.161.8.0/21',
+      rdapName: 'HETZNER-CLOUD',
+      registry: 'arin',
+      source: 'test',
+    }
+
+    const diagnosis = getCrossTargetDiagnosis([sourceOwnedIssue], undefined, {
+      networkOwnersByHopHost: new Map([['5.161.8.130', hetznerCloudOwner]]),
+      sourceIdentity: {
+        datacenter: 'ash-dc1',
+        egressIp: '5.161.82.43',
+        hostname: 'ho14up.transloadit.com',
+        location: 'Ashburn, VA (ash)',
+        provider: 'Hetzner Cloud',
+        providerContactEmails: ['network@hetzner.com'],
+        publicHostname: 'observer1-us-east-1-production.transloadit.com',
+        siteLabel: 'us-east-1-hetzner',
+      },
+      sourceNetworkOwner: {
+        ...hetznerCloudOwner,
+        ip: '5.161.82.43',
+        prefix: '5.161.82.0/24',
+      },
+    })
+
+    expect(diagnosis.summary).toContain(
+      'recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com)',
+    )
+    expect(diagnosis.summary).toContain('source and suspect hop are in the same network')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com).',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'The source egress IP and suspect hop are both announced by HETZNER-CLOUD2-AS (AS213230)',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'the pattern affects 2 external destinations across 4 probe paths from ash-dc1',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Contact: network@hetzner.com, abuse@hetzner.com',
+    )
+    expect(diagnosis.escalation?.copyText).not.toContain(
+      'use the owner/ASN as the escalation target',
+    )
   })
 
   test('does NOT flag protocol-selective when ICMP is also lossy (real capacity problem)', () => {
@@ -744,6 +986,16 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
             target: 's3-us-west-2-tcp-native',
           }),
           target: 's3-us-west-2-tcp-native',
+        },
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: buildSnapshots({
+            destinationLossPct: 0,
+            protocol: 'tcp',
+            target: 's3-us-west-2-tcp-connect',
+          }),
+          target: 's3-us-west-2-tcp-connect',
         },
         {
           protocol: 'icmp',

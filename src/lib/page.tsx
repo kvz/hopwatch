@@ -8,6 +8,13 @@ import {
   loadChartDefinitions,
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
+import {
+  applyNetworkOwnerContactOverrides,
+  extractIpv4Address,
+  lookupNetworkOwner,
+  type NetworkOwnerContactOverride,
+  type NetworkOwnerInfo,
+} from './network-owner.ts'
 import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 import {
@@ -16,6 +23,7 @@ import {
   getHistoricalSeverityBadge,
   getRootSuspectHop,
   type HopAggregate,
+  type RawMtrEvidenceSample,
   type SnapshotAggregate,
   selectSnapshotsInWindow,
   summarizeCrossTargetHopIssues,
@@ -24,6 +32,7 @@ import {
   summarizeHopProtocolStats,
   summarizeSnapshots,
 } from './snapshot-aggregate.ts'
+import type { SourceIdentity } from './source-identity.ts'
 import type { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
@@ -36,6 +45,49 @@ export interface RenderedTarget {
 
 function renderDocument(element: ReactElement): string {
   return `<!doctype html>\n${renderToStaticMarkup(element)}`
+}
+
+async function getCachedNetworkOwner(
+  store: HopwatchSqliteStore,
+  ip: string,
+  contactOverrides: NetworkOwnerContactOverride[],
+): Promise<NetworkOwnerInfo | null> {
+  const cachedOwner = store.getNetworkOwnerCache(ip)
+  if (cachedOwner != null) {
+    return applyNetworkOwnerContactOverrides(cachedOwner, contactOverrides)
+  }
+
+  const lookedUpOwner = await lookupNetworkOwner(ip).catch(() => null)
+  if (lookedUpOwner != null) {
+    store.upsertNetworkOwnerCache(lookedUpOwner)
+    return applyNetworkOwnerContactOverrides(lookedUpOwner, contactOverrides)
+  }
+
+  return null
+}
+
+function scoreRawMtrEvidenceSnapshot(snapshot: SnapshotSummary): number {
+  const destinationLossPct = snapshot.destinationLossPct ?? 0
+  const worstHopLossPct = snapshot.worstHopLossPct ?? 0
+  if (destinationLossPct <= 0 && worstHopLossPct <= 0) return Number.NEGATIVE_INFINITY
+
+  const collectedAt = parseCollectedAt(snapshot.collectedAt) ?? 0
+  const recencyTieBreaker = collectedAt / 1_000_000_000_000_000
+  const diagnosisBoost = snapshot.diagnosis.kind === 'destination_loss' ? 1_000 : 0
+  return diagnosisBoost + destinationLossPct * 10 + worstHopLossPct + recencyTieBreaker
+}
+
+function selectRawMtrEvidenceSnapshot(snapshots: SnapshotSummary[]): SnapshotSummary | null {
+  let best: SnapshotSummary | null = null
+  let bestScore = Number.NEGATIVE_INFINITY
+  for (const snapshot of snapshots) {
+    if (snapshot.engine !== 'mtr') continue
+    const score = scoreRawMtrEvidenceSnapshot(snapshot)
+    if (score <= bestScore) continue
+    best = snapshot
+    bestScore = score
+  }
+  return best
 }
 
 export async function renderTargetIndex(
@@ -103,6 +155,9 @@ export async function renderRootIndex(
   keepDays: number,
   now = Date.now(),
   signature?: string,
+  sourceIdentity?: SourceIdentity,
+  publicBaseUrl?: string,
+  networkOwnerContactOverrides: NetworkOwnerContactOverride[] = [],
 ): Promise<string> {
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
@@ -189,6 +244,7 @@ export async function renderRootIndex(
   // generic "upstream path degraded".
   const hopProtocolStats = summarizeHopProtocolStats(
     targetSummaries.map((entry) => ({
+      engine: entry.summary.engine,
       protocol: entry.summary.protocol,
       snapshots: entry.lastWeekSnapshots,
       target: entry.targetSlug,
@@ -196,15 +252,66 @@ export async function renderRootIndex(
   )
   const rollupBucketsByTarget = targetSummaries.map((entry) => entry.hourlyBuckets)
   const perTargetSnapshots = targetSummaries.map((entry) => ({
+    engine: entry.summary.engine,
     protocol: entry.summary.protocol,
     snapshots: entry.lastWeekSnapshots,
     target: entry.targetSlug,
   }))
-  const crossTargetDiagnosis = getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
+  const rawMtrSamplesByTarget = new Map<string, RawMtrEvidenceSample>()
+  for (const entry of targetSummaries) {
+    if (entry.summary.engine !== 'mtr') continue
+    const evidenceSnapshot = selectRawMtrEvidenceSnapshot(entry.lastWeekSnapshots)
+    if (evidenceSnapshot == null) continue
+    const rawText =
+      evidenceSnapshot.rawText === ''
+        ? store.getSnapshotRawText(entry.targetSlug, evidenceSnapshot.fileName)
+        : evidenceSnapshot.rawText
+    if (rawText == null || rawText.trim() === '') continue
+    rawMtrSamplesByTarget.set(entry.targetSlug, {
+      collectedAt: evidenceSnapshot.collectedAt,
+      destinationLossPct: evidenceSnapshot.destinationLossPct,
+      rawText,
+      worstHopLossPct: evidenceSnapshot.worstHopLossPct,
+    })
+  }
+  const diagnosisContext = {
     now,
     perTargetSnapshots,
+    publicBaseUrl,
+    rawMtrSamplesByTarget,
     rollupBucketsByTarget,
-  })
+    sourceIdentity,
+  }
+  const preliminaryCrossTargetDiagnosis = getCrossTargetDiagnosis(
+    crossIssues,
+    hopProtocolStats,
+    diagnosisContext,
+  )
+  const networkOwnersByHopHost = new Map<string, NetworkOwnerInfo>()
+  const suspectHopHost = preliminaryCrossTargetDiagnosis.suspect?.host
+  const suspectHopIp = suspectHopHost == null ? null : extractIpv4Address(suspectHopHost)
+  if (suspectHopHost != null && suspectHopIp != null) {
+    const suspectOwner = await getCachedNetworkOwner(
+      store,
+      suspectHopIp,
+      networkOwnerContactOverrides,
+    )
+    if (suspectOwner != null) {
+      networkOwnersByHopHost.set(suspectHopHost, suspectOwner)
+    }
+  }
+  const sourceNetworkOwner =
+    sourceIdentity?.egressIp == null
+      ? null
+      : await getCachedNetworkOwner(store, sourceIdentity.egressIp, networkOwnerContactOverrides)
+  const crossTargetDiagnosis =
+    networkOwnersByHopHost.size === 0 && sourceNetworkOwner == null
+      ? preliminaryCrossTargetDiagnosis
+      : getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
+          ...diagnosisContext,
+          networkOwnersByHopHost,
+          sourceNetworkOwner: sourceNetworkOwner ?? undefined,
+        })
 
   const latestCollectedAt = rows.reduce<string | null>((acc, row) => {
     const rowTs = parseCollectedAt(row.summary.collectedAt) ?? 0

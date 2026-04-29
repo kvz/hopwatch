@@ -7,7 +7,7 @@ import { parseListenAddress } from './listen.ts'
 export const probeModeSchema = z.enum(['default', 'netns'])
 export type ProbeMode = z.infer<typeof probeModeSchema>
 
-export const probeEngineSchema = z.enum(['mtr', 'native'])
+export const probeEngineSchema = z.enum(['mtr', 'native', 'connect'])
 export type ProbeEngine = z.infer<typeof probeEngineSchema>
 
 // `icmp` sends ICMP Echo Requests (or the mtr equivalent) - the default, and
@@ -35,8 +35,9 @@ const targetSchema = z.object({
     .regex(/^[^-]/, 'host must not start with "-" (would be interpreted as an mtr flag)'),
   probe_mode: probeModeSchema.default('default'),
   // `mtr` shells out to the external mtr binary (default, battle-tested).
-  // `native` uses the built-in Linux raw-ICMP prober (no external mtr
-  // needed, but the process needs CAP_NET_RAW).
+  // `native` uses the built-in Linux raw-ICMP/TCP traceroute prober (no
+  // external mtr needed, but the process needs CAP_NET_RAW). `connect` measures
+  // end-to-end TCP connect success/latency without pretending to be traceroute.
   engine: probeEngineSchema.default('mtr'),
   netns: z
     .string()
@@ -101,6 +102,25 @@ const serverSchema = z.object({
 })
 export type ServerConfig = z.infer<typeof serverSchema>
 
+const identitySchema = z.object({
+  // Optional human/operator context for escalation copy. Hopwatch can discover
+  // a local hostname and request Host header, but provider/datacenter naming
+  // is site-specific and should come from config.
+  hostname: z.string().min(1).optional(),
+  public_hostname: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(),
+  provider_contact_emails: z.array(z.string().min(1)).default([]),
+  location: z.string().min(1).optional(),
+  datacenter: z.string().min(1).optional(),
+  site_label: z.string().min(1).optional(),
+  egress_ip: z.string().min(1).optional(),
+  // Disabled by default to avoid surprising outbound calls. Operators can set
+  // this to an endpoint such as https://api.ipify.org when they want Hopwatch
+  // to discover the source NAT IP at daemon startup.
+  egress_ip_lookup_url: z.string().url().optional(),
+})
+export type IdentityConfig = z.infer<typeof identitySchema>
+
 const probeSchema = z.object({
   interval_seconds: z.number().int().positive().default(900),
   packets: z.number().int().positive().default(20),
@@ -124,11 +144,27 @@ const storageSchema = z.object({
 })
 export type StorageSettings = z.infer<typeof storageSchema>
 
+const networkOwnerContactSchema = z.object({
+  asn: z
+    .string()
+    .trim()
+    .min(1)
+    .regex(/^(?:AS)?\d+$/i, 'asn must be AS-prefixed or numeric')
+    .transform((value) => {
+      const normalized = value.trim().toUpperCase()
+      return normalized.startsWith('AS') ? normalized : `AS${normalized}`
+    }),
+  contact_emails: z.array(z.string().email()).default([]),
+})
+export type NetworkOwnerContactConfig = z.infer<typeof networkOwnerContactSchema>
+
 const configSchema = z.object({
   server: serverSchema.default({}),
+  identity: identitySchema.default({}),
   probe: probeSchema.default({}),
   chart: chartSchema.default({}),
   storage: storageSchema.default({}),
+  network_owner_contact: z.array(networkOwnerContactSchema).default([]),
   target: z.array(targetSchema).default([]),
   peer: z.array(peerSchema).default([]),
 })
@@ -142,8 +178,9 @@ export interface LoadedConfig extends HopwatchConfig {
 
 function applyEnvOverrides(raw: unknown): unknown {
   const env = process.env
-  const overrides: Record<string, Record<string, boolean | number | string>> = {
+  const overrides: Record<string, Record<string, boolean | number | string | string[]>> = {
     server: {},
+    identity: {},
     probe: {},
     chart: {},
     storage: {},
@@ -163,6 +200,45 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   if (env.HOPWATCH_NODE_LABEL) {
     overrides.server.node_label = env.HOPWATCH_NODE_LABEL
+  }
+
+  if (env.HOPWATCH_IDENTITY_HOSTNAME) {
+    overrides.identity.hostname = env.HOPWATCH_IDENTITY_HOSTNAME
+  }
+
+  if (env.HOPWATCH_IDENTITY_PUBLIC_HOSTNAME) {
+    overrides.identity.public_hostname = env.HOPWATCH_IDENTITY_PUBLIC_HOSTNAME
+  }
+
+  if (env.HOPWATCH_IDENTITY_PROVIDER) {
+    overrides.identity.provider = env.HOPWATCH_IDENTITY_PROVIDER
+  }
+
+  if (env.HOPWATCH_IDENTITY_PROVIDER_CONTACT_EMAILS) {
+    overrides.identity.provider_contact_emails =
+      env.HOPWATCH_IDENTITY_PROVIDER_CONTACT_EMAILS.split(',')
+        .map((email) => email.trim())
+        .filter((email) => email !== '')
+  }
+
+  if (env.HOPWATCH_IDENTITY_LOCATION) {
+    overrides.identity.location = env.HOPWATCH_IDENTITY_LOCATION
+  }
+
+  if (env.HOPWATCH_IDENTITY_DATACENTER) {
+    overrides.identity.datacenter = env.HOPWATCH_IDENTITY_DATACENTER
+  }
+
+  if (env.HOPWATCH_IDENTITY_SITE_LABEL) {
+    overrides.identity.site_label = env.HOPWATCH_IDENTITY_SITE_LABEL
+  }
+
+  if (env.HOPWATCH_IDENTITY_EGRESS_IP) {
+    overrides.identity.egress_ip = env.HOPWATCH_IDENTITY_EGRESS_IP
+  }
+
+  if (env.HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL) {
+    overrides.identity.egress_ip_lookup_url = env.HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL
   }
 
   if (env.HOPWATCH_MTR_BIN) {
@@ -199,7 +275,7 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   const rawRecord = raw as Record<string, unknown>
   const merged: Record<string, unknown> = { ...rawRecord }
-  for (const section of ['server', 'probe', 'chart', 'storage'] as const) {
+  for (const section of ['server', 'identity', 'probe', 'chart', 'storage'] as const) {
     const current = (rawRecord[section] as Record<string, unknown> | undefined) ?? {}
     const layer = overrides[section]
     if (Object.keys(layer).length > 0) {
@@ -258,6 +334,21 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
       // uses nsenter) or move this target out of netns.
       throw new Error(
         `target '${target.id}' uses engine='native' with probe_mode='netns', which is not yet supported`,
+      )
+    }
+
+    if (target.engine === 'connect' && target.probe_mode === 'netns') {
+      // Running connect probes in a netns would need nsenter/setns support in
+      // the connect engine. Keep this explicit instead of silently probing from
+      // the host namespace and labeling it as namespace evidence.
+      throw new Error(
+        `target '${target.id}' uses engine='connect' with probe_mode='netns', which is not yet supported`,
+      )
+    }
+
+    if (target.engine === 'connect' && target.protocol !== 'tcp') {
+      throw new Error(
+        `target '${target.id}' uses engine='connect' but protocol='${target.protocol}'; engine='connect' requires protocol='tcp'`,
       )
     }
 

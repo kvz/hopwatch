@@ -36,6 +36,17 @@ h1, h2 { margin: 0 0 12px; line-height: 1.1; }
 p, li { line-height: 1.5; }
 a { color: var(--accent); }
 
+.network-token {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid rgba(24, 77, 71, 0.16);
+  border-radius: 5px;
+  background: var(--code);
+  color: var(--text);
+  font-size: 0.94em;
+  line-height: 1.35;
+}
+
 .topnav {
   position: sticky;
   top: 0;
@@ -177,6 +188,35 @@ code dfn, dfn code { border-bottom: 0; }
   box-shadow: 0 10px 24px rgba(17, 24, 20, 0.04);
   margin-bottom: 20px;
 }
+
+.panel-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.panel-title-row h2 { margin-bottom: 0; }
+
+.diagnosis-copy { margin-bottom: 0; }
+
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(24, 77, 71, 0.24);
+  border-radius: 999px;
+  background: rgba(24, 77, 71, 0.08);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.copy-button:hover { background: rgba(24, 77, 71, 0.14); }
+.copy-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .summary-grid {
   display: grid;

@@ -21,6 +21,7 @@ import { deriveTargetVariant } from '../lib/target-variant.ts'
 import { ChartCard } from './ChartCard.tsx'
 import { Layout } from './Layout.tsx'
 import { RelativeTime } from './RelativeTime.tsx'
+import { RichNetworkText } from './RichNetworkText.tsx'
 import { TopNav } from './TopNav.tsx'
 
 const SEVERITY_SORT_RANK: Record<SeverityBadge['className'], number> = {
@@ -91,12 +92,24 @@ export function RootIndexPage({
         </p>
       ) : null}
       <section className="panel">
-        <h2>Cross-target diagnosis (7d)</h2>
-        <p>
+        <div className="panel-title-row">
+          <h2>Cross-target diagnosis (7d)</h2>
+          {crossTargetDiagnosis.escalation == null ? null : (
+            <button
+              className="copy-button"
+              data-copy-text={crossTargetDiagnosis.escalation.copyText}
+              type="button"
+            >
+              <span aria-hidden="true">⧉</span>
+              <span>Copy escalation</span>
+            </button>
+          )}
+        </div>
+        <p className="diagnosis-copy">
           <span className={`loss ${crossTargetDiagnosis.className}`}>
             {crossTargetDiagnosis.label}
           </span>{' '}
-          {crossTargetDiagnosis.summary}
+          <RichNetworkText text={crossTargetDiagnosis.summary} />
         </p>
       </section>
       <section className="panel">

@@ -1,7 +1,17 @@
-import type { ProbeProtocol } from './config.ts'
+import type { ProbeEngine, ProbeProtocol } from './config.ts'
+import {
+  formatNetworkOwnerLabel,
+  mergeContactEmails,
+  type NetworkOwnerInfo,
+} from './network-owner.ts'
 import { average } from './raw.ts'
 import type { MtrRollupBucket } from './rollups.ts'
-import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
+import { formatAbsoluteCollectedAt, parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
+import {
+  formatSourceIdentityInline,
+  formatSourceIdentityLines,
+  type SourceIdentity,
+} from './source-identity.ts'
 
 export interface SnapshotAggregate {
   averageDestinationLossPct: number | null
@@ -290,10 +300,30 @@ export interface CrossTargetShape {
 
 export interface CrossTargetDiagnosis {
   className: 'good' | 'warn' | 'bad'
+  escalation: CrossTargetEscalation | null
   label: string
   shape: CrossTargetShape
   summary: string
   suspect: CrossTargetHopIssue | null
+}
+
+export interface CrossTargetEscalation {
+  contactEmails: string[]
+  copyText: string
+  ownerLabel: string
+  summaryAction: string
+}
+
+export interface RawMtrEvidenceSample {
+  collectedAt: string
+  destinationLossPct: number | null
+  rawText: string
+  worstHopLossPct: number | null
+}
+
+interface TcpConnectImpactSummary {
+  evidenceLine: string
+  summarySentence: string
 }
 
 interface PerTargetHopInput {
@@ -327,6 +357,7 @@ export interface HopProtocolStat {
 }
 
 export interface PerTargetSnapshots {
+  engine?: ProbeEngine
   protocol: ProbeProtocol
   snapshots: SnapshotSummary[]
   // Unique probe-path identifier, not the human label. Multiple probe
@@ -651,6 +682,11 @@ export function summarizeDestinationProtocolIssues(
 ): CrossTargetDestinationProtocolIssue[] {
   const byDestination = new Map<string, Map<ProbeProtocol, DestinationProtocolAccumulator>>()
   for (const entry of perTarget) {
+    // End-to-end TCP connect probes are counter-evidence for application
+    // impact, not traceroute/MTR destination-loss evidence. Keeping them out
+    // of this shape prevents a healthy connect check from being averaged into
+    // lossy TCP traceroute samples and producing a muddled diagnosis.
+    if (entry.engine === 'connect') continue
     for (const snapshot of entry.snapshots) {
       const lossPct = snapshot.destinationLossPct
       if (lossPct == null) continue
@@ -799,6 +835,11 @@ export function classifyCrossTargetShape(
 }
 
 export interface CrossTargetDiagnosisContext {
+  networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
+  publicBaseUrl?: string
+  rawMtrSamplesByTarget?: Map<string, RawMtrEvidenceSample>
+  sourceIdentity?: SourceIdentity
+  sourceNetworkOwner?: NetworkOwnerInfo
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
   // and PTR discovery for the suspect hop.
   rollupBucketsByTarget?: MtrRollupBucket[][]
@@ -809,6 +850,400 @@ export interface CrossTargetDiagnosisContext {
   now?: number
 }
 
+interface EscalationRoute {
+  contactEmails: string[]
+  contactLine: string
+  rationaleLine: string
+  recommendedLine: string
+  summaryAction: string
+}
+
+function sameAsn(left: NetworkOwnerInfo | null | undefined, right: NetworkOwnerInfo): boolean {
+  return left?.asn != null && right.asn != null && left.asn === right.asn
+}
+
+function formatSourceSite(identity: SourceIdentity | null | undefined): string | null {
+  return identity?.datacenter ?? identity?.location ?? identity?.siteLabel ?? null
+}
+
+function formatDestinationScope(primary: CrossTargetHopIssue): string {
+  const destinationCount = primary.affectedDestinations.length
+  const destinationNoun = destinationCount === 1 ? 'destination' : 'destinations'
+  if (destinationCount === 0) return `${primary.targetCount} probe paths`
+  if (destinationCount === primary.targetCount) {
+    return `${destinationCount} external ${destinationNoun}`
+  }
+  return `${destinationCount} external ${destinationNoun} across ${primary.targetCount} probe paths`
+}
+
+function formatSourceProviderEscalationTarget(
+  sourceIdentity: SourceIdentity | null | undefined,
+  owner: NetworkOwnerInfo,
+): string {
+  const ownerLabel = formatNetworkOwnerLabel(owner)
+  const sourceProvider = sourceIdentity?.provider
+  if (sourceProvider != null && owner.asn != null) {
+    return `${sourceProvider} network team / ${owner.asn}`
+  }
+  if (sourceProvider != null) {
+    return `${sourceProvider} network team`
+  }
+  return owner.asn == null
+    ? `${ownerLabel} network team`
+    : `${ownerLabel} network team / ${owner.asn}`
+}
+
+function formatContactSuffix(contactEmails: string[]): string {
+  return contactEmails.length === 0 ? '' : ` (${contactEmails.join(', ')})`
+}
+
+function determineEscalationRoute({
+  owner,
+  primary,
+  shapeKind,
+  sourceIdentity,
+  sourceNetworkOwner,
+}: {
+  owner: NetworkOwnerInfo
+  primary: CrossTargetHopIssue
+  shapeKind: CrossTargetShapeKind
+  sourceIdentity?: SourceIdentity
+  sourceNetworkOwner?: NetworkOwnerInfo
+}): EscalationRoute {
+  const ownerLabel = formatNetworkOwnerLabel(owner)
+  const destinationScope = formatDestinationScope(primary)
+  const sourceSite = formatSourceSite(sourceIdentity)
+  const siteSuffix = sourceSite == null ? '' : ` from ${sourceSite}`
+  const sourceOwned = sameAsn(sourceNetworkOwner, owner)
+
+  if (sourceOwned) {
+    const target = formatSourceProviderEscalationTarget(sourceIdentity, owner)
+    const contactEmails = mergeContactEmails(
+      sourceIdentity?.providerContactEmails ?? [],
+      owner.contactEmails,
+    )
+    const contactSuffix = formatContactSuffix(contactEmails)
+    const asnSuffix = owner.asn == null ? '' : ` and cite ${owner.asn}`
+    return {
+      contactEmails,
+      contactLine:
+        contactEmails.length === 0
+          ? `No public NOC contact found in RDAP; open this through the source provider's network/support escalation path${asnSuffix}.`
+          : contactEmails.join(', '),
+      rationaleLine: `The source egress IP and suspect hop are both announced by ${ownerLabel}, and the pattern affects ${destinationScope}${siteSuffix}.`,
+      recommendedLine: `Recommended escalation: ${target}${contactSuffix}.`,
+      summaryAction: `recommended escalation: ${target}${contactSuffix} because the source and suspect hop are in the same network`,
+    }
+  }
+
+  const upstreamFallback =
+    sourceIdentity?.provider == null
+      ? 'ask your upstream/provider to escalate there'
+      : `ask ${sourceIdentity.provider} to escalate there`
+  const protocolRationale =
+    shapeKind === 'protocol_selective'
+      ? ' The loss is protocol-selective, so ask the owner to inspect TCP traceroute policers, middleboxes, or ECMP behavior rather than plain capacity.'
+      : ''
+
+  return {
+    contactEmails: owner.contactEmails,
+    contactLine:
+      owner.contactEmails.length === 0
+        ? `No public NOC contact found in RDAP; use the owner/ASN as the escalation target, or ${upstreamFallback}.`
+        : owner.contactEmails.join(', '),
+    rationaleLine: `The suspect hop is owned by ${ownerLabel} and coincides with downstream loss on ${destinationScope}.${protocolRationale}`,
+    recommendedLine: `Recommended escalation: ${ownerLabel}.`,
+    summaryAction:
+      owner.contactEmails.length === 0
+        ? `recommended escalation: ${ownerLabel}; if they do not accept direct reports, ${upstreamFallback}`
+        : `report this to ${ownerLabel} (${owner.contactEmails.join(', ')})`,
+  }
+}
+
+function buildCrossTargetEscalation({
+  applicationImpactLine,
+  destinationList,
+  hopDisplay,
+  owner,
+  primary,
+  publicBaseUrl,
+  rawMtrSamplesByTarget,
+  shapeKind,
+  sourceIdentity,
+  sourceNetworkOwner,
+  timelineLine,
+}: {
+  applicationImpactLine?: string
+  destinationList: string
+  hopDisplay: string
+  owner: NetworkOwnerInfo | null
+  primary: CrossTargetHopIssue
+  publicBaseUrl?: string
+  rawMtrSamplesByTarget?: Map<string, RawMtrEvidenceSample>
+  shapeKind: CrossTargetShapeKind
+  sourceIdentity?: SourceIdentity
+  sourceNetworkOwner?: NetworkOwnerInfo
+  timelineLine: string | null
+}): CrossTargetEscalation | null {
+  if (owner == null) return null
+
+  const ownerLabel = formatNetworkOwnerLabel(owner)
+  const route = determineEscalationRoute({
+    owner,
+    primary,
+    shapeKind,
+    sourceIdentity,
+    sourceNetworkOwner,
+  })
+  const protocolLine =
+    shapeKind === 'protocol_selective'
+      ? `TCP loss is ~${(primary.tcpAverageLossPct ?? 0).toFixed(1)}% while ICMP loss is ~${(primary.icmpAverageLossPct ?? 0).toFixed(1)}% on the same hop.`
+      : `The hop coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots.`
+  const sourceNetworkLine =
+    sourceNetworkOwner == null
+      ? null
+      : `Source ASN/prefix: ${formatNetworkOwnerLabel(sourceNetworkOwner)}${sourceNetworkOwner.prefix == null ? '' : `, ${sourceNetworkOwner.prefix}`}`
+
+  return {
+    contactEmails: route.contactEmails,
+    copyText: [
+      `Please investigate persistent packet loss observed by continuous MTR-style probes from ${formatSourceIdentityInline(sourceIdentity)} to ${destinationList}.`,
+      '',
+      'Source:',
+      ...formatSourceIdentityLines(sourceIdentity),
+      sourceNetworkLine,
+      '',
+      'Escalation route:',
+      route.recommendedLine,
+      `Reason: ${route.rationaleLine}`,
+      '',
+      'Destination:',
+      `Destination host: ${destinationList}`,
+      shapeKind === 'protocol_selective' ? 'Destination service: TCP/443 HTTPS' : null,
+      '',
+      'Suspect hop:',
+      `Hop: ${hopDisplay}`,
+      `Owner: ${ownerLabel}`,
+      `Contact: ${route.contactLine}`,
+      owner.prefix == null ? null : `Prefix: ${owner.prefix}`,
+      '',
+      'Evidence:',
+      ...formatExternalEvidenceLines(primary, publicBaseUrl, rawMtrSamplesByTarget),
+      applicationImpactLine,
+      protocolLine,
+      timelineLine,
+    ]
+      .filter((line): line is string => line != null)
+      .join('\n'),
+    ownerLabel,
+    summaryAction: route.summaryAction,
+  }
+}
+
+function formatEnglishList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? ''
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
+function capitalizeSentence(text: string): string {
+  return text.length === 0 ? text : `${text[0].toUpperCase()}${text.slice(1)}`
+}
+
+function normalizePublicBaseUrl(publicBaseUrl: string | undefined): string | null {
+  if (publicBaseUrl == null || publicBaseUrl.trim() === '') return null
+  return publicBaseUrl.endsWith('/') ? publicBaseUrl : `${publicBaseUrl}/`
+}
+
+function formatEvidenceUrl(
+  publicBaseUrl: string | undefined,
+  target: string,
+  file: string,
+): string | null {
+  const normalized = normalizePublicBaseUrl(publicBaseUrl)
+  if (normalized == null) return null
+  return `${normalized}${encodeURIComponent(target)}/${file}`
+}
+
+interface EvidenceMethod {
+  label: string
+  rawMtrUrl: string | null
+  target: string
+}
+
+function formatExternalEvidenceLines(
+  primary: CrossTargetHopIssue,
+  publicBaseUrl?: string,
+  rawMtrSamplesByTarget?: Map<string, RawMtrEvidenceSample>,
+): string[] {
+  const methods: EvidenceMethod[] = []
+  for (const target of primary.targets) {
+    if (target.includes('via-namespace')) {
+      continue
+    }
+
+    if (target.includes('tcp-native')) {
+      methods.push({
+        label: 'direct TCP/443 native raw-socket cross-check',
+        rawMtrUrl: null,
+        target,
+      })
+      continue
+    }
+
+    if (target.includes('tcp-connect')) {
+      methods.push({
+        label: 'direct TCP/443 connect check',
+        rawMtrUrl: null,
+        target,
+      })
+      continue
+    }
+
+    if (target.includes('tcp-mtr')) {
+      methods.push({
+        label: 'direct TCP/443 MTR',
+        rawMtrUrl: formatEvidenceUrl(publicBaseUrl, target, 'latest.txt'),
+        target,
+      })
+      continue
+    }
+
+    if (target.includes('tcp')) {
+      methods.push({
+        label: 'direct TCP/443 probe',
+        rawMtrUrl: null,
+        target,
+      })
+      continue
+    }
+
+    methods.push({
+      label: 'direct ICMP MTR comparison',
+      rawMtrUrl: formatEvidenceUrl(publicBaseUrl, target, 'latest.txt'),
+      target,
+    })
+  }
+
+  const uniqueMethodLabels = [...new Set(methods.map((method) => method.label))]
+  if (uniqueMethodLabels.length === 0) {
+    return []
+  }
+
+  const lines = [`External evidence paths: ${formatEnglishList(uniqueMethodLabels)}.`]
+  const rawMtrExample = selectInlineRawMtrExample(methods, rawMtrSamplesByTarget)
+  if (rawMtrExample != null) {
+    lines.push(
+      '',
+      `Problematic raw MTR example (${formatInlineRawMtrExampleLabel(rawMtrExample)}):`,
+      '```text',
+      trimInlineRawMtrExample(rawMtrExample.sample.rawText),
+      '```',
+    )
+  }
+
+  const rawMtrUrls = [...new Set(methods.flatMap((method) => method.rawMtrUrl ?? []))]
+  if (rawMtrUrls.length > 0) {
+    lines.push(
+      '',
+      `Live latest raw MTR output (may differ by the time this message is read): ${rawMtrUrls.join(', ')}`,
+    )
+  }
+  return lines
+}
+
+interface InlineRawMtrExample {
+  label: string
+  sample: RawMtrEvidenceSample
+}
+
+function selectInlineRawMtrExample(
+  methods: EvidenceMethod[],
+  rawMtrSamplesByTarget: Map<string, RawMtrEvidenceSample> | undefined,
+): InlineRawMtrExample | null {
+  if (rawMtrSamplesByTarget == null) return null
+  const preferred =
+    methods.find((method) => method.target.includes('tcp-mtr')) ??
+    methods.find((method) => method.rawMtrUrl != null)
+  if (preferred == null) return null
+  const sample = rawMtrSamplesByTarget.get(preferred.target)
+  if (sample == null || sample.rawText.trim() === '') return null
+  return { label: preferred.label, sample }
+}
+
+function formatInlineRawMtrExampleLabel(example: InlineRawMtrExample): string {
+  const parts = [
+    example.label,
+    `collected ${formatAbsoluteCollectedAt(example.sample.collectedAt)}`,
+  ]
+  const lossParts = [
+    example.sample.destinationLossPct == null || example.sample.destinationLossPct <= 0
+      ? null
+      : `destination loss ${example.sample.destinationLossPct.toFixed(1)}%`,
+    example.sample.worstHopLossPct == null || example.sample.worstHopLossPct <= 0
+      ? null
+      : `worst-hop loss ${example.sample.worstHopLossPct.toFixed(1)}%`,
+  ].filter((part): part is string => part != null)
+  if (lossParts.length > 0) {
+    parts.push(lossParts.join(', '))
+  }
+  return parts.join(', ')
+}
+
+function trimInlineRawMtrExample(rawText: string): string {
+  const trimmed = rawText.trim()
+  const maxChars = 6_000
+  if (trimmed.length <= maxChars) return trimmed
+  return `${trimmed.slice(0, maxChars).trimEnd()}\n… [truncated]`
+}
+
+function formatPortList(ports: number[]): string {
+  if (ports.length === 0) return 'TCP connect'
+  return `TCP/${ports.join(',')}`
+}
+
+function summarizeTcpConnectImpact(
+  destinations: string[],
+  perTargetSnapshots: PerTargetSnapshots[] | undefined,
+): TcpConnectImpactSummary | null {
+  if (perTargetSnapshots == null) return null
+
+  const destinationSet = new Set(destinations)
+  const connectSnapshots = perTargetSnapshots.flatMap((entry) => {
+    if (entry.engine !== 'connect' || entry.protocol !== 'tcp') return []
+    return entry.snapshots.filter((snapshot) => destinationSet.has(snapshot.host))
+  })
+  if (connectSnapshots.length === 0) return null
+
+  const lossValues = connectSnapshots.flatMap((snapshot) =>
+    snapshot.destinationLossPct == null ? [] : [snapshot.destinationLossPct],
+  )
+  if (lossValues.length === 0) return null
+
+  const lossCount = lossValues.filter((lossPct) => lossPct > 0).length
+  const averageLossPct = average(lossValues) ?? 0
+  const ports = [...new Set(connectSnapshots.map((snapshot) => snapshot.port))].sort(
+    (left, right) => left - right,
+  )
+  const destinationLabel =
+    destinations.length === 1 ? destinations[0] : `${destinations.length} affected destinations`
+  const portLabel = formatPortList(ports)
+
+  if (lossCount === 0) {
+    const sentence = `${portLabel} probes to ${destinationLabel} stayed healthy (${lossCount}/${lossValues.length} lossy snapshots), so this is traceroute/MTR evidence rather than confirmed end-to-end application impact.`
+    return {
+      evidenceLine: `Application impact: ${sentence}`,
+      summarySentence: sentence,
+    }
+  }
+
+  const sentence = `${portLabel} probes to ${destinationLabel} also saw destination loss (${lossCount}/${lossValues.length} lossy snapshots, ~${averageLossPct.toFixed(1)}% average), so end-to-end application impact is observed.`
+  return {
+    evidenceLine: `Application impact: ${sentence}`,
+    summarySentence: sentence,
+  }
+}
+
 export function getCrossTargetDiagnosis(
   crossIssues: CrossTargetHopIssue[],
   hopProtocolStats?: Map<string, Map<ProbeProtocol, HopProtocolStat>>,
@@ -816,6 +1251,11 @@ export function getCrossTargetDiagnosis(
 ): CrossTargetDiagnosis {
   const rollupBucketsByTarget = context.rollupBucketsByTarget
   const perTargetSnapshots = context.perTargetSnapshots
+  const networkOwnersByHopHost = context.networkOwnersByHopHost
+  const sourceIdentity = context.sourceIdentity
+  const sourceNetworkOwner = context.sourceNetworkOwner
+  const publicBaseUrl = context.publicBaseUrl
+  const rawMtrSamplesByTarget = context.rawMtrSamplesByTarget
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
@@ -836,6 +1276,7 @@ export function getCrossTargetDiagnosis(
       const icmpLossPct = issue.icmpAverageLossPct ?? 0
       return {
         className: 'bad',
+        escalation: null,
         label: 'Protocol-selective destination loss',
         shape: destinationShape,
         summary: `${issue.destinationHost} shows TCP${tcpPorts} destination loss across ${issue.tcpTargetCount} probe paths (~${tcpLossPct.toFixed(1)}% average, ${issue.tcpDestinationLossCount}/${issue.tcpSampleCount} lossy snapshots) while ICMP probes to the same destination stay near-clean (~${icmpLossPct.toFixed(1)}% average across ${issue.icmpTargetCount} probe paths). This points to TCP path, middlebox, ECMP, or destination-edge behavior rather than general packet loss; ICMP-only monitoring would miss it.`,
@@ -845,6 +1286,7 @@ export function getCrossTargetDiagnosis(
 
     return {
       className: 'good',
+      escalation: null,
       label: 'No cross-target pattern',
       shape,
       summary:
@@ -868,7 +1310,9 @@ export function getCrossTargetDiagnosis(
   const probePathPhrase =
     primary.targetCount === destinationCount
       ? `${primary.targetCount} probe ${primary.targetCount === 1 ? 'path' : 'paths'}`
-      : `${primary.targetCount} probe paths across ${destinationCount} ${destinationNoun}`
+      : destinationCount === 1
+        ? `${primary.targetCount} probe paths`
+        : `${primary.targetCount} probe paths across ${destinationCount} ${destinationNoun}`
   const severe = primary.totalDownstreamLoss >= 10
   // Upgrade the hop display string with any richer PTR-bearing form seen
   // across the full 7d history. Per-snapshot rDNS is flaky, so the
@@ -891,6 +1335,12 @@ export function getCrossTargetDiagnosis(
       : timeline.durationHours < 1
         ? ` Degraded since ${timeline.firstDegradedAt} (just flagged).`
         : ` Degraded since ${timeline.firstDegradedAt} (continuous ${timeline.durationHours}h).`
+  const timelineLine =
+    timeline == null
+      ? null
+      : timeline.durationHours < 1
+        ? `History: degraded since ${timeline.firstDegradedAt} (just flagged).`
+        : `History: degraded since ${timeline.firstDegradedAt} (continuous ${timeline.durationHours}h).`
   const unaffectedSiblings =
     perTargetSnapshots == null
       ? []
@@ -909,26 +1359,70 @@ export function getCrossTargetDiagnosis(
       : ` ${unaffectedSiblings.length} sibling ${
           unaffectedSiblings.length === 1 ? 'destination' : 'destinations'
         } through this hop (${unaffectedSiblings.slice(0, 3).join(', ')}${unaffectedSiblings.length > 3 ? ', …' : ''}) are unaffected, so the problem is prefix-specific, not a generic router failure.`
+  const tcpConnectImpact = summarizeTcpConnectImpact(
+    primary.affectedDestinations,
+    perTargetSnapshots,
+  )
 
   if (shape.kind === 'protocol_selective') {
     const icmpPct = primary.icmpAverageLossPct ?? 0
     const tcpPct = primary.tcpAverageLossPct ?? 0
+    const owner = networkOwnersByHopHost?.get(primary.host) ?? null
+    const escalation = buildCrossTargetEscalation({
+      applicationImpactLine: tcpConnectImpact?.evidenceLine,
+      destinationList: `${destinationList}${moreDestinations}`,
+      hopDisplay,
+      owner,
+      primary,
+      publicBaseUrl,
+      rawMtrSamplesByTarget,
+      shapeKind: shape.kind,
+      sourceIdentity,
+      sourceNetworkOwner,
+      timelineLine,
+    })
+    const escalationSuffix =
+      escalation == null
+        ? ' The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.'
+        : ` ${capitalizeSentence(escalation.summaryAction)}.`
+    const applicationImpactSuffix =
+      tcpConnectImpact == null
+        ? ' Use the TCP connect check to confirm end-to-end application impact.'
+        : ` ${tcpConnectImpact.summarySentence}`
     return {
       className: 'bad',
+      escalation,
       label: 'Protocol-selective loss',
       shape,
-      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy while real HTTPS traffic degrades. The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.${timelineSuffix}${siblingsSuffix}`,
+      summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP traceroute probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy.${applicationImpactSuffix}${escalationSuffix}${timelineSuffix}${siblingsSuffix}`,
       suspect: primary,
     }
   }
 
   const lossLabel =
     primary.averageLossPct == null ? '' : ` at ~${primary.averageLossPct.toFixed(1)}% average loss`
+  const owner = networkOwnersByHopHost?.get(primary.host) ?? null
+  const escalation = buildCrossTargetEscalation({
+    applicationImpactLine: tcpConnectImpact?.evidenceLine,
+    destinationList: `${destinationList}${moreDestinations}`,
+    hopDisplay,
+    owner,
+    primary,
+    publicBaseUrl,
+    rawMtrSamplesByTarget,
+    shapeKind: shape.kind,
+    sourceIdentity,
+    sourceNetworkOwner,
+    timelineLine,
+  })
+  const escalationSuffix =
+    escalation == null ? 'consider escalating with the upstream network' : escalation.summaryAction
   return {
     className: severe ? 'bad' : 'warn',
+    escalation,
     label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
     shape,
-    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - consider escalating with the upstream network.${timelineSuffix}${siblingsSuffix}`,
+    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - ${escalationSuffix}.${timelineSuffix}${siblingsSuffix}`,
     suspect: primary,
   }
 }

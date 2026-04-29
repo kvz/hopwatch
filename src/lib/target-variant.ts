@@ -33,6 +33,8 @@ export function deriveTargetVariant(input: TargetVariantInput): string | null {
   // deviates from the default `mtr`, so the common case stays quiet.
   if (input.engine === 'native') {
     parts.push('native')
+  } else if (input.engine === 'connect') {
+    parts.push('connect')
   }
   if (parts.length === 0) return null
   // ` · ` (middle dot with spaces) reads better than slashes or pipes in

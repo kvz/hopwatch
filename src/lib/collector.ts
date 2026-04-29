@@ -43,6 +43,16 @@ export interface NativeProbeRequest {
 
 export type RunNativeProbeFn = (request: NativeProbeRequest) => Promise<RawMtrEvent[]>
 
+export interface ConnectProbeRequest {
+  host: string
+  packets: number
+  timeoutMs: number
+  ipVersion: '4' | '6'
+  port: number
+}
+
+export type RunConnectProbeFn = (request: ConnectProbeRequest) => Promise<RawMtrEvent[]>
+
 // Load the Bun-only FFI prober lazily so this module can still be imported
 // under vitest/Node (which lacks `bun:ffi`). Tests that exercise engine=native
 // must inject a `runNativeProbeFn` dependency.
@@ -64,6 +74,11 @@ async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMt
     packets: request.packets,
     timeoutMs: request.timeoutMs,
   })
+}
+
+async function defaultRunConnectProbe(request: ConnectProbeRequest): Promise<RawMtrEvent[]> {
+  const { probeTargetConnect } = await import('./prober-connect.ts')
+  return probeTargetConnect(request)
 }
 
 async function defaultWarmupNativeEngine(): Promise<void> {
@@ -105,6 +120,7 @@ export interface CollectorDependencies {
   getNow?: () => Date
   openStoreFn?: (dbPath: string) => Promise<HopwatchStorage>
   runCommand?: RunCommand
+  runConnectProbeFn?: RunConnectProbeFn
   runNativeProbeFn?: RunNativeProbeFn
   // Calls warmupNativeEngine() from prober-native.ts; injectable so tests
   // don't have to load bun:ffi to exercise the musl / missing-glibc guard.
@@ -156,6 +172,7 @@ async function mapWithConcurrency<T>(
 
 export interface CollectSnapshotDeps {
   runCommand?: RunCommand
+  runConnectProbeFn?: RunConnectProbeFn
   runNativeProbeFn?: RunNativeProbeFn
   sqliteStore?: HopwatchStorage
 }
@@ -187,13 +204,37 @@ export async function collectSnapshot(
   logger?: Logger,
 ): Promise<void> {
   const runCommand = deps.runCommand ?? execFileAsync
+  const runConnectProbeFn = deps.runConnectProbeFn ?? defaultRunConnectProbe
   const runNativeProbeFn = deps.runNativeProbeFn ?? defaultRunNativeProbe
   if (deps.sqliteStore == null) {
     throw new Error('collectSnapshot requires an open SQLite store')
   }
 
   let rawEvents: RawMtrEvent[]
-  if (target.engine === 'native') {
+  if (target.engine === 'connect') {
+    if (target.protocol !== 'tcp') {
+      throw new Error(
+        `target '${target.slug}' uses engine='connect' but protocol='${target.protocol}'; engine='connect' requires protocol='tcp'`,
+      )
+    }
+
+    if (target.probeMode === 'netns') {
+      throw new Error(
+        `target '${target.slug}' uses engine='connect' with probe_mode='netns', which is not yet supported`,
+      )
+    }
+
+    rawEvents = await runConnectProbeFn({
+      host: target.host,
+      ipVersion: options.ipVersion,
+      packets: options.packets,
+      port: target.port,
+      timeoutMs: options.probeTimeoutMs,
+    })
+    if (rawEvents.length === 0) {
+      throw new Error(`connect probe for '${target.slug}' returned no events`)
+    }
+  } else if (target.engine === 'native') {
     if (options.ipVersion !== '4') {
       throw new Error(
         `target '${target.slug}' uses engine='native' but ip_version=${options.ipVersion}; IPv6 is not yet supported`,
@@ -384,6 +425,7 @@ export async function runCollector(
   const timestamp = getTimestamp(nowDate)
   const snapshotDeps: CollectSnapshotDeps = {
     runCommand: deps.runCommand,
+    runConnectProbeFn: deps.runConnectProbeFn,
     runNativeProbeFn: deps.runNativeProbeFn,
   }
   const openStore =

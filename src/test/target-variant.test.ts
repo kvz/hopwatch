@@ -53,6 +53,18 @@ describe('deriveTargetVariant', () => {
     ).toBe('TCP 443 · native')
   })
 
+  test('surfaces the connect engine when it is the non-default choice', () => {
+    expect(
+      deriveTargetVariant({
+        engine: 'connect',
+        netns: null,
+        port: 443,
+        probeMode: 'default',
+        protocol: 'tcp',
+      }),
+    ).toBe('TCP 443 · connect')
+  })
+
   test('flags netns when present, even for default ICMP', () => {
     expect(
       deriveTargetVariant({

@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { formatConfigSummary, loadConfig } from '../lib/config.ts'
 
 describe('loadConfig netns validation', () => {
@@ -12,6 +12,7 @@ describe('loadConfig netns validation', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -226,6 +227,68 @@ host = "example.com"
     const config = await loadConfig(configPath)
     expect(config.resolvedSqlitePath).toBe(dbPath)
     expect(formatConfigSummary(config)).toContain(`sqlite:    ${dbPath}`)
+  })
+
+  test('loads source identity from config', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[identity]
+hostname = "probe-1.example.net"
+public_hostname = "hopwatch.example.net"
+site_label = "dc-1"
+egress_ip = "203.0.113.10"
+egress_ip_lookup_url = "https://ip.example.net"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.identity).toEqual({
+      egress_ip: '203.0.113.10',
+      egress_ip_lookup_url: 'https://ip.example.net',
+      hostname: 'probe-1.example.net',
+      public_hostname: 'hopwatch.example.net',
+      site_label: 'dc-1',
+    })
+  })
+
+  test('overrides source identity from environment', async () => {
+    vi.stubEnv('HOPWATCH_IDENTITY_HOSTNAME', 'env-probe.example.net')
+    vi.stubEnv('HOPWATCH_IDENTITY_PUBLIC_HOSTNAME', 'env-hopwatch.example.net')
+    vi.stubEnv('HOPWATCH_IDENTITY_SITE_LABEL', 'env-dc')
+    vi.stubEnv('HOPWATCH_IDENTITY_EGRESS_IP', '198.51.100.20')
+    vi.stubEnv('HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL', 'https://env-ip.example.net')
+
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[identity]
+hostname = "probe-1.example.net"
+public_hostname = "hopwatch.example.net"
+site_label = "dc-1"
+egress_ip = "203.0.113.10"
+egress_ip_lookup_url = "https://ip.example.net"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.identity).toEqual({
+      egress_ip: '198.51.100.20',
+      egress_ip_lookup_url: 'https://env-ip.example.net',
+      hostname: 'env-probe.example.net',
+      public_hostname: 'env-hopwatch.example.net',
+      site_label: 'env-dc',
+    })
   })
 
   test('rejects engine="native" combined with probe_mode="netns"', async () => {

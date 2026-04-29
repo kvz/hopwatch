@@ -628,10 +628,25 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
           },
         ],
       ]),
+      sourceIdentity: {
+        egressIp: '203.0.113.10',
+        hostname: 'probe-1.example.net',
+        publicHostname: 'hopwatch.example.net',
+        siteLabel: 'dc-1',
+      },
     })
 
     expect(diagnosis.summary).toContain('Report this to Viewqwest Pte Ltd (AS18106)')
     expect(diagnosis.summary).toContain('noc.sg@viewqwest.com')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'persistent packet loss observed by continuous MTR-style probes from probe-1.example.net, egress 203.0.113.10, dc-1',
+    )
+    expect(diagnosis.escalation?.copyText).toContain('Source hostname: probe-1.example.net')
+    expect(diagnosis.escalation?.copyText).toContain('Source public hostname: hopwatch.example.net')
+    expect(diagnosis.escalation?.copyText).toContain('Source egress IP: 203.0.113.10')
+    expect(diagnosis.escalation?.copyText).toContain('Source site/datacenter: dc-1')
+    expect(diagnosis.escalation?.copyText).not.toContain('Hopwatch loss')
+    expect(diagnosis.escalation?.copyText).not.toContain('our observer')
     expect(diagnosis.escalation?.copyText).toContain('Contact: noc.sg@viewqwest.com')
     expect(diagnosis.escalation?.copyText).toContain('Prefix: 132.147.112.0/24')
   })

@@ -101,6 +101,21 @@ const serverSchema = z.object({
 })
 export type ServerConfig = z.infer<typeof serverSchema>
 
+const identitySchema = z.object({
+  // Optional human/operator context for escalation copy. Hopwatch can discover
+  // a local hostname and request Host header, but provider/datacenter naming
+  // is site-specific and should come from config.
+  hostname: z.string().min(1).optional(),
+  public_hostname: z.string().min(1).optional(),
+  site_label: z.string().min(1).optional(),
+  egress_ip: z.string().min(1).optional(),
+  // Disabled by default to avoid surprising outbound calls. Operators can set
+  // this to an endpoint such as https://api.ipify.org when they want Hopwatch
+  // to discover the source NAT IP at daemon startup.
+  egress_ip_lookup_url: z.string().url().optional(),
+})
+export type IdentityConfig = z.infer<typeof identitySchema>
+
 const probeSchema = z.object({
   interval_seconds: z.number().int().positive().default(900),
   packets: z.number().int().positive().default(20),
@@ -126,6 +141,7 @@ export type StorageSettings = z.infer<typeof storageSchema>
 
 const configSchema = z.object({
   server: serverSchema.default({}),
+  identity: identitySchema.default({}),
   probe: probeSchema.default({}),
   chart: chartSchema.default({}),
   storage: storageSchema.default({}),
@@ -144,6 +160,7 @@ function applyEnvOverrides(raw: unknown): unknown {
   const env = process.env
   const overrides: Record<string, Record<string, boolean | number | string>> = {
     server: {},
+    identity: {},
     probe: {},
     chart: {},
     storage: {},
@@ -163,6 +180,26 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   if (env.HOPWATCH_NODE_LABEL) {
     overrides.server.node_label = env.HOPWATCH_NODE_LABEL
+  }
+
+  if (env.HOPWATCH_IDENTITY_HOSTNAME) {
+    overrides.identity.hostname = env.HOPWATCH_IDENTITY_HOSTNAME
+  }
+
+  if (env.HOPWATCH_IDENTITY_PUBLIC_HOSTNAME) {
+    overrides.identity.public_hostname = env.HOPWATCH_IDENTITY_PUBLIC_HOSTNAME
+  }
+
+  if (env.HOPWATCH_IDENTITY_SITE_LABEL) {
+    overrides.identity.site_label = env.HOPWATCH_IDENTITY_SITE_LABEL
+  }
+
+  if (env.HOPWATCH_IDENTITY_EGRESS_IP) {
+    overrides.identity.egress_ip = env.HOPWATCH_IDENTITY_EGRESS_IP
+  }
+
+  if (env.HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL) {
+    overrides.identity.egress_ip_lookup_url = env.HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL
   }
 
   if (env.HOPWATCH_MTR_BIN) {
@@ -199,7 +236,7 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   const rawRecord = raw as Record<string, unknown>
   const merged: Record<string, unknown> = { ...rawRecord }
-  for (const section of ['server', 'probe', 'chart', 'storage'] as const) {
+  for (const section of ['server', 'identity', 'probe', 'chart', 'storage'] as const) {
     const current = (rawRecord[section] as Record<string, unknown> | undefined) ?? {}
     const layer = overrides[section]
     if (Object.keys(layer).length > 0) {

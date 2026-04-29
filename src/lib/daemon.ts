@@ -1,3 +1,4 @@
+import { hostname as osHostname } from 'node:os'
 // @ts-expect-error see note on sortableTablesSource - same import-attribute shape.
 import copyButtonsSource from '../client/copy-buttons.ts' with { type: 'text' }
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
@@ -10,6 +11,11 @@ import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import { parseListenAddress } from './listen.ts'
 import type { Logger } from './logger.ts'
+import {
+  buildSourceIdentity,
+  type SourceIdentity,
+  sourceIdentityWithFallback,
+} from './source-identity.ts'
 import { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 // Lazily transpile the sortable-tables client to browser JS on first request.
@@ -176,6 +182,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const signature = config.chart.signature
   const store = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
+  const baseSourceIdentity = await loadDaemonSourceIdentity(config, logger)
 
   const scheduler = startScheduler(config, logger)
 
@@ -224,6 +231,9 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       // for remote peers instead of repeating the label.
       const selfHost =
         request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? null
+      const sourceIdentity = sourceIdentityWithFallback(baseSourceIdentity, {
+        publicHostname: publicHostnameFromHostHeader(selfHost),
+      })
 
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const html = await renderRootIndex(
@@ -234,6 +244,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           config.probe.keep_days,
           Date.now(),
           signature,
+          sourceIdentity,
         )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
@@ -375,4 +386,61 @@ function parseHostname(listen: string): string | undefined {
 
 function parsePort(listen: string): number {
   return parseListenAddress(listen).port
+}
+
+function publicHostnameFromHostHeader(hostHeader: string | null): string | null {
+  const first = hostHeader?.split(',')[0]?.trim()
+  if (first == null || first === '') {
+    return null
+  }
+
+  return first.replace(/:\d+$/, '')
+}
+
+async function loadDaemonSourceIdentity(
+  config: LoadedConfig,
+  logger: Logger,
+): Promise<SourceIdentity> {
+  const egressIp =
+    config.identity.egress_ip ??
+    (config.identity.egress_ip_lookup_url == null
+      ? null
+      : await discoverEgressIp(config.identity.egress_ip_lookup_url, logger))
+
+  return buildSourceIdentity({
+    egressIp,
+    hostname: config.identity.hostname ?? osHostname(),
+    publicHostname: config.identity.public_hostname,
+    siteLabel: config.identity.site_label,
+  })
+}
+
+async function discoverEgressIp(url: string, logger: Logger): Promise<string | null> {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(2500),
+    })
+    if (!response.ok) {
+      logger.warn('egress ip discovery failed', {
+        status: response.status,
+        url,
+      })
+      return null
+    }
+
+    const text = (await response.text()).trim()
+    if (!/^[0-9a-f:.]+$/i.test(text)) {
+      logger.warn('egress ip discovery returned unexpected body', { url })
+      return null
+    }
+
+    return text
+  } catch (err) {
+    if (!(err instanceof Error)) {
+      throw new Error(`Was thrown a non-error: ${err}`)
+    }
+
+    logger.warn('egress ip discovery failed', { message: err.message, url })
+    return null
+  }
 }

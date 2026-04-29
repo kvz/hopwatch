@@ -6,6 +6,18 @@ listen     = "127.0.0.1:8080"
 data_dir   = "./hopwatch-data"
 node_label = "dev"
 
+[identity]
+# Optional source context used in escalation copy. `hostname` is auto-discovered
+# when omitted, and `public_hostname` falls back to the request Host header.
+# Provider/datacenter labels are environment-specific and should be configured.
+hostname        = "probe-host.example.com"
+public_hostname = "hopwatch.example.com"
+site_label      = "example-dc-1"
+# egress_ip can be configured directly, or discovered at startup by setting
+# egress_ip_lookup_url to a plain-text IP endpoint such as https://api.ipify.org.
+# egress_ip            = "203.0.113.10"
+# egress_ip_lookup_url = "https://api.ipify.org"
+
 [probe]
 interval_seconds = 900
 packets          = 20

@@ -8,6 +8,7 @@ import { createLogger } from '../lib/logger.ts'
 function buildConfig(overrides: { jitterSeconds?: number } = {}): LoadedConfig {
   return {
     chart: { signature: 'x' },
+    identity: {},
     peer: [],
     probe: {
       concurrency: 1,

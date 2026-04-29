@@ -25,6 +25,7 @@ import {
   summarizeHopProtocolStats,
   summarizeSnapshots,
 } from './snapshot-aggregate.ts'
+import type { SourceIdentity } from './source-identity.ts'
 import type { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
@@ -104,6 +105,7 @@ export async function renderRootIndex(
   keepDays: number,
   now = Date.now(),
   signature?: string,
+  sourceIdentity?: SourceIdentity,
 ): Promise<string> {
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
@@ -205,6 +207,7 @@ export async function renderRootIndex(
     now,
     perTargetSnapshots,
     rollupBucketsByTarget,
+    sourceIdentity,
   }
   const preliminaryCrossTargetDiagnosis = getCrossTargetDiagnosis(
     crossIssues,

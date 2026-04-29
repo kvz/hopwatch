@@ -3,6 +3,11 @@ import { formatNetworkOwnerLabel, type NetworkOwnerInfo } from './network-owner.
 import { average } from './raw.ts'
 import type { MtrRollupBucket } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
+import {
+  formatSourceIdentityInline,
+  formatSourceIdentityLines,
+  type SourceIdentity,
+} from './source-identity.ts'
 
 export interface SnapshotAggregate {
   averageDestinationLossPct: number | null
@@ -808,6 +813,7 @@ export function classifyCrossTargetShape(
 
 export interface CrossTargetDiagnosisContext {
   networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
+  sourceIdentity?: SourceIdentity
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
   // and PTR discovery for the suspect hop.
   rollupBucketsByTarget?: MtrRollupBucket[][]
@@ -824,12 +830,14 @@ function buildCrossTargetEscalation({
   owner,
   primary,
   shapeKind,
+  sourceIdentity,
 }: {
   destinationList: string
   hopDisplay: string
   owner: NetworkOwnerInfo | null
   primary: CrossTargetHopIssue
   shapeKind: CrossTargetShapeKind
+  sourceIdentity?: SourceIdentity
 }): CrossTargetEscalation | null {
   if (owner == null) return null
 
@@ -846,7 +854,8 @@ function buildCrossTargetEscalation({
   return {
     contactEmails: owner.contactEmails,
     copyText: [
-      `Please investigate persistent Hopwatch loss from our observer to ${destinationList}.`,
+      `Please investigate persistent packet loss observed by continuous MTR-style probes from ${formatSourceIdentityInline(sourceIdentity)} to ${destinationList}.`,
+      ...formatSourceIdentityLines(sourceIdentity),
       `Suspect hop: ${hopDisplay}`,
       `Report to: ${ownerLabel}`,
       `Contact: ${contacts}`,
@@ -868,6 +877,7 @@ export function getCrossTargetDiagnosis(
   const rollupBucketsByTarget = context.rollupBucketsByTarget
   const perTargetSnapshots = context.perTargetSnapshots
   const networkOwnersByHopHost = context.networkOwnersByHopHost
+  const sourceIdentity = context.sourceIdentity
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
@@ -974,6 +984,7 @@ export function getCrossTargetDiagnosis(
       owner,
       primary,
       shapeKind: shape.kind,
+      sourceIdentity,
     })
     const escalationSuffix =
       escalation == null
@@ -998,6 +1009,7 @@ export function getCrossTargetDiagnosis(
     owner,
     primary,
     shapeKind: shape.kind,
+    sourceIdentity,
   })
   const escalationSuffix =
     escalation == null

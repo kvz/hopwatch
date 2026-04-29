@@ -5,6 +5,7 @@ import type { SnapshotSummary } from '../lib/snapshot.ts'
 import {
   type CrossTargetHopIssue,
   classifyCrossTargetShape,
+  classifyDestinationProtocolShape,
   computeHopDegradedSince,
   findRichestHopDisplayName,
   findUnaffectedSiblingDestinations,
@@ -701,6 +702,103 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(cross[0].tcpAverageLossPct).toBe(50)
     expect(cross[0].icmpTargetCount).toBe(1)
     expect(cross[0].tcpTargetCount).toBe(1)
+  })
+
+  test('diagnosis flags protocol-selective destination loss when TCP is lossy but ICMP is clean', () => {
+    const buildSnapshots = ({
+      destinationLossPct,
+      protocol,
+      target,
+    }: {
+      destinationLossPct: number
+      protocol: ProbeProtocol
+      target: string
+    }): SnapshotSummary[] =>
+      Array.from({ length: 10 }, (_, index) =>
+        snapshot({
+          collectedAt: `20260420T11${String(index).padStart(2, '0')}00Z`,
+          destinationLossPct,
+          host: 's3.us-west-2.amazonaws.com',
+          port: protocol === 'tcp' ? 443 : 0,
+          protocol,
+          target,
+        }),
+      )
+
+    const diagnosis = getCrossTargetDiagnosis([], undefined, {
+      perTargetSnapshots: [
+        {
+          protocol: 'tcp',
+          snapshots: buildSnapshots({
+            destinationLossPct: 50,
+            protocol: 'tcp',
+            target: 's3-us-west-2-tcp-mtr',
+          }),
+          target: 's3-us-west-2-tcp-mtr',
+        },
+        {
+          protocol: 'tcp',
+          snapshots: buildSnapshots({
+            destinationLossPct: 45,
+            protocol: 'tcp',
+            target: 's3-us-west-2-tcp-native',
+          }),
+          target: 's3-us-west-2-tcp-native',
+        },
+        {
+          protocol: 'icmp',
+          snapshots: buildSnapshots({
+            destinationLossPct: 0,
+            protocol: 'icmp',
+            target: 's3-us-west-2',
+          }),
+          target: 's3-us-west-2',
+        },
+      ],
+    })
+
+    expect(diagnosis.className).toBe('bad')
+    expect(diagnosis.label).toBe('Protocol-selective destination loss')
+    expect(diagnosis.shape.kind).toBe('destination_protocol_selective')
+    expect(diagnosis.summary).toContain('s3.us-west-2.amazonaws.com')
+    expect(diagnosis.summary).toContain('2 probe paths')
+    expect(diagnosis.summary).toContain('ICMP-only monitoring would miss it')
+  })
+
+  test('destination protocol-selective diagnosis requires distinct probe-path identifiers', () => {
+    const snapshots = Array.from({ length: 10 }, (_, index) =>
+      snapshot({
+        collectedAt: `20260420T11${String(index).padStart(2, '0')}00Z`,
+        destinationLossPct: 50,
+        host: 's3.us-west-2.amazonaws.com',
+        protocol: 'tcp',
+        target: 'Amazon S3 us-west-2',
+      }),
+    )
+    const shape = classifyDestinationProtocolShape([
+      {
+        protocol: 'tcp',
+        snapshots,
+        target: 'Amazon S3 us-west-2',
+      },
+      {
+        protocol: 'tcp',
+        snapshots,
+        target: 'Amazon S3 us-west-2',
+      },
+      {
+        protocol: 'icmp',
+        snapshots: snapshots.map((entry) => ({
+          ...entry,
+          destinationLossPct: 0,
+          protocol: 'icmp',
+          target: 'Amazon S3 us-west-2',
+        })),
+        target: 'Amazon S3 us-west-2',
+      },
+    ])
+
+    expect(shape.kind).toBe('none')
   })
 })
 

@@ -238,6 +238,21 @@ export interface CrossTargetHopIssue {
   totalSampleCount: number
 }
 
+export interface CrossTargetDestinationProtocolIssue {
+  destinationHost: string
+  icmpAverageLossPct: number | null
+  icmpDestinationLossCount: number
+  icmpSampleCount: number
+  icmpTargetCount: number
+  icmpTargets: string[]
+  tcpAverageLossPct: number | null
+  tcpDestinationLossCount: number
+  tcpPorts: number[]
+  tcpSampleCount: number
+  tcpTargetCount: number
+  tcpTargets: string[]
+}
+
 // Shape classification for the cross-target diagnosis. Each kind describes
 // a signature in the probe data itself, so the panel sentence can say
 // WHAT kind of problem this is, not just "there is loss". All kinds are
@@ -252,14 +267,23 @@ export interface CrossTargetHopIssue {
 //     multiple targets (the existing "upstream path degraded" shape),
 //     with no protocol asymmetry. Generic network problem at or before
 //     that hop.
+//   - `destination_protocol_selective`: one destination is lossy for TCP
+//     across multiple probe paths, while ICMP to the same destination is
+//     clean. This can still be actionable when ECMP hides any single shared
+//     hop.
 //
 // Shapes left for follow-up (would need additional inputs to this function):
 //   - `destination_only`: destination drops despite clean intermediate
 //     hops. Needs per-target destination loss plumbed through.
 //   - `path_flap`, `topology_change`: need per-bucket host-set history.
-export type CrossTargetShapeKind = 'none' | 'protocol_selective' | 'downstream_from_hop'
+export type CrossTargetShapeKind =
+  | 'none'
+  | 'protocol_selective'
+  | 'downstream_from_hop'
+  | 'destination_protocol_selective'
 
 export interface CrossTargetShape {
+  destinationIssue?: CrossTargetDestinationProtocolIssue | null
   kind: CrossTargetShapeKind
   hop: CrossTargetHopIssue | null
 }
@@ -302,9 +326,12 @@ export interface HopProtocolStat {
   targetCount: number
 }
 
-interface PerTargetSnapshots {
+export interface PerTargetSnapshots {
   protocol: ProbeProtocol
   snapshots: SnapshotSummary[]
+  // Unique probe-path identifier, not the human label. Multiple probe
+  // variants can share a label ("Amazon S3 us-west-2") but still be
+  // independent evidence for a cross-target pattern.
   target: string
 }
 
@@ -456,6 +483,8 @@ export function summarizeCrossTargetHopIssues(
 // signal we've seen on SIN -> us-west-2, so it separates real protocol
 // asymmetry from noise without hiding mid-severity cases.
 const PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT = 30
+const DESTINATION_PROTOCOL_SELECTIVE_MIN_TCP_TARGETS = 2
+const DESTINATION_PROTOCOL_SELECTIVE_MIN_SAMPLES = 10
 // Per-hop loss above which a bucket counts as "still degraded" for the
 // purpose of the "degraded since" timeline. Low enough to not declare
 // recovery on minor variance, high enough to close the run on genuine
@@ -599,6 +628,111 @@ export function computeHopDegradedSince(
 // disqualify an otherwise clear TCP-vs-ICMP split.
 const PROTOCOL_SELECTIVE_ICMP_CEILING_PCT = 10
 
+interface DestinationProtocolAccumulator {
+  destinationLossCount: number
+  ports: Set<number>
+  sampleCount: number
+  targets: Set<string>
+  weightedLoss: number
+}
+
+function emptyDestinationProtocolAccumulator(): DestinationProtocolAccumulator {
+  return {
+    destinationLossCount: 0,
+    ports: new Set(),
+    sampleCount: 0,
+    targets: new Set(),
+    weightedLoss: 0,
+  }
+}
+
+export function summarizeDestinationProtocolIssues(
+  perTarget: PerTargetSnapshots[],
+): CrossTargetDestinationProtocolIssue[] {
+  const byDestination = new Map<string, Map<ProbeProtocol, DestinationProtocolAccumulator>>()
+  for (const entry of perTarget) {
+    for (const snapshot of entry.snapshots) {
+      const lossPct = snapshot.destinationLossPct
+      if (lossPct == null) continue
+      let byProtocol = byDestination.get(snapshot.host)
+      if (byProtocol == null) {
+        byProtocol = new Map()
+        byDestination.set(snapshot.host, byProtocol)
+      }
+      let accumulator = byProtocol.get(entry.protocol)
+      if (accumulator == null) {
+        accumulator = emptyDestinationProtocolAccumulator()
+        byProtocol.set(entry.protocol, accumulator)
+      }
+      accumulator.sampleCount += 1
+      accumulator.weightedLoss += lossPct
+      accumulator.targets.add(entry.target)
+      accumulator.ports.add(snapshot.port)
+      if (lossPct > 0) {
+        accumulator.destinationLossCount += 1
+      }
+    }
+  }
+
+  const issues: CrossTargetDestinationProtocolIssue[] = []
+  for (const [destinationHost, byProtocol] of byDestination.entries()) {
+    const icmp = byProtocol.get('icmp')
+    const tcp = byProtocol.get('tcp')
+    if (tcp == null || tcp.sampleCount === 0) continue
+    issues.push({
+      destinationHost,
+      icmpAverageLossPct:
+        icmp == null || icmp.sampleCount === 0 ? null : icmp.weightedLoss / icmp.sampleCount,
+      icmpDestinationLossCount: icmp?.destinationLossCount ?? 0,
+      icmpSampleCount: icmp?.sampleCount ?? 0,
+      icmpTargetCount: icmp?.targets.size ?? 0,
+      icmpTargets: [...(icmp?.targets ?? [])].sort(),
+      tcpAverageLossPct: tcp.weightedLoss / tcp.sampleCount,
+      tcpDestinationLossCount: tcp.destinationLossCount,
+      tcpPorts: [...tcp.ports].sort((left, right) => left - right),
+      tcpSampleCount: tcp.sampleCount,
+      tcpTargetCount: tcp.targets.size,
+      tcpTargets: [...tcp.targets].sort(),
+    })
+  }
+
+  return issues.sort((left, right) => {
+    const leftDelta = (left.tcpAverageLossPct ?? 0) - (left.icmpAverageLossPct ?? 0)
+    const rightDelta = (right.tcpAverageLossPct ?? 0) - (right.icmpAverageLossPct ?? 0)
+    return (
+      right.tcpTargetCount - left.tcpTargetCount ||
+      rightDelta - leftDelta ||
+      right.tcpDestinationLossCount - left.tcpDestinationLossCount ||
+      (right.tcpAverageLossPct ?? 0) - (left.tcpAverageLossPct ?? 0)
+    )
+  })
+}
+
+export function classifyDestinationProtocolShape(
+  perTarget: PerTargetSnapshots[],
+): CrossTargetShape {
+  const primary =
+    summarizeDestinationProtocolIssues(perTarget).find((issue) => {
+      const icmpLossPct = issue.icmpAverageLossPct
+      const tcpLossPct = issue.tcpAverageLossPct
+      return (
+        issue.tcpTargetCount >= DESTINATION_PROTOCOL_SELECTIVE_MIN_TCP_TARGETS &&
+        issue.tcpSampleCount >= DESTINATION_PROTOCOL_SELECTIVE_MIN_SAMPLES &&
+        issue.icmpSampleCount >= DESTINATION_PROTOCOL_SELECTIVE_MIN_SAMPLES &&
+        icmpLossPct != null &&
+        tcpLossPct != null &&
+        icmpLossPct <= PROTOCOL_SELECTIVE_ICMP_CEILING_PCT &&
+        tcpLossPct - icmpLossPct >= PROTOCOL_SELECTIVE_DELTA_THRESHOLD_PCT
+      )
+    }) ?? null
+
+  if (primary == null) {
+    return { kind: 'none', hop: null }
+  }
+
+  return { destinationIssue: primary, kind: 'destination_protocol_selective', hop: null }
+}
+
 export function classifyCrossTargetShape(
   crossIssues: CrossTargetHopIssue[],
   // Optional: per-hop per-protocol stats over ALL traversals (including
@@ -685,6 +819,30 @@ export function getCrossTargetDiagnosis(
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
+    const destinationShape =
+      perTargetSnapshots == null
+        ? ({ kind: 'none', hop: null } satisfies CrossTargetShape)
+        : classifyDestinationProtocolShape(perTargetSnapshots)
+    if (
+      destinationShape.kind === 'destination_protocol_selective' &&
+      destinationShape.destinationIssue != null
+    ) {
+      const issue = destinationShape.destinationIssue
+      const tcpPorts =
+        issue.tcpPorts.length === 0
+          ? ''
+          : `/${issue.tcpPorts.length === 1 ? issue.tcpPorts[0] : issue.tcpPorts.join(',')}`
+      const tcpLossPct = issue.tcpAverageLossPct ?? 0
+      const icmpLossPct = issue.icmpAverageLossPct ?? 0
+      return {
+        className: 'bad',
+        label: 'Protocol-selective destination loss',
+        shape: destinationShape,
+        summary: `${issue.destinationHost} shows TCP${tcpPorts} destination loss across ${issue.tcpTargetCount} probe paths (~${tcpLossPct.toFixed(1)}% average, ${issue.tcpDestinationLossCount}/${issue.tcpSampleCount} lossy snapshots) while ICMP probes to the same destination stay near-clean (~${icmpLossPct.toFixed(1)}% average across ${issue.icmpTargetCount} probe paths). This points to TCP path, middlebox, ECMP, or destination-edge behavior rather than general packet loss; ICMP-only monitoring would miss it.`,
+        suspect: null,
+      }
+    }
+
     return {
       className: 'good',
       label: 'No cross-target pattern',

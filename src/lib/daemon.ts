@@ -1,4 +1,4 @@
-import { realpath, stat } from 'node:fs/promises'
+import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 // @ts-expect-error Bun supports `with { type: 'text' }` to import the file's source as a string.
 // TypeScript 5.x does not yet model this import-attribute based module shape; the runtime
@@ -349,18 +349,23 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   const dataDir = config.resolvedDataDir
   const rootRenderCache = createRenderCache<string>()
   const targetRenderCache = createRenderCache<RenderedTarget>()
+  const lastGoodRootHtmlByHost = new Map<string, string>()
+  let rootWarmPromise: Promise<void> | null = null
+  let rootRenderGeneration = 0
   const warmSelfHost =
     config.server.public_url == null ? null : new URL(config.server.public_url).host
 
   function clearRenderCaches(): void {
+    rootRenderGeneration += 1
     rootRenderCache.clear()
     targetRenderCache.clear()
   }
 
   async function renderCachedRootIndex(selfHost: string | null): Promise<string> {
     const cacheKey = selfHost ?? ''
-    return rootRenderCache.get(cacheKey, async () =>
-      renderRootIndex(
+    const generation = rootRenderGeneration
+    return rootRenderCache.get(cacheKey, async () => {
+      const html = await renderRootIndex(
         dataDir,
         config.peer,
         nodeLabel,
@@ -368,13 +373,50 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         config.probe.keep_days,
         Date.now(),
         signature,
-      ),
-    )
+      )
+
+      if (generation === rootRenderGeneration) {
+        lastGoodRootHtmlByHost.set(cacheKey, html)
+        await writeFile(path.join(dataDir, 'index.html'), html).catch(() => {})
+      }
+
+      return html
+    })
+  }
+
+  async function readStaleRootIndex(selfHost: string | null): Promise<string | null> {
+    const cacheKey = selfHost ?? ''
+    const memoryHtml = lastGoodRootHtmlByHost.get(cacheKey)
+    if (memoryHtml != null) {
+      return memoryHtml
+    }
+
+    try {
+      const diskHtml = await readFile(path.join(dataDir, 'index.html'), 'utf8')
+      lastGoodRootHtmlByHost.set(cacheKey, diskHtml)
+      return diskHtml
+    } catch {
+      return null
+    }
+  }
+
+  async function getRootIndexForRequest(selfHost: string | null): Promise<string> {
+    const staleHtml = await readStaleRootIndex(selfHost)
+    if (staleHtml != null) {
+      warmRootIndex('request')
+      return staleHtml
+    }
+
+    return renderCachedRootIndex(selfHost)
   }
 
   function warmRootIndex(reason: string): void {
+    if (rootWarmPromise != null) {
+      return
+    }
+
     const started = Date.now()
-    void renderCachedRootIndex(warmSelfHost)
+    rootWarmPromise = renderCachedRootIndex(warmSelfHost)
       .then(() => {
         logger.info('root render cache warmed', {
           elapsedMs: Date.now() - started,
@@ -384,6 +426,9 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : `Was thrown a non-error: ${err}`
         logger.error('root render cache warm failed', { message, reason })
+      })
+      .finally(() => {
+        rootWarmPromise = null
       })
   }
 
@@ -432,7 +477,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? null
 
       if (url.pathname === '/' || url.pathname === '/index.html') {
-        const html = await renderCachedRootIndex(selfHost)
+        const html = await getRootIndexForRequest(selfHost)
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
         })

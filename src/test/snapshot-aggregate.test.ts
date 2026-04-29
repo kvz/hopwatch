@@ -736,7 +736,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     const hetznerCloudOwner = {
       asName: 'HETZNER-CLOUD2-AS',
       asn: 'AS213230',
-      contactEmails: [],
+      contactEmails: ['abuse@hetzner.com'],
       country: 'US',
       fetchedAt: '2026-04-29T00:00:00.000Z',
       ip: '5.161.8.130',
@@ -754,7 +754,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
         hostname: 'ho14up.transloadit.com',
         location: 'Ashburn, VA (ash)',
         provider: 'Hetzner Cloud',
-        providerContactEmails: ['abuse@hetzner.com'],
+        providerContactEmails: ['network@hetzner.com'],
         publicHostname: 'observer1-us-east-1-production.transloadit.com',
         siteLabel: 'us-east-1-hetzner',
       },
@@ -766,11 +766,11 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     })
 
     expect(diagnosis.summary).toContain(
-      'recommended escalation: Hetzner Cloud network team / AS213230 (abuse@hetzner.com)',
+      'recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com)',
     )
     expect(diagnosis.summary).toContain('source and suspect hop are in the same network')
     expect(diagnosis.escalation?.copyText).toContain(
-      'Recommended escalation: Hetzner Cloud network team / AS213230 (abuse@hetzner.com).',
+      'Recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com).',
     )
     expect(diagnosis.escalation?.copyText).toContain(
       'The source egress IP and suspect hop are both announced by HETZNER-CLOUD2-AS (AS213230)',
@@ -778,7 +778,9 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain(
       'the pattern affects 2 external destinations across 4 probe paths from ash-dc1',
     )
-    expect(diagnosis.escalation?.copyText).toContain('Contact: abuse@hetzner.com')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Contact: network@hetzner.com, abuse@hetzner.com',
+    )
     expect(diagnosis.escalation?.copyText).not.toContain(
       'use the owner/ASN as the escalation target',
     )

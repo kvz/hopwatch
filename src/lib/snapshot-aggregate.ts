@@ -926,8 +926,8 @@ function determineEscalationRoute({
   if (sourceOwned) {
     const target = formatSourceProviderEscalationTarget(sourceIdentity, owner)
     const contactEmails = combineContactEmails(
-      owner.contactEmails,
       sourceIdentity?.providerContactEmails ?? [],
+      owner.contactEmails,
     )
     const contactSuffix = formatContactSuffix(contactEmails)
     const asnSuffix = owner.asn == null ? '' : ` and cite ${owner.asn}`

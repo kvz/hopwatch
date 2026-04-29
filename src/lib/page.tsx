@@ -9,7 +9,7 @@ import {
 } from './chart.ts'
 import type { PeerConfig } from './config.ts'
 import type { MtrRollupBucket } from './rollups.ts'
-import { parseCollectedAt, parseStoredSnapshotSummary, type SnapshotSummary } from './snapshot.ts'
+import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 import {
   type DiagnosisAggregate,
   getCrossTargetDiagnosis,
@@ -54,9 +54,9 @@ export async function renderTargetIndex(
 
   let latestSnapshot = snapshots[0]
   if (latestSnapshot.rawText === '') {
-    const latestJson = store.getSnapshotJson(targetSlug, latestSnapshot.fileName)
-    if (latestJson != null) {
-      latestSnapshot = parseStoredSnapshotSummary(latestJson)
+    const latestRawText = store.getSnapshotRawText(targetSlug, latestSnapshot.fileName)
+    if (latestRawText != null) {
+      latestSnapshot = { ...latestSnapshot, rawText: latestRawText }
       snapshots[0] = latestSnapshot
     }
   }

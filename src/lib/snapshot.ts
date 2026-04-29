@@ -19,10 +19,6 @@ const nullableString = z
   .string()
   .nullish()
   .transform((value) => value ?? null)
-const nullableNumberArray = z
-  .array(z.number())
-  .nullish()
-  .transform((value) => value ?? null)
 
 const hopRecordSchema = z.object({
   asn: nullableString,
@@ -92,35 +88,6 @@ export interface SnapshotSummary {
   worstHopLossPct: number | null
 }
 
-const snapshotSummarySchema = z.object({
-  collectedAt: z.string(),
-  destinationAvgRttMs: nullableNumber,
-  destinationHopIndex: nullableNumber,
-  destinationLossPct: nullableNumber,
-  destinationRttMaxMs: nullableNumber,
-  destinationRttMinMs: nullableNumber,
-  destinationRttP50Ms: nullableNumber,
-  destinationRttP90Ms: nullableNumber,
-  destinationRttSamplesMs: nullableNumberArray,
-  diagnosis: snapshotDiagnosisSchema,
-  engine: z.enum(['mtr', 'native'] satisfies [ProbeEngine, ProbeEngine]),
-  fileName: z.string(),
-  hopCount: z.number(),
-  hops: z.array(hopRecordSchema),
-  host: z.string(),
-  netns: nullableString,
-  port: z.number().int().min(1).max(65535),
-  probeMode: z.enum(['default', 'netns'] satisfies [ProbeMode, ProbeMode]),
-  protocol: z.enum(['icmp', 'tcp'] satisfies [ProbeProtocol, ProbeProtocol]),
-  rawText: z.string(),
-  target: z.string(),
-  worstHopLossPct: nullableNumber,
-})
-
-export function parseSnapshotSummaryJson(contents: string): SnapshotSummary {
-  return snapshotSummarySchema.parse(JSON.parse(contents))
-}
-
 function parseNullableNumber(value: string | undefined): number | null {
   if (value == null) {
     return null
@@ -185,6 +152,65 @@ export function renderSnapshotRawText(
   ].join('\n')
 }
 
+export function summarizeStoredRawSnapshot(rawSnapshot: StoredRawSnapshot): SnapshotSummary {
+  const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
+  const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
+  const destinationHop =
+    destinationHopIndex == null
+      ? null
+      : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
+  const destinationAvgRttMs = destinationHop?.avgMs ?? null
+  // Blackholed traces (`sent` events but no `reply`/`host` events at all)
+  // have destinationHopIndex == null. Treat them as 100% destination loss
+  // instead of "unknown" - otherwise full outages vanish from the 3h/30h
+  // charts and the weekly status logic records them as "no destination
+  // loss observed". Preserve null for the genuinely-empty case (probe
+  // tool errored and we have zero events to work with).
+  let destinationLossPct = destinationHop?.lossPct ?? null
+  if (destinationLossPct == null && hasAnySentEvent(rawSnapshot.rawEvents)) {
+    destinationLossPct = 100
+  }
+  const destinationHopIndex1Based = destinationHop?.index ?? null
+  const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
+  const destinationRttSamplesMs = summarizeDestinationSamples(
+    rawSnapshot.rawEvents,
+    destinationHopIndex,
+  ).rttSamplesMs.sort((left, right) => left - right)
+  const destinationRttMinMs =
+    destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
+  const destinationRttMaxMs =
+    destinationRttSamplesMs.length === 0
+      ? null
+      : destinationRttSamplesMs[destinationRttSamplesMs.length - 1]
+  const destinationRttP50Ms = quantile(destinationRttSamplesMs, 0.5)
+  const destinationRttP90Ms = quantile(destinationRttSamplesMs, 0.9)
+
+  return {
+    collectedAt: rawSnapshot.collectedAt,
+    destinationAvgRttMs,
+    destinationHopIndex: destinationHopIndex1Based,
+    destinationLossPct,
+    destinationRttMaxMs,
+    destinationRttMinMs,
+    destinationRttP50Ms,
+    destinationRttP90Ms,
+    destinationRttSamplesMs: destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
+    diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based),
+    engine: rawSnapshot.engine,
+    fileName: rawSnapshot.fileName,
+    hopCount: hops.length,
+    hops,
+    host: rawSnapshot.host,
+    netns: rawSnapshot.netns,
+    port: rawSnapshot.port,
+    probeMode: rawSnapshot.probeMode,
+    protocol: rawSnapshot.protocol,
+    rawText: renderSnapshotRawText(rawSnapshot, hops),
+    target: rawSnapshot.label,
+    worstHopLossPct,
+  }
+}
+
 export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
   const parsed = JSON.parse(contents) as unknown
   if (
@@ -193,64 +219,7 @@ export function parseStoredSnapshotSummary(contents: string): SnapshotSummary {
     'schemaVersion' in parsed &&
     parsed.schemaVersion === 2
   ) {
-    const rawSnapshot = parseStoredRawSnapshot(contents)
-    const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
-    const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
-    const destinationHop =
-      destinationHopIndex == null
-        ? null
-        : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
-    const destinationAvgRttMs = destinationHop?.avgMs ?? null
-    // Blackholed traces (`sent` events but no `reply`/`host` events at all)
-    // have destinationHopIndex == null. Treat them as 100% destination loss
-    // instead of "unknown" - otherwise full outages vanish from the 3h/30h
-    // charts and the weekly status logic records them as "no destination
-    // loss observed". Preserve null for the genuinely-empty case (probe
-    // tool errored and we have zero events to work with).
-    let destinationLossPct = destinationHop?.lossPct ?? null
-    if (destinationLossPct == null && hasAnySentEvent(rawSnapshot.rawEvents)) {
-      destinationLossPct = 100
-    }
-    const destinationHopIndex1Based = destinationHop?.index ?? null
-    const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
-    const destinationRttSamplesMs = summarizeDestinationSamples(
-      rawSnapshot.rawEvents,
-      destinationHopIndex,
-    ).rttSamplesMs.sort((left, right) => left - right)
-    const destinationRttMinMs =
-      destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
-    const destinationRttMaxMs =
-      destinationRttSamplesMs.length === 0
-        ? null
-        : destinationRttSamplesMs[destinationRttSamplesMs.length - 1]
-    const destinationRttP50Ms = quantile(destinationRttSamplesMs, 0.5)
-    const destinationRttP90Ms = quantile(destinationRttSamplesMs, 0.9)
-
-    return {
-      collectedAt: rawSnapshot.collectedAt,
-      destinationAvgRttMs,
-      destinationHopIndex: destinationHopIndex1Based,
-      destinationLossPct,
-      destinationRttMaxMs,
-      destinationRttMinMs,
-      destinationRttP50Ms,
-      destinationRttP90Ms,
-      destinationRttSamplesMs:
-        destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
-      diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based),
-      fileName: rawSnapshot.fileName,
-      host: rawSnapshot.host,
-      hopCount: hops.length,
-      hops,
-      engine: rawSnapshot.engine,
-      netns: rawSnapshot.netns,
-      port: rawSnapshot.port,
-      probeMode: rawSnapshot.probeMode,
-      protocol: rawSnapshot.protocol,
-      rawText: renderSnapshotRawText(rawSnapshot, hops),
-      target: rawSnapshot.label,
-      worstHopLossPct,
-    }
+    return summarizeStoredRawSnapshot(parseStoredRawSnapshot(contents))
   }
 
   const legacy = legacyStoredSnapshotSummarySchema.parse(parsed)

@@ -3,23 +3,27 @@ import { mkdir, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import type { MtrHistoryTarget } from './collector.ts'
+import type { ProbeEngine, ProbeMode, ProbeProtocol } from './config.ts'
 import type { Logger } from './logger.ts'
-import { parseStoredRawSnapshot, type StoredRawSnapshot } from './raw.ts'
+import { parseStoredRawSnapshot, type RawMtrEvent, type StoredRawSnapshot } from './raw.ts'
 import {
   aggregateSnapshotsToRollupBuckets,
   buildRollupFile,
   isoBucketStartToFileName,
+  type MtrRollupBucket,
   type MtrRollupFile,
   mergeRollupBuckets,
   mtrRollupFileSchema,
   type RollupGranularity,
 } from './rollups.ts'
 import {
+  diagnoseSnapshot,
   formatCompactCollectedAt,
+  type HopRecord,
   listSnapshotFileNames,
-  parseSnapshotSummaryJson,
-  parseStoredSnapshotSummary,
+  renderSnapshotRawText,
   type SnapshotSummary,
+  summarizeStoredRawSnapshot,
 } from './snapshot.ts'
 
 type SqliteModule = typeof import('bun:sqlite')
@@ -32,43 +36,118 @@ export interface ImportSnapshotInput {
   targetSlug: string
 }
 
-interface SnapshotSummaryColumns {
-  destinationLossPct: number | null
-  hopCount: number
-  worstHopLossPct: number | null
-}
-
 interface PreparedSnapshotInput extends ImportSnapshotInput {
   importedAt: string
   rawSnapshot: StoredRawSnapshot
   sha256: string
-  summary: SnapshotSummaryColumns
-  summaryJson: string
+  summary: SnapshotSummary
 }
 
 type SnapshotStatementParams = [
+  string, // target_slug
+  string, // collected_at
+  string, // file_name
+  string, // source_path
+  string, // sha256
+  string, // imported_at
+  string, // observer
+  string, // label
+  string, // host
+  string, // target
+  string, // probe_mode
+  string | null, // netns
+  string, // protocol
+  number, // port
+  string, // engine
+  number, // raw_event_count
+  number, // hop_count
+  number | null, // destination_loss_pct
+  number | null, // worst_hop_loss_pct
+  number | null, // destination_avg_rtt_ms
+  number | null, // destination_hop_index
+  number | null, // destination_rtt_min_ms
+  number | null, // destination_rtt_max_ms
+  number | null, // destination_rtt_p50_ms
+  number | null, // destination_rtt_p90_ms
+]
+
+type SnapshotHopStatementParams = [
   string,
   string,
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
-  string,
+  number,
   string,
   string | null,
-  string,
   number,
-  string,
-  number,
-  number,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
   number | null,
   number | null,
 ]
+
+type SnapshotDestinationSampleStatementParams = [string, string, number, number]
+
+type SnapshotEventStatementParams = [
+  string,
+  string,
+  number,
+  string,
+  number,
+  number | null,
+  number | null,
+  string | null,
+]
+
+type RollupStatementParams = [
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  number,
+  string,
+]
+
+type RollupBucketStatementParams = [
+  string,
+  string,
+  string,
+  number,
+  number,
+  number,
+  number,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+]
+
+type RollupHistogramStatementParams = [string, string, string, number, number | null, number]
+
+type RollupHopStatementParams = [
+  string,
+  string,
+  string,
+  string,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+  number | null,
+]
+
+type RollupHopIndexStatementParams = [string, string, string, string, number]
 
 export interface SqliteImportFailure {
   error: string
@@ -116,15 +195,60 @@ interface SnapshotHashRow {
   target_slug: string
 }
 
-interface SnapshotJsonRow {
-  json: string
+interface SnapshotRow {
+  collected_at: string
+  destination_avg_rtt_ms: number | null
+  destination_hop_index: number | null
+  destination_loss_pct: number | null
+  destination_rtt_max_ms: number | null
+  destination_rtt_min_ms: number | null
+  destination_rtt_p50_ms: number | null
+  destination_rtt_p90_ms: number | null
+  engine: ProbeEngine
+  file_name: string
+  hop_count: number
+  host: string
+  imported_at: string
+  label: string
+  netns: string | null
+  observer: string
+  port: number
+  probe_mode: ProbeMode
+  protocol: ProbeProtocol
+  raw_event_count: number
+  sha256: string
+  source_path: string
+  target: string
+  target_slug: string
+  worst_hop_loss_pct: number | null
 }
 
-interface SnapshotSummaryJsonRow {
+interface SnapshotHopRow {
+  asn: string | null
+  avg_ms: number | null
+  best_ms: number | null
   file_name: string
-  json: string
-  summary_json: string | null
-  target_slug: string
+  hop_index: number
+  host: string
+  last_ms: number | null
+  loss_pct: number
+  sent: number | null
+  stdev_ms: number | null
+  worst_ms: number | null
+}
+
+interface SnapshotDestinationSampleRow {
+  file_name: string
+  rtt_ms: number
+}
+
+interface SnapshotEventRow {
+  event_order: number
+  hop_index: number
+  host: string | null
+  kind: RawMtrEvent['kind']
+  probe_id: number | null
+  rtt_us: number | null
 }
 
 interface TargetSlugRow {
@@ -132,11 +256,76 @@ interface TargetSlugRow {
 }
 
 interface RollupRow {
-  json: string
+  generated_at: string
+  granularity: RollupGranularity
+  host: string
+  label: string
+  observer: string
+  probe_mode: ProbeMode
+  schema_version: number
+  target: string
+  target_slug: string
+}
+
+interface RollupBucketRow {
+  bucket_start: string
+  destination_loss_pct: number
+  destination_reply_count: number
+  destination_sent_count: number
+  rtt_avg_ms: number | null
+  rtt_max_ms: number | null
+  rtt_min_ms: number | null
+  rtt_p50_ms: number | null
+  rtt_p90_ms: number | null
+  rtt_p99_ms: number | null
+  snapshot_count: number
+}
+
+interface RollupHistogramRow {
+  bucket_start: string
+  count: number
+  upper_bound_ms: number | null
+}
+
+interface RollupHopRow {
+  bucket_start: string
+  host: string
+  loss_pct: number
+  reply_count: number
+  representative_hop_index: number
+  rtt_avg_ms: number | null
+  rtt_max_ms: number | null
+  rtt_min_ms: number | null
+  rtt_p50_ms: number | null
+  rtt_p90_ms: number | null
+  rtt_p99_ms: number | null
+  sent_count: number
+  snapshot_count: number
+}
+
+interface RollupHopIndexRow {
+  bucket_start: string
+  hop_index: number
+  host: string
 }
 
 interface IntegrityRow {
   integrity_check: string
+}
+
+interface LegacySnapshotRow {
+  file_name: string
+  imported_at: string | null
+  json: string
+  sha256: string | null
+  source_path: string | null
+  target_slug: string
+}
+
+interface LegacyRollupRow {
+  granularity: RollupGranularity
+  json: string
+  target_slug: string
 }
 
 interface TableInfoRow {
@@ -171,25 +360,129 @@ function snapshotKey(input: SnapshotKey): string {
   return `${input.targetSlug}/${input.fileName}`
 }
 
-function prepareSnapshotInput(input: ImportSnapshotInput): PreparedSnapshotInput {
-  const rawSnapshot = parseStoredRawSnapshot(input.contents)
-  const summary = parseStoredSnapshotSummary(input.contents)
+function prepareSnapshotInput(
+  input: ImportSnapshotInput,
+  rawSnapshot = parseStoredRawSnapshot(input.contents),
+  importedAt = new Date().toISOString(),
+): PreparedSnapshotInput {
   return {
     ...input,
-    importedAt: new Date().toISOString(),
+    importedAt,
     rawSnapshot,
     sha256: sha256(input.contents),
-    summary: {
-      destinationLossPct: summary.destinationLossPct,
-      hopCount: summary.hopCount,
-      worstHopLossPct: summary.worstHopLossPct,
-    },
-    summaryJson: stringifyStoredSummary(summary),
+    summary: summarizeStoredRawSnapshot(rawSnapshot),
   }
 }
 
-function stringifyStoredSummary(summary: SnapshotSummary): string {
-  return `${JSON.stringify({ ...summary, rawText: '' }, null, 2)}\n`
+function rawEventFromRow(row: SnapshotEventRow): RawMtrEvent {
+  if (row.kind === 'sent') {
+    if (row.probe_id == null) {
+      throw new Error('Stored sent event is missing probe_id')
+    }
+    return { kind: 'sent', hopIndex: row.hop_index, probeId: row.probe_id }
+  }
+
+  if (row.kind === 'reply') {
+    if (row.probe_id == null || row.rtt_us == null) {
+      throw new Error('Stored reply event is missing probe_id or rtt_us')
+    }
+    return {
+      kind: 'reply',
+      hopIndex: row.hop_index,
+      probeId: row.probe_id,
+      rttUs: row.rtt_us,
+    }
+  }
+
+  if (row.host == null) {
+    throw new Error(`Stored ${row.kind} event is missing host`)
+  }
+  return { kind: row.kind, hopIndex: row.hop_index, host: row.host }
+}
+
+function rawSnapshotFromRow(row: SnapshotRow, rawEvents: RawMtrEvent[]): StoredRawSnapshot {
+  return {
+    collectedAt: row.collected_at,
+    engine: row.engine,
+    fileName: row.file_name,
+    host: row.host,
+    label: row.label,
+    netns: row.netns,
+    observer: row.observer,
+    port: row.port,
+    probeMode: row.probe_mode,
+    protocol: row.protocol,
+    rawEvents,
+    schemaVersion: 2,
+    target: row.target,
+  }
+}
+
+function snapshotSummaryFromRows(
+  row: SnapshotRow,
+  hops: HopRecord[],
+  destinationRttSamplesMs: number[],
+  rawText = '',
+): SnapshotSummary {
+  return {
+    collectedAt: row.collected_at,
+    destinationAvgRttMs: row.destination_avg_rtt_ms,
+    destinationHopIndex: row.destination_hop_index,
+    destinationLossPct: row.destination_loss_pct,
+    destinationRttMaxMs: row.destination_rtt_max_ms,
+    destinationRttMinMs: row.destination_rtt_min_ms,
+    destinationRttP50Ms: row.destination_rtt_p50_ms,
+    destinationRttP90Ms: row.destination_rtt_p90_ms,
+    destinationRttSamplesMs: destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
+    diagnosis: diagnoseSnapshot(hops, row.destination_loss_pct, row.destination_hop_index),
+    engine: row.engine,
+    fileName: row.file_name,
+    hopCount: row.hop_count,
+    hops,
+    host: row.host,
+    netns: row.netns,
+    port: row.port,
+    probeMode: row.probe_mode,
+    protocol: row.protocol,
+    rawText,
+    target: row.label,
+    worstHopLossPct: row.worst_hop_loss_pct,
+  }
+}
+
+function groupByFileName<T extends { file_name: string }>(rows: T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>()
+  for (const row of rows) {
+    const existing = grouped.get(row.file_name) ?? []
+    existing.push(row)
+    grouped.set(row.file_name, existing)
+  }
+  return grouped
+}
+
+function groupRollupRowsByBucket<T extends { bucket_start: string }>(rows: T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>()
+  for (const row of rows) {
+    const existing = grouped.get(row.bucket_start) ?? []
+    existing.push(row)
+    grouped.set(row.bucket_start, existing)
+  }
+  return grouped
+}
+
+function hopRecordFromRow(row: SnapshotHopRow): HopRecord {
+  return {
+    asn: row.asn,
+    avgMs: row.avg_ms,
+    bestMs: row.best_ms,
+    host: row.host,
+    index: row.hop_index,
+    lastMs: row.last_ms,
+    lossPct: row.loss_pct,
+    sent: row.sent,
+    stdevMs: row.stdev_ms,
+    worstMs: row.worst_ms,
+  }
 }
 
 export class HopwatchSqliteStore implements HopwatchStorage {
@@ -217,15 +510,49 @@ export class HopwatchSqliteStore implements HopwatchStorage {
         value TEXT NOT NULL
       )
     `)
+    this.initializeSnapshotTables()
+    this.initializeRollupTables()
+    this.createIndexes()
+    this.db
+      .query<unknown, [string, string]>(
+        'INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)',
+      )
+      .run('schema_version', '3')
+  }
+
+  private tableColumns(tableName: string): Set<string> {
+    return new Set(
+      this.db
+        .query<TableInfoRow, []>(`PRAGMA table_info(${tableName})`)
+        .all()
+        .map((row) => row.name),
+    )
+  }
+
+  private initializeSnapshotTables(): void {
+    const columns = this.tableColumns('snapshots')
+    if (columns.size === 0) {
+      this.createSnapshotsTable('snapshots')
+      this.createSnapshotDetailTables()
+      return
+    }
+
+    if (columns.has('json') || columns.has('summary_json')) {
+      this.migrateLegacySnapshotJsonTable()
+      return
+    }
+
+    this.createSnapshotDetailTables()
+  }
+
+  private createSnapshotsTable(tableName: string): void {
     this.db.run(`
-      CREATE TABLE IF NOT EXISTS snapshots (
+      CREATE TABLE IF NOT EXISTS ${tableName} (
         target_slug TEXT NOT NULL,
         collected_at TEXT NOT NULL,
         file_name TEXT NOT NULL,
         source_path TEXT NOT NULL,
         sha256 TEXT NOT NULL,
-        json TEXT NOT NULL,
-        summary_json TEXT,
         imported_at TEXT NOT NULL,
         observer TEXT NOT NULL,
         label TEXT NOT NULL,
@@ -240,19 +567,205 @@ export class HopwatchSqliteStore implements HopwatchStorage {
         hop_count INTEGER NOT NULL,
         destination_loss_pct REAL,
         worst_hop_loss_pct REAL,
+        destination_avg_rtt_ms REAL,
+        destination_hop_index INTEGER,
+        destination_rtt_min_ms REAL,
+        destination_rtt_max_ms REAL,
+        destination_rtt_p50_ms REAL,
+        destination_rtt_p90_ms REAL,
         PRIMARY KEY (target_slug, file_name)
       )
     `)
+  }
+
+  private createSnapshotDetailTables(): void {
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS snapshot_hops (
+        target_slug TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        hop_index INTEGER NOT NULL,
+        host TEXT NOT NULL,
+        asn TEXT,
+        loss_pct REAL NOT NULL,
+        sent INTEGER,
+        last_ms REAL,
+        avg_ms REAL,
+        best_ms REAL,
+        worst_ms REAL,
+        stdev_ms REAL,
+        PRIMARY KEY (target_slug, file_name, hop_index)
+      )
+    `)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS snapshot_destination_samples (
+        target_slug TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        sample_index INTEGER NOT NULL,
+        rtt_ms REAL NOT NULL,
+        PRIMARY KEY (target_slug, file_name, sample_index)
+      )
+    `)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS snapshot_events (
+        target_slug TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        event_order INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        hop_index INTEGER NOT NULL,
+        probe_id INTEGER,
+        rtt_us INTEGER,
+        host TEXT,
+        PRIMARY KEY (target_slug, file_name, event_order)
+      )
+    `)
+  }
+
+  private migrateLegacySnapshotJsonTable(): void {
+    const rows = this.db
+      .query<LegacySnapshotRow, []>(
+        `
+          SELECT target_slug, file_name, source_path, sha256, imported_at, json
+          FROM snapshots
+          ORDER BY target_slug ASC, file_name ASC
+        `,
+      )
+      .all()
+
+    this.db.run('DROP TABLE IF EXISTS snapshot_hops')
+    this.db.run('DROP TABLE IF EXISTS snapshot_destination_samples')
+    this.db.run('DROP TABLE IF EXISTS snapshot_events')
+    this.db.run('DROP TABLE IF EXISTS snapshots_v3')
+    this.createSnapshotsTable('snapshots_v3')
+    this.createSnapshotDetailTables()
+
+    const migrate = this.db.transaction((items: LegacySnapshotRow[]) => {
+      for (const row of items) {
+        const sourcePath = row.source_path ?? `sqlite://${row.target_slug}/${row.file_name}`
+        const prepared = prepareSnapshotInput(
+          {
+            contents: row.json,
+            fileName: row.file_name,
+            sourcePath,
+            targetSlug: row.target_slug,
+          },
+          undefined,
+          row.imported_at ?? new Date().toISOString(),
+        )
+        this.insertPreparedSnapshotInto('snapshots_v3', prepared)
+      }
+    })
+    migrate.immediate(rows)
+
+    this.db.run('DROP TABLE snapshots')
+    this.db.run('ALTER TABLE snapshots_v3 RENAME TO snapshots')
+  }
+
+  private initializeRollupTables(): void {
+    const columns = this.tableColumns('rollups')
+    if (columns.size > 0 && columns.has('json')) {
+      this.migrateLegacyRollupJsonTable()
+      return
+    }
+
+    this.createRollupTables()
+  }
+
+  private createRollupTables(): void {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS rollups (
         target_slug TEXT NOT NULL,
         granularity TEXT NOT NULL,
         generated_at TEXT NOT NULL,
-        json TEXT NOT NULL,
+        host TEXT NOT NULL,
+        label TEXT NOT NULL,
+        observer TEXT NOT NULL,
+        probe_mode TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        target TEXT NOT NULL,
         PRIMARY KEY (target_slug, granularity)
       )
     `)
-    this.ensureSnapshotSummaryColumn()
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS rollup_buckets (
+        target_slug TEXT NOT NULL,
+        granularity TEXT NOT NULL,
+        bucket_start TEXT NOT NULL,
+        snapshot_count INTEGER NOT NULL,
+        destination_sent_count INTEGER NOT NULL,
+        destination_reply_count INTEGER NOT NULL,
+        destination_loss_pct REAL NOT NULL,
+        rtt_avg_ms REAL,
+        rtt_min_ms REAL,
+        rtt_max_ms REAL,
+        rtt_p50_ms REAL,
+        rtt_p90_ms REAL,
+        rtt_p99_ms REAL,
+        PRIMARY KEY (target_slug, granularity, bucket_start)
+      )
+    `)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS rollup_histogram_bins (
+        target_slug TEXT NOT NULL,
+        granularity TEXT NOT NULL,
+        bucket_start TEXT NOT NULL,
+        bin_index INTEGER NOT NULL,
+        upper_bound_ms REAL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (target_slug, granularity, bucket_start, bin_index)
+      )
+    `)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS rollup_hops (
+        target_slug TEXT NOT NULL,
+        granularity TEXT NOT NULL,
+        bucket_start TEXT NOT NULL,
+        host TEXT NOT NULL,
+        representative_hop_index INTEGER NOT NULL,
+        snapshot_count INTEGER NOT NULL,
+        sent_count INTEGER NOT NULL,
+        reply_count INTEGER NOT NULL,
+        loss_pct REAL NOT NULL,
+        rtt_avg_ms REAL,
+        rtt_min_ms REAL,
+        rtt_max_ms REAL,
+        rtt_p50_ms REAL,
+        rtt_p90_ms REAL,
+        rtt_p99_ms REAL,
+        PRIMARY KEY (target_slug, granularity, bucket_start, host)
+      )
+    `)
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS rollup_hop_indexes (
+        target_slug TEXT NOT NULL,
+        granularity TEXT NOT NULL,
+        bucket_start TEXT NOT NULL,
+        host TEXT NOT NULL,
+        hop_index INTEGER NOT NULL,
+        PRIMARY KEY (target_slug, granularity, bucket_start, host, hop_index)
+      )
+    `)
+  }
+
+  private migrateLegacyRollupJsonTable(): void {
+    const rows = this.db
+      .query<LegacyRollupRow, []>(
+        `
+          SELECT target_slug, granularity, json
+          FROM rollups
+          ORDER BY target_slug ASC, granularity ASC
+        `,
+      )
+      .all()
+    this.db.run('DROP TABLE rollups')
+    this.createRollupTables()
+
+    for (const row of rows) {
+      const rollupFile = mtrRollupFileSchema.parse(JSON.parse(row.json))
+      this.upsertRollupFile(row.target_slug, rollupFile)
+    }
+  }
+
+  private createIndexes(): void {
     this.db.run(`
       CREATE INDEX IF NOT EXISTS snapshots_target_collected_at_idx
       ON snapshots (target_slug, collected_at DESC)
@@ -261,50 +774,18 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       CREATE INDEX IF NOT EXISTS snapshots_collected_at_idx
       ON snapshots (collected_at DESC)
     `)
-    this.db
-      .query<unknown, [string, string]>(
-        'INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)',
-      )
-      .run('schema_version', '2')
-    this.backfillSnapshotSummaries()
-  }
-
-  private ensureSnapshotSummaryColumn(): void {
-    const columns = new Set(
-      this.db
-        .query<TableInfoRow, []>('PRAGMA table_info(snapshots)')
-        .all()
-        .map((row) => row.name),
-    )
-    if (!columns.has('summary_json')) {
-      this.db.run('ALTER TABLE snapshots ADD COLUMN summary_json TEXT')
-    }
-  }
-
-  private backfillSnapshotSummaries(): void {
-    const rows = this.db
-      .query<SnapshotSummaryJsonRow, []>(
-        `
-          SELECT target_slug, file_name, json, summary_json
-          FROM snapshots
-          WHERE summary_json IS NULL OR instr(summary_json, '"rawText": ""') = 0
-        `,
-      )
-      .all()
-    if (rows.length === 0) {
-      return
-    }
-
-    const update = this.db.query<unknown, [string, string, string]>(
-      'UPDATE snapshots SET summary_json = ? WHERE target_slug = ? AND file_name = ?',
-    )
-    const backfill = this.db.transaction((items: SnapshotSummaryJsonRow[]) => {
-      for (const row of items) {
-        const summary = parseStoredSnapshotSummary(row.json)
-        update.run(stringifyStoredSummary(summary), row.target_slug, row.file_name)
-      }
-    })
-    backfill.immediate(rows)
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS snapshot_hops_target_file_idx
+      ON snapshot_hops (target_slug, file_name, hop_index)
+    `)
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS snapshot_events_target_file_idx
+      ON snapshot_events (target_slug, file_name, event_order)
+    `)
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS rollup_buckets_target_granularity_idx
+      ON rollup_buckets (target_slug, granularity, bucket_start)
+    `)
   }
 
   upsertSnapshot(input: ImportSnapshotInput): void {
@@ -312,36 +793,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
   }
 
   upsertRawSnapshot(input: ImportSnapshotInput, rawSnapshot: StoredRawSnapshot): void {
-    const summary = parseStoredSnapshotSummary(input.contents)
-    this.upsertPreparedSnapshot({
-      ...input,
-      importedAt: new Date().toISOString(),
-      rawSnapshot,
-      sha256: sha256(input.contents),
-      summary: {
-        destinationLossPct: summary.destinationLossPct,
-        hopCount: summary.hopCount,
-        worstHopLossPct: summary.worstHopLossPct,
-      },
-      summaryJson: stringifyStoredSummary(summary),
-    })
+    this.upsertPreparedSnapshot(prepareSnapshotInput(input, rawSnapshot))
   }
 
   insertRawSnapshot(input: ImportSnapshotInput, rawSnapshot: StoredRawSnapshot): void {
-    const summary = parseStoredSnapshotSummary(input.contents)
     try {
-      this.insertPreparedSnapshot({
-        ...input,
-        importedAt: new Date().toISOString(),
-        rawSnapshot,
-        sha256: sha256(input.contents),
-        summary: {
-          destinationLossPct: summary.destinationLossPct,
-          hopCount: summary.hopCount,
-          worstHopLossPct: summary.worstHopLossPct,
-        },
-        summaryJson: stringifyStoredSummary(summary),
-      })
+      this.insertPreparedSnapshot(prepareSnapshotInput(input, rawSnapshot))
     } catch (err) {
       if (err instanceof Error && /UNIQUE|constraint/i.test(err.message)) {
         throw new Error(
@@ -355,24 +812,36 @@ export class HopwatchSqliteStore implements HopwatchStorage {
   upsertPreparedSnapshots(inputs: PreparedSnapshotInput[]): void {
     const insertMany = this.db.transaction((snapshots: PreparedSnapshotInput[]) => {
       for (const snapshot of snapshots) {
-        this.upsertPreparedSnapshot(snapshot)
+        this.upsertPreparedSnapshotInto('snapshots', snapshot)
       }
     })
     insertMany.immediate(inputs)
   }
 
   private upsertPreparedSnapshot(input: PreparedSnapshotInput): void {
+    const upsert = this.db.transaction((snapshot: PreparedSnapshotInput) => {
+      this.upsertPreparedSnapshotInto('snapshots', snapshot)
+    })
+    upsert.immediate(input)
+  }
+
+  private insertPreparedSnapshot(input: PreparedSnapshotInput): void {
+    const insert = this.db.transaction((snapshot: PreparedSnapshotInput) => {
+      this.insertPreparedSnapshotInto('snapshots', snapshot)
+    })
+    insert.immediate(input)
+  }
+
+  private upsertPreparedSnapshotInto(tableName: string, input: PreparedSnapshotInput): void {
     this.db
       .query<unknown, SnapshotStatementParams>(
         `
-          INSERT INTO snapshots (
+          INSERT INTO ${tableName} (
             target_slug,
             collected_at,
             file_name,
             source_path,
             sha256,
-            json,
-            summary_json,
             imported_at,
             observer,
             label,
@@ -386,15 +855,19 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             raw_event_count,
             hop_count,
             destination_loss_pct,
-            worst_hop_loss_pct
+            worst_hop_loss_pct,
+            destination_avg_rtt_ms,
+            destination_hop_index,
+            destination_rtt_min_ms,
+            destination_rtt_max_ms,
+            destination_rtt_p50_ms,
+            destination_rtt_p90_ms
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(target_slug, file_name) DO UPDATE SET
             collected_at = excluded.collected_at,
             source_path = excluded.source_path,
             sha256 = excluded.sha256,
-            json = excluded.json,
-            summary_json = excluded.summary_json,
             imported_at = excluded.imported_at,
             observer = excluded.observer,
             label = excluded.label,
@@ -408,46 +881,29 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             raw_event_count = excluded.raw_event_count,
             hop_count = excluded.hop_count,
             destination_loss_pct = excluded.destination_loss_pct,
-            worst_hop_loss_pct = excluded.worst_hop_loss_pct
+            worst_hop_loss_pct = excluded.worst_hop_loss_pct,
+            destination_avg_rtt_ms = excluded.destination_avg_rtt_ms,
+            destination_hop_index = excluded.destination_hop_index,
+            destination_rtt_min_ms = excluded.destination_rtt_min_ms,
+            destination_rtt_max_ms = excluded.destination_rtt_max_ms,
+            destination_rtt_p50_ms = excluded.destination_rtt_p50_ms,
+            destination_rtt_p90_ms = excluded.destination_rtt_p90_ms
         `,
       )
-      .run(
-        input.targetSlug,
-        input.rawSnapshot.collectedAt,
-        input.fileName,
-        input.sourcePath,
-        input.sha256,
-        input.contents,
-        input.summaryJson,
-        input.importedAt,
-        input.rawSnapshot.observer,
-        input.rawSnapshot.label,
-        input.rawSnapshot.host,
-        input.rawSnapshot.target,
-        input.rawSnapshot.probeMode,
-        input.rawSnapshot.netns,
-        input.rawSnapshot.protocol,
-        input.rawSnapshot.port,
-        input.rawSnapshot.engine,
-        input.rawSnapshot.rawEvents.length,
-        input.summary.hopCount,
-        input.summary.destinationLossPct,
-        input.summary.worstHopLossPct,
-      )
+      .run(...this.snapshotStatementParams(input))
+    this.replaceSnapshotDetails(input)
   }
 
-  private insertPreparedSnapshot(input: PreparedSnapshotInput): void {
+  private insertPreparedSnapshotInto(tableName: string, input: PreparedSnapshotInput): void {
     this.db
       .query<unknown, SnapshotStatementParams>(
         `
-          INSERT INTO snapshots (
+          INSERT INTO ${tableName} (
             target_slug,
             collected_at,
             file_name,
             source_path,
             sha256,
-            json,
-            summary_json,
             imported_at,
             observer,
             label,
@@ -461,34 +917,138 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             raw_event_count,
             hop_count,
             destination_loss_pct,
-            worst_hop_loss_pct
+            worst_hop_loss_pct,
+            destination_avg_rtt_ms,
+            destination_hop_index,
+            destination_rtt_min_ms,
+            destination_rtt_max_ms,
+            destination_rtt_p50_ms,
+            destination_rtt_p90_ms
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
-      .run(
+      .run(...this.snapshotStatementParams(input))
+    this.replaceSnapshotDetails(input)
+  }
+
+  private snapshotStatementParams(input: PreparedSnapshotInput): SnapshotStatementParams {
+    return [
+      input.targetSlug,
+      input.rawSnapshot.collectedAt,
+      input.fileName,
+      input.sourcePath,
+      input.sha256,
+      input.importedAt,
+      input.rawSnapshot.observer,
+      input.rawSnapshot.label,
+      input.rawSnapshot.host,
+      input.rawSnapshot.target,
+      input.rawSnapshot.probeMode,
+      input.rawSnapshot.netns,
+      input.rawSnapshot.protocol,
+      input.rawSnapshot.port,
+      input.rawSnapshot.engine,
+      input.rawSnapshot.rawEvents.length,
+      input.summary.hopCount,
+      input.summary.destinationLossPct,
+      input.summary.worstHopLossPct,
+      input.summary.destinationAvgRttMs,
+      input.summary.destinationHopIndex,
+      input.summary.destinationRttMinMs,
+      input.summary.destinationRttMaxMs,
+      input.summary.destinationRttP50Ms,
+      input.summary.destinationRttP90Ms,
+    ]
+  }
+
+  private replaceSnapshotDetails(input: PreparedSnapshotInput): void {
+    for (const tableName of ['snapshot_hops', 'snapshot_destination_samples', 'snapshot_events']) {
+      this.db
+        .query<unknown, [string, string]>(
+          `DELETE FROM ${tableName} WHERE target_slug = ? AND file_name = ?`,
+        )
+        .run(input.targetSlug, input.fileName)
+    }
+
+    const insertHop = this.db.query<unknown, SnapshotHopStatementParams>(
+      `
+        INSERT INTO snapshot_hops (
+          target_slug,
+          file_name,
+          hop_index,
+          host,
+          asn,
+          loss_pct,
+          sent,
+          last_ms,
+          avg_ms,
+          best_ms,
+          worst_ms,
+          stdev_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    for (const hop of input.summary.hops) {
+      insertHop.run(
         input.targetSlug,
-        input.rawSnapshot.collectedAt,
         input.fileName,
-        input.sourcePath,
-        input.sha256,
-        input.contents,
-        input.summaryJson,
-        input.importedAt,
-        input.rawSnapshot.observer,
-        input.rawSnapshot.label,
-        input.rawSnapshot.host,
-        input.rawSnapshot.target,
-        input.rawSnapshot.probeMode,
-        input.rawSnapshot.netns,
-        input.rawSnapshot.protocol,
-        input.rawSnapshot.port,
-        input.rawSnapshot.engine,
-        input.rawSnapshot.rawEvents.length,
-        input.summary.hopCount,
-        input.summary.destinationLossPct,
-        input.summary.worstHopLossPct,
+        hop.index,
+        hop.host,
+        hop.asn,
+        hop.lossPct,
+        hop.sent,
+        hop.lastMs,
+        hop.avgMs,
+        hop.bestMs,
+        hop.worstMs,
+        hop.stdevMs,
       )
+    }
+
+    const insertSample = this.db.query<unknown, SnapshotDestinationSampleStatementParams>(
+      `
+        INSERT INTO snapshot_destination_samples (
+          target_slug,
+          file_name,
+          sample_index,
+          rtt_ms
+        )
+        VALUES (?, ?, ?, ?)
+      `,
+    )
+    for (const [sampleIndex, rttMs] of (input.summary.destinationRttSamplesMs ?? []).entries()) {
+      insertSample.run(input.targetSlug, input.fileName, sampleIndex, rttMs)
+    }
+
+    const insertEvent = this.db.query<unknown, SnapshotEventStatementParams>(
+      `
+        INSERT INTO snapshot_events (
+          target_slug,
+          file_name,
+          event_order,
+          kind,
+          hop_index,
+          probe_id,
+          rtt_us,
+          host
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    for (const [eventOrder, event] of input.rawSnapshot.rawEvents.entries()) {
+      insertEvent.run(
+        input.targetSlug,
+        input.fileName,
+        eventOrder,
+        event.kind,
+        event.hopIndex,
+        'probeId' in event ? event.probeId : null,
+        'rttUs' in event ? event.rttUs : null,
+        'host' in event ? event.host : null,
+      )
+    }
   }
 
   listTargetSlugs(): string[] {
@@ -501,63 +1061,268 @@ export class HopwatchSqliteStore implements HopwatchStorage {
   }
 
   listSnapshotSummaries(targetSlug: string): SnapshotSummary[] {
-    return this.db
-      .query<SnapshotSummaryJsonRow, [string]>(
-        'SELECT target_slug, file_name, json, summary_json FROM snapshots WHERE target_slug = ? ORDER BY collected_at DESC',
+    const rows = this.db
+      .query<SnapshotRow, [string]>(
+        'SELECT * FROM snapshots WHERE target_slug = ? ORDER BY collected_at DESC',
       )
       .all(targetSlug)
-      .map((row) =>
-        row.summary_json == null
-          ? parseStoredSnapshotSummary(row.json)
-          : parseSnapshotSummaryJson(row.summary_json),
-      )
+    if (rows.length === 0) {
+      return []
+    }
+
+    const hopsByFileName = groupByFileName(
+      this.db
+        .query<SnapshotHopRow, [string]>(
+          `
+            SELECT file_name, hop_index, host, asn, loss_pct, sent, last_ms, avg_ms, best_ms, worst_ms, stdev_ms
+            FROM snapshot_hops
+            WHERE target_slug = ?
+            ORDER BY file_name ASC, hop_index ASC
+          `,
+        )
+        .all(targetSlug),
+    )
+    const samplesByFileName = groupByFileName(
+      this.db
+        .query<SnapshotDestinationSampleRow, [string]>(
+          `
+            SELECT file_name, rtt_ms
+            FROM snapshot_destination_samples
+            WHERE target_slug = ?
+            ORDER BY file_name ASC, sample_index ASC
+          `,
+        )
+        .all(targetSlug),
+    )
+
+    return rows.map((row) =>
+      snapshotSummaryFromRows(
+        row,
+        (hopsByFileName.get(row.file_name) ?? []).map(hopRecordFromRow),
+        (samplesByFileName.get(row.file_name) ?? []).map((sample) => sample.rtt_ms),
+      ),
+    )
   }
 
   listRawSnapshotsSince(targetSlug: string, sinceFileName?: string): StoredRawSnapshot[] {
     const rows =
       sinceFileName == null
         ? this.db
-            .query<SnapshotJsonRow, [string]>(
-              'SELECT json FROM snapshots WHERE target_slug = ? ORDER BY file_name ASC',
+            .query<SnapshotRow, [string]>(
+              'SELECT * FROM snapshots WHERE target_slug = ? ORDER BY file_name ASC',
             )
             .all(targetSlug)
         : this.db
-            .query<SnapshotJsonRow, [string, string]>(
-              'SELECT json FROM snapshots WHERE target_slug = ? AND file_name >= ? ORDER BY file_name ASC',
+            .query<SnapshotRow, [string, string]>(
+              'SELECT * FROM snapshots WHERE target_slug = ? AND file_name >= ? ORDER BY file_name ASC',
             )
             .all(targetSlug, sinceFileName)
-    return rows.map((row) => parseStoredRawSnapshot(row.json))
+    if (rows.length === 0) {
+      return []
+    }
+
+    const eventRows =
+      sinceFileName == null
+        ? this.db
+            .query<SnapshotEventRow & { file_name: string }, [string]>(
+              `
+                SELECT file_name, event_order, kind, hop_index, probe_id, rtt_us, host
+                FROM snapshot_events
+                WHERE target_slug = ?
+                ORDER BY file_name ASC, event_order ASC
+              `,
+            )
+            .all(targetSlug)
+        : this.db
+            .query<SnapshotEventRow & { file_name: string }, [string, string]>(
+              `
+                SELECT file_name, event_order, kind, hop_index, probe_id, rtt_us, host
+                FROM snapshot_events
+                WHERE target_slug = ? AND file_name >= ?
+                ORDER BY file_name ASC, event_order ASC
+              `,
+            )
+            .all(targetSlug, sinceFileName)
+    const eventsByFileName = groupByFileName(eventRows)
+    return rows.map((row) =>
+      rawSnapshotFromRow(row, (eventsByFileName.get(row.file_name) ?? []).map(rawEventFromRow)),
+    )
   }
 
   getSnapshotJson(targetSlug: string, fileName: string): string | null {
-    return (
-      this.db
-        .query<SnapshotJsonRow, [string, string]>(
-          'SELECT json FROM snapshots WHERE target_slug = ? AND file_name = ?',
-        )
-        .get(targetSlug, fileName)?.json ?? null
-    )
+    const snapshot = this.getRawSnapshot(targetSlug, fileName)
+    return snapshot == null ? null : `${JSON.stringify(snapshot, null, 2)}\n`
   }
 
   getLatestSnapshotJson(targetSlug: string): string | null {
+    const row = this.getLatestSnapshotRow(targetSlug)
+    if (row == null) return null
+    const snapshot = this.getRawSnapshot(row.target_slug, row.file_name)
+    return snapshot == null ? null : `${JSON.stringify(snapshot, null, 2)}\n`
+  }
+
+  getSnapshotRawText(targetSlug: string, fileName: string): string | null {
+    const row = this.getSnapshotRow(targetSlug, fileName)
+    if (row == null) return null
+    const hops = this.listHopRecords(targetSlug, fileName)
+    return renderSnapshotRawText(rawSnapshotFromRow(row, []), hops)
+  }
+
+  private getRawSnapshot(targetSlug: string, fileName: string): StoredRawSnapshot | null {
+    const row = this.getSnapshotRow(targetSlug, fileName)
+    if (row == null) return null
+    const events = this.db
+      .query<SnapshotEventRow, [string, string]>(
+        `
+          SELECT event_order, kind, hop_index, probe_id, rtt_us, host
+          FROM snapshot_events
+          WHERE target_slug = ? AND file_name = ?
+          ORDER BY event_order ASC
+        `,
+      )
+      .all(targetSlug, fileName)
+      .map(rawEventFromRow)
+    return rawSnapshotFromRow(row, events)
+  }
+
+  private getSnapshotRow(targetSlug: string, fileName: string): SnapshotRow | null {
     return (
       this.db
-        .query<SnapshotJsonRow, [string]>(
-          'SELECT json FROM snapshots WHERE target_slug = ? ORDER BY collected_at DESC LIMIT 1',
+        .query<SnapshotRow, [string, string]>(
+          'SELECT * FROM snapshots WHERE target_slug = ? AND file_name = ?',
         )
-        .get(targetSlug)?.json ?? null
+        .get(targetSlug, fileName) ?? null
     )
   }
 
-  getRollupFile(targetSlug: string, granularity: RollupGranularity): MtrRollupFile | null {
-    const json =
+  private getLatestSnapshotRow(targetSlug: string): SnapshotRow | null {
+    return (
       this.db
-        .query<RollupRow, [string, string]>(
-          'SELECT json FROM rollups WHERE target_slug = ? AND granularity = ?',
+        .query<SnapshotRow, [string]>(
+          'SELECT * FROM snapshots WHERE target_slug = ? ORDER BY collected_at DESC LIMIT 1',
         )
-        .get(targetSlug, granularity)?.json ?? null
-    if (json == null) return null
-    const parsed = mtrRollupFileSchema.parse(JSON.parse(json))
+        .get(targetSlug) ?? null
+    )
+  }
+
+  private listHopRecords(targetSlug: string, fileName: string): HopRecord[] {
+    return this.db
+      .query<SnapshotHopRow, [string, string]>(
+        `
+          SELECT file_name, hop_index, host, asn, loss_pct, sent, last_ms, avg_ms, best_ms, worst_ms, stdev_ms
+          FROM snapshot_hops
+          WHERE target_slug = ? AND file_name = ?
+          ORDER BY hop_index ASC
+        `,
+      )
+      .all(targetSlug, fileName)
+      .map(hopRecordFromRow)
+  }
+
+  getRollupFile(targetSlug: string, granularity: RollupGranularity): MtrRollupFile | null {
+    const rollup = this.db
+      .query<RollupRow, [string, string]>(
+        'SELECT * FROM rollups WHERE target_slug = ? AND granularity = ?',
+      )
+      .get(targetSlug, granularity)
+    if (rollup == null) return null
+
+    const bucketRows = this.db
+      .query<RollupBucketRow, [string, string]>(
+        `
+          SELECT *
+          FROM rollup_buckets
+          WHERE target_slug = ? AND granularity = ?
+          ORDER BY bucket_start ASC
+        `,
+      )
+      .all(targetSlug, granularity)
+    const histogramByBucket = groupRollupRowsByBucket(
+      this.db
+        .query<RollupHistogramRow, [string, string]>(
+          `
+            SELECT bucket_start, upper_bound_ms, count
+            FROM rollup_histogram_bins
+            WHERE target_slug = ? AND granularity = ?
+            ORDER BY bucket_start ASC, bin_index ASC
+          `,
+        )
+        .all(targetSlug, granularity),
+    )
+    const hopsByBucket = groupRollupRowsByBucket(
+      this.db
+        .query<RollupHopRow, [string, string]>(
+          `
+            SELECT *
+            FROM rollup_hops
+            WHERE target_slug = ? AND granularity = ?
+            ORDER BY bucket_start ASC, representative_hop_index ASC, host ASC
+          `,
+        )
+        .all(targetSlug, granularity),
+    )
+    const hopIndexesByKey = new Map<string, number[]>()
+    const hopIndexRows = this.db
+      .query<RollupHopIndexRow, [string, string]>(
+        `
+          SELECT bucket_start, host, hop_index
+          FROM rollup_hop_indexes
+          WHERE target_slug = ? AND granularity = ?
+          ORDER BY bucket_start ASC, host ASC, hop_index ASC
+        `,
+      )
+      .all(targetSlug, granularity)
+    for (const row of hopIndexRows) {
+      const key = `${row.bucket_start}\0${row.host}`
+      const current = hopIndexesByKey.get(key) ?? []
+      current.push(row.hop_index)
+      hopIndexesByKey.set(key, current)
+    }
+
+    const buckets: MtrRollupBucket[] = bucketRows.map((bucket) => ({
+      bucketStart: bucket.bucket_start,
+      destinationLossPct: bucket.destination_loss_pct,
+      destinationReplyCount: bucket.destination_reply_count,
+      destinationSentCount: bucket.destination_sent_count,
+      histogram: (histogramByBucket.get(bucket.bucket_start) ?? []).map((histogram) => ({
+        count: histogram.count,
+        upperBoundMs: histogram.upper_bound_ms,
+      })),
+      hops: (hopsByBucket.get(bucket.bucket_start) ?? []).map((hop) => ({
+        host: hop.host,
+        hopIndexes: hopIndexesByKey.get(`${hop.bucket_start}\0${hop.host}`) ?? [],
+        lossPct: hop.loss_pct,
+        replyCount: hop.reply_count,
+        representativeHopIndex: hop.representative_hop_index,
+        rttAvgMs: hop.rtt_avg_ms,
+        rttMaxMs: hop.rtt_max_ms,
+        rttMinMs: hop.rtt_min_ms,
+        rttP50Ms: hop.rtt_p50_ms,
+        rttP90Ms: hop.rtt_p90_ms,
+        rttP99Ms: hop.rtt_p99_ms,
+        sentCount: hop.sent_count,
+        snapshotCount: hop.snapshot_count,
+      })),
+      rttAvgMs: bucket.rtt_avg_ms,
+      rttMaxMs: bucket.rtt_max_ms,
+      rttMinMs: bucket.rtt_min_ms,
+      rttP50Ms: bucket.rtt_p50_ms,
+      rttP90Ms: bucket.rtt_p90_ms,
+      rttP99Ms: bucket.rtt_p99_ms,
+      snapshotCount: bucket.snapshot_count,
+    }))
+
+    const parsed = mtrRollupFileSchema.parse({
+      buckets,
+      generatedAt: rollup.generated_at,
+      granularity: rollup.granularity,
+      host: rollup.host,
+      label: rollup.label,
+      observer: rollup.observer,
+      probeMode: rollup.probe_mode,
+      schemaVersion: rollup.schema_version,
+      target: rollup.target,
+    })
     if (parsed.granularity !== granularity) {
       throw new Error(
         `Expected ${targetSlug}/${granularity} rollup to have granularity ${granularity}, got ${parsed.granularity}`,
@@ -567,32 +1332,202 @@ export class HopwatchSqliteStore implements HopwatchStorage {
   }
 
   upsertRollupFile(targetSlug: string, rollupFile: MtrRollupFile): void {
-    this.db
-      .query<unknown, [string, string, string, string]>(
+    const upsert = this.db.transaction((file: MtrRollupFile) => {
+      this.db
+        .query<unknown, [string, string]>(
+          'DELETE FROM rollup_hop_indexes WHERE target_slug = ? AND granularity = ?',
+        )
+        .run(targetSlug, file.granularity)
+      this.db
+        .query<unknown, [string, string]>(
+          'DELETE FROM rollup_hops WHERE target_slug = ? AND granularity = ?',
+        )
+        .run(targetSlug, file.granularity)
+      this.db
+        .query<unknown, [string, string]>(
+          'DELETE FROM rollup_histogram_bins WHERE target_slug = ? AND granularity = ?',
+        )
+        .run(targetSlug, file.granularity)
+      this.db
+        .query<unknown, [string, string]>(
+          'DELETE FROM rollup_buckets WHERE target_slug = ? AND granularity = ?',
+        )
+        .run(targetSlug, file.granularity)
+
+      this.db
+        .query<unknown, RollupStatementParams>(
+          `
+            INSERT INTO rollups (
+              target_slug,
+              granularity,
+              generated_at,
+              host,
+              label,
+              observer,
+              probe_mode,
+              schema_version,
+              target
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_slug, granularity) DO UPDATE SET
+              generated_at = excluded.generated_at,
+              host = excluded.host,
+              label = excluded.label,
+              observer = excluded.observer,
+              probe_mode = excluded.probe_mode,
+              schema_version = excluded.schema_version,
+              target = excluded.target
+          `,
+        )
+        .run(
+          targetSlug,
+          file.granularity,
+          file.generatedAt,
+          file.host,
+          file.label,
+          file.observer,
+          file.probeMode,
+          file.schemaVersion,
+          file.target,
+        )
+
+      const insertBucket = this.db.query<unknown, RollupBucketStatementParams>(
         `
-          INSERT INTO rollups (target_slug, granularity, generated_at, json)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(target_slug, granularity) DO UPDATE SET
-            generated_at = excluded.generated_at,
-            json = excluded.json
+          INSERT INTO rollup_buckets (
+            target_slug,
+            granularity,
+            bucket_start,
+            snapshot_count,
+            destination_sent_count,
+            destination_reply_count,
+            destination_loss_pct,
+            rtt_avg_ms,
+            rtt_min_ms,
+            rtt_max_ms,
+            rtt_p50_ms,
+            rtt_p90_ms,
+            rtt_p99_ms
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
-      .run(
-        targetSlug,
-        rollupFile.granularity,
-        rollupFile.generatedAt,
-        `${JSON.stringify(rollupFile, null, 2)}\n`,
+      const insertHistogram = this.db.query<unknown, RollupHistogramStatementParams>(
+        `
+          INSERT INTO rollup_histogram_bins (
+            target_slug,
+            granularity,
+            bucket_start,
+            bin_index,
+            upper_bound_ms,
+            count
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+        `,
       )
+      const insertHop = this.db.query<unknown, RollupHopStatementParams>(
+        `
+          INSERT INTO rollup_hops (
+            target_slug,
+            granularity,
+            bucket_start,
+            host,
+            representative_hop_index,
+            snapshot_count,
+            sent_count,
+            reply_count,
+            loss_pct,
+            rtt_avg_ms,
+            rtt_min_ms,
+            rtt_max_ms,
+            rtt_p50_ms,
+            rtt_p90_ms,
+            rtt_p99_ms
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      const insertHopIndex = this.db.query<unknown, RollupHopIndexStatementParams>(
+        `
+          INSERT INTO rollup_hop_indexes (
+            target_slug,
+            granularity,
+            bucket_start,
+            host,
+            hop_index
+          )
+          VALUES (?, ?, ?, ?, ?)
+        `,
+      )
+
+      for (const bucket of file.buckets) {
+        insertBucket.run(
+          targetSlug,
+          file.granularity,
+          bucket.bucketStart,
+          bucket.snapshotCount,
+          bucket.destinationSentCount,
+          bucket.destinationReplyCount,
+          bucket.destinationLossPct,
+          bucket.rttAvgMs,
+          bucket.rttMinMs,
+          bucket.rttMaxMs,
+          bucket.rttP50Ms,
+          bucket.rttP90Ms,
+          bucket.rttP99Ms,
+        )
+        for (const [binIndex, histogram] of bucket.histogram.entries()) {
+          insertHistogram.run(
+            targetSlug,
+            file.granularity,
+            bucket.bucketStart,
+            binIndex,
+            histogram.upperBoundMs,
+            histogram.count,
+          )
+        }
+        for (const hop of bucket.hops) {
+          insertHop.run(
+            targetSlug,
+            file.granularity,
+            bucket.bucketStart,
+            hop.host,
+            hop.representativeHopIndex,
+            hop.snapshotCount,
+            hop.sentCount,
+            hop.replyCount,
+            hop.lossPct,
+            hop.rttAvgMs,
+            hop.rttMinMs,
+            hop.rttMaxMs,
+            hop.rttP50Ms,
+            hop.rttP90Ms,
+            hop.rttP99Ms,
+          )
+          for (const hopIndex of hop.hopIndexes) {
+            insertHopIndex.run(targetSlug, file.granularity, bucket.bucketStart, hop.host, hopIndex)
+          }
+        }
+      }
+    })
+    upsert.immediate(rollupFile)
   }
 
   pruneRawSnapshots(targetSlug: string, keepDays: number, now: number): number {
     const cutoff = new Date(now - keepDays * 24 * 60 * 60 * 1000)
     const cutoffFileName = `${formatCompactCollectedAt(cutoff)}.json`
+    const params: [string, string] = [targetSlug, cutoffFileName]
+    for (const tableName of ['snapshot_hops', 'snapshot_destination_samples', 'snapshot_events']) {
+      this.db
+        .query<unknown, [string, string]>(
+          `DELETE FROM ${tableName} WHERE target_slug = ? AND file_name < ?`,
+        )
+        .run(...params)
+    }
     return this.db
       .query<unknown, [string, string]>(
         'DELETE FROM snapshots WHERE target_slug = ? AND file_name < ?',
       )
-      .run(targetSlug, cutoffFileName).changes
+      .run(...params).changes
   }
 
   updateRollupsForTarget(

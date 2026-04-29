@@ -76,8 +76,8 @@ export function RootIndexPage({
       />
       <h1>hopwatch</h1>
       <p className="lede">
-        Raw JSON snapshots are kept for {keepDays} days, then rolled up into coarser historical
-        buckets.
+        Raw probe observations are kept for {keepDays} days, then rolled up into coarser historical
+        buckets. All data is read live from SQLite.
       </p>
       {latestCollectedAt != null && freshnessAbsolute != null ? (
         <p className="freshness">

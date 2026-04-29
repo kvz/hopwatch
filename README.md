@@ -217,10 +217,10 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
 - **12-factor.** Config via TOML. Log to stdout in simple structured format.
   Graceful shutdown on SIGTERM. Let systemd handle the background, logging,
   and privileges.
-- **SQLite source of truth.** Probe snapshots and rollups are stored in one
-  SQLite database. Page renders read live data directly from SQLite without an
-  HTML cache, so hot-reloaded binaries and new probe cycles are visible
-  immediately.
+- **SQLite source of truth.** Probe snapshots, hop rows, raw probe events, RTT
+  samples, and rollups are stored in relational SQLite tables. Page renders read
+  live data directly from SQLite without an HTML cache, so hot-reloaded binaries
+  and new probe cycles are visible immediately.
 - **Safe JSON-to-SQLite import.** `hopwatch storage import` copies existing JSON
   snapshots and rollups into SQLite, then verifies count + SHA-256 parity before
   operators remove the legacy JSON files.
@@ -233,7 +233,9 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
 
 SQLite is the runtime storage backend. Existing JSON snapshot files can be
 imported once, verified, backed up, and removed after the daemon is running from
-the database.
+the database. JSON is only a migration/input format; the runtime database stores
+snapshots and rollups as rows and reconstructs raw text or JSON responses on
+demand from those rows.
 
 ```bash
 # Import current JSON snapshots into data_dir/hopwatch.sqlite and verify parity.

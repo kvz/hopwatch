@@ -814,6 +814,7 @@ export function classifyCrossTargetShape(
 export interface CrossTargetDiagnosisContext {
   networkOwnersByHopHost?: Map<string, NetworkOwnerInfo>
   sourceIdentity?: SourceIdentity
+  sourceNetworkOwner?: NetworkOwnerInfo
   // Per-target hourly rollup buckets. Enables "Degraded since" timeline
   // and PTR discovery for the suspect hop.
   rollupBucketsByTarget?: MtrRollupBucket[][]
@@ -831,6 +832,8 @@ function buildCrossTargetEscalation({
   primary,
   shapeKind,
   sourceIdentity,
+  sourceNetworkOwner,
+  timelineLine,
 }: {
   destinationList: string
   hopDisplay: string
@@ -838,6 +841,8 @@ function buildCrossTargetEscalation({
   primary: CrossTargetHopIssue
   shapeKind: CrossTargetShapeKind
   sourceIdentity?: SourceIdentity
+  sourceNetworkOwner?: NetworkOwnerInfo
+  timelineLine: string | null
 }): CrossTargetEscalation | null {
   if (owner == null) return null
 
@@ -850,23 +855,78 @@ function buildCrossTargetEscalation({
     shapeKind === 'protocol_selective'
       ? `TCP loss is ~${(primary.tcpAverageLossPct ?? 0).toFixed(1)}% while ICMP loss is ~${(primary.icmpAverageLossPct ?? 0).toFixed(1)}% on the same hop.`
       : `The hop coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots.`
+  const sourceNetworkLine =
+    sourceNetworkOwner == null
+      ? null
+      : `Source ASN/prefix: ${formatNetworkOwnerLabel(sourceNetworkOwner)}${sourceNetworkOwner.prefix == null ? '' : `, ${sourceNetworkOwner.prefix}`}`
 
   return {
     contactEmails: owner.contactEmails,
     copyText: [
       `Please investigate persistent packet loss observed by continuous MTR-style probes from ${formatSourceIdentityInline(sourceIdentity)} to ${destinationList}.`,
+      '',
+      'Source:',
       ...formatSourceIdentityLines(sourceIdentity),
-      `Suspect hop: ${hopDisplay}`,
-      `Report to: ${ownerLabel}`,
+      sourceNetworkLine,
+      '',
+      'Destination:',
+      `Destination host: ${destinationList}`,
+      shapeKind === 'protocol_selective' ? 'Destination service: TCP/443 HTTPS' : null,
+      '',
+      'Suspect hop:',
+      `Hop: ${hopDisplay}`,
+      `Owner: ${ownerLabel}`,
       `Contact: ${contacts}`,
       owner.prefix == null ? null : `Prefix: ${owner.prefix}`,
+      '',
+      'Evidence:',
+      ...formatExternalEvidenceLines(primary),
       protocolLine,
-      `Affected probe paths: ${primary.targets.join(', ')}`,
+      timelineLine,
     ]
       .filter((line): line is string => line != null)
       .join('\n'),
     ownerLabel,
   }
+}
+
+function formatEnglishList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? ''
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
+}
+
+function formatExternalEvidenceLines(primary: CrossTargetHopIssue): string[] {
+  const methods: string[] = []
+  for (const target of primary.targets) {
+    if (target.includes('via-namespace')) {
+      continue
+    }
+
+    if (target.includes('tcp-native')) {
+      methods.push('direct TCP/443 native raw-socket cross-check')
+      continue
+    }
+
+    if (target.includes('tcp-mtr')) {
+      methods.push('direct TCP/443 MTR')
+      continue
+    }
+
+    if (target.includes('tcp')) {
+      methods.push('direct TCP/443 probe')
+      continue
+    }
+
+    methods.push('direct ICMP MTR comparison')
+  }
+
+  const uniqueMethods = [...new Set(methods)]
+  if (uniqueMethods.length === 0) {
+    return []
+  }
+
+  return [`External evidence paths: ${formatEnglishList(uniqueMethods)}.`]
 }
 
 export function getCrossTargetDiagnosis(
@@ -878,6 +938,7 @@ export function getCrossTargetDiagnosis(
   const perTargetSnapshots = context.perTargetSnapshots
   const networkOwnersByHopHost = context.networkOwnersByHopHost
   const sourceIdentity = context.sourceIdentity
+  const sourceNetworkOwner = context.sourceNetworkOwner
   const now = context.now ?? Date.now()
   const shape = classifyCrossTargetShape(crossIssues, hopProtocolStats)
   if (shape.kind === 'none' || shape.hop == null) {
@@ -955,6 +1016,12 @@ export function getCrossTargetDiagnosis(
       : timeline.durationHours < 1
         ? ` Degraded since ${timeline.firstDegradedAt} (just flagged).`
         : ` Degraded since ${timeline.firstDegradedAt} (continuous ${timeline.durationHours}h).`
+  const timelineLine =
+    timeline == null
+      ? null
+      : timeline.durationHours < 1
+        ? `History: degraded since ${timeline.firstDegradedAt} (just flagged).`
+        : `History: degraded since ${timeline.firstDegradedAt} (continuous ${timeline.durationHours}h).`
   const unaffectedSiblings =
     perTargetSnapshots == null
       ? []
@@ -985,6 +1052,8 @@ export function getCrossTargetDiagnosis(
       primary,
       shapeKind: shape.kind,
       sourceIdentity,
+      sourceNetworkOwner,
+      timelineLine,
     })
     const escalationSuffix =
       escalation == null
@@ -1010,6 +1079,8 @@ export function getCrossTargetDiagnosis(
     primary,
     shapeKind: shape.kind,
     sourceIdentity,
+    sourceNetworkOwner,
+    timelineLine,
   })
   const escalationSuffix =
     escalation == null

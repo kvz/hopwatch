@@ -12,6 +12,9 @@ node_label = "dev"
 # Provider/datacenter labels are environment-specific and should be configured.
 hostname        = "probe-host.example.com"
 public_hostname = "hopwatch.example.com"
+provider        = "Example Cloud"
+location        = "Example City (ex1)"
+datacenter      = "ex1-dc1"
 site_label      = "example-dc-1"
 # egress_ip can be configured directly, or discovered at startup by setting
 # egress_ip_lookup_url to a plain-text IP endpoint such as https://api.ipify.org.

@@ -238,6 +238,9 @@ data_dir = "${dir}"
 [identity]
 hostname = "probe-1.example.net"
 public_hostname = "hopwatch.example.net"
+provider = "Example Cloud"
+location = "Example City (ex1)"
+datacenter = "ex1-dc1"
 site_label = "dc-1"
 egress_ip = "203.0.113.10"
 egress_ip_lookup_url = "https://ip.example.net"
@@ -249,9 +252,12 @@ host = "example.com"
 `)
     const config = await loadConfig(configPath)
     expect(config.identity).toEqual({
+      datacenter: 'ex1-dc1',
       egress_ip: '203.0.113.10',
       egress_ip_lookup_url: 'https://ip.example.net',
       hostname: 'probe-1.example.net',
+      location: 'Example City (ex1)',
+      provider: 'Example Cloud',
       public_hostname: 'hopwatch.example.net',
       site_label: 'dc-1',
     })
@@ -260,6 +266,9 @@ host = "example.com"
   test('overrides source identity from environment', async () => {
     vi.stubEnv('HOPWATCH_IDENTITY_HOSTNAME', 'env-probe.example.net')
     vi.stubEnv('HOPWATCH_IDENTITY_PUBLIC_HOSTNAME', 'env-hopwatch.example.net')
+    vi.stubEnv('HOPWATCH_IDENTITY_PROVIDER', 'Env Cloud')
+    vi.stubEnv('HOPWATCH_IDENTITY_LOCATION', 'Env City (env1)')
+    vi.stubEnv('HOPWATCH_IDENTITY_DATACENTER', 'env1-dc1')
     vi.stubEnv('HOPWATCH_IDENTITY_SITE_LABEL', 'env-dc')
     vi.stubEnv('HOPWATCH_IDENTITY_EGRESS_IP', '198.51.100.20')
     vi.stubEnv('HOPWATCH_IDENTITY_EGRESS_IP_LOOKUP_URL', 'https://env-ip.example.net')
@@ -272,6 +281,9 @@ data_dir = "${dir}"
 [identity]
 hostname = "probe-1.example.net"
 public_hostname = "hopwatch.example.net"
+provider = "Example Cloud"
+location = "Example City (ex1)"
+datacenter = "ex1-dc1"
 site_label = "dc-1"
 egress_ip = "203.0.113.10"
 egress_ip_lookup_url = "https://ip.example.net"
@@ -283,9 +295,12 @@ host = "example.com"
 `)
     const config = await loadConfig(configPath)
     expect(config.identity).toEqual({
+      datacenter: 'env1-dc1',
       egress_ip: '198.51.100.20',
       egress_ip_lookup_url: 'https://env-ip.example.net',
       hostname: 'env-probe.example.net',
+      location: 'Env City (env1)',
+      provider: 'Env Cloud',
       public_hostname: 'env-hopwatch.example.net',
       site_label: 'env-dc',
     })

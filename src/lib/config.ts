@@ -107,6 +107,9 @@ const identitySchema = z.object({
   // is site-specific and should come from config.
   hostname: z.string().min(1).optional(),
   public_hostname: z.string().min(1).optional(),
+  provider: z.string().min(1).optional(),
+  location: z.string().min(1).optional(),
+  datacenter: z.string().min(1).optional(),
   site_label: z.string().min(1).optional(),
   egress_ip: z.string().min(1).optional(),
   // Disabled by default to avoid surprising outbound calls. Operators can set
@@ -188,6 +191,18 @@ function applyEnvOverrides(raw: unknown): unknown {
 
   if (env.HOPWATCH_IDENTITY_PUBLIC_HOSTNAME) {
     overrides.identity.public_hostname = env.HOPWATCH_IDENTITY_PUBLIC_HOSTNAME
+  }
+
+  if (env.HOPWATCH_IDENTITY_PROVIDER) {
+    overrides.identity.provider = env.HOPWATCH_IDENTITY_PROVIDER
+  }
+
+  if (env.HOPWATCH_IDENTITY_LOCATION) {
+    overrides.identity.location = env.HOPWATCH_IDENTITY_LOCATION
+  }
+
+  if (env.HOPWATCH_IDENTITY_DATACENTER) {
+    overrides.identity.datacenter = env.HOPWATCH_IDENTITY_DATACENTER
   }
 
   if (env.HOPWATCH_IDENTITY_SITE_LABEL) {

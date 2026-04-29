@@ -40,6 +40,23 @@ function renderDocument(element: ReactElement): string {
   return `<!doctype html>\n${renderToStaticMarkup(element)}`
 }
 
+async function getCachedNetworkOwner(
+  store: HopwatchSqliteStore,
+  ip: string,
+): Promise<NetworkOwnerInfo | null> {
+  const cachedOwner = store.getNetworkOwnerCache(ip)
+  if (cachedOwner != null) {
+    return cachedOwner
+  }
+
+  const lookedUpOwner = await lookupNetworkOwner(ip).catch(() => null)
+  if (lookedUpOwner != null) {
+    store.upsertNetworkOwnerCache(lookedUpOwner)
+  }
+
+  return lookedUpOwner
+}
+
 export async function renderTargetIndex(
   store: HopwatchSqliteStore,
   peers: PeerConfig[],
@@ -218,23 +235,22 @@ export async function renderRootIndex(
   const suspectHopHost = preliminaryCrossTargetDiagnosis.suspect?.host
   const suspectHopIp = suspectHopHost == null ? null : extractIpv4Address(suspectHopHost)
   if (suspectHopHost != null && suspectHopIp != null) {
-    const cachedOwner = store.getNetworkOwnerCache(suspectHopIp)
-    if (cachedOwner != null) {
-      networkOwnersByHopHost.set(suspectHopHost, cachedOwner)
-    } else {
-      const lookedUpOwner = await lookupNetworkOwner(suspectHopIp).catch(() => null)
-      if (lookedUpOwner != null) {
-        store.upsertNetworkOwnerCache(lookedUpOwner)
-        networkOwnersByHopHost.set(suspectHopHost, lookedUpOwner)
-      }
+    const suspectOwner = await getCachedNetworkOwner(store, suspectHopIp)
+    if (suspectOwner != null) {
+      networkOwnersByHopHost.set(suspectHopHost, suspectOwner)
     }
   }
+  const sourceNetworkOwner =
+    sourceIdentity?.egressIp == null
+      ? null
+      : await getCachedNetworkOwner(store, sourceIdentity.egressIp)
   const crossTargetDiagnosis =
-    networkOwnersByHopHost.size === 0
+    networkOwnersByHopHost.size === 0 && sourceNetworkOwner == null
       ? preliminaryCrossTargetDiagnosis
       : getCrossTargetDiagnosis(crossIssues, hopProtocolStats, {
           ...diagnosisContext,
           networkOwnersByHopHost,
+          sourceNetworkOwner: sourceNetworkOwner ?? undefined,
         })
 
   const latestCollectedAt = rows.reduce<string | null>((acc, row) => {

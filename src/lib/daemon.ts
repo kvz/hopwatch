@@ -408,8 +408,11 @@ async function loadDaemonSourceIdentity(
       : await discoverEgressIp(config.identity.egress_ip_lookup_url, logger))
 
   return buildSourceIdentity({
+    datacenter: config.identity.datacenter,
     egressIp,
     hostname: config.identity.hostname ?? osHostname(),
+    location: config.identity.location,
+    provider: config.identity.provider,
     publicHostname: config.identity.public_hostname,
     siteLabel: config.identity.site_label,
   })

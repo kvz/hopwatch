@@ -579,9 +579,14 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       icmpAverageLossPct: 0.5,
       icmpTargetCount: 1,
       tcpAverageLossPct: 51,
-      tcpTargetCount: 2,
-      targetCount: 3,
-      targets: ['tcp-mtr', 'tcp-native', 'icmp'],
+      tcpTargetCount: 3,
+      targetCount: 4,
+      targets: [
+        's3-us-west-2-tcp-mtr',
+        's3-us-west-2-via-namespace-tcp',
+        's3-us-west-2-tcp-native',
+        's3-us-west-2',
+      ],
       totalDownstreamLoss: 12,
       totalIsolatedLoss: 0,
       totalSampleCount: 30,
@@ -628,9 +633,24 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
           },
         ],
       ]),
+      sourceNetworkOwner: {
+        asName: 'HETZNER-CLOUD4-AS, DE',
+        asn: 'AS215859',
+        contactEmails: [],
+        country: 'DE',
+        fetchedAt: '2026-04-29T00:00:00.000Z',
+        ip: '203.0.113.10',
+        prefix: '203.0.113.0/24',
+        rdapName: 'HETZNER-CLOUD',
+        registry: 'ripencc',
+        source: 'test',
+      },
       sourceIdentity: {
+        datacenter: 'sin-dc1',
         egressIp: '203.0.113.10',
         hostname: 'probe-1.example.net',
+        location: 'Singapore (sin)',
+        provider: 'Hetzner Cloud',
         publicHostname: 'hopwatch.example.net',
         siteLabel: 'dc-1',
       },
@@ -639,14 +659,29 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.summary).toContain('Report this to Viewqwest Pte Ltd (AS18106)')
     expect(diagnosis.summary).toContain('noc.sg@viewqwest.com')
     expect(diagnosis.escalation?.copyText).toContain(
-      'persistent packet loss observed by continuous MTR-style probes from probe-1.example.net, egress 203.0.113.10, dc-1',
+      'persistent packet loss observed by continuous MTR-style probes from probe-1.example.net, egress 203.0.113.10, Hetzner Cloud Singapore (sin) / sin-dc1',
     )
+    expect(diagnosis.escalation?.copyText).toContain('Source:')
     expect(diagnosis.escalation?.copyText).toContain('Source hostname: probe-1.example.net')
     expect(diagnosis.escalation?.copyText).toContain('Source public hostname: hopwatch.example.net')
     expect(diagnosis.escalation?.copyText).toContain('Source egress IP: 203.0.113.10')
-    expect(diagnosis.escalation?.copyText).toContain('Source site/datacenter: dc-1')
+    expect(diagnosis.escalation?.copyText).toContain('Source provider: Hetzner Cloud')
+    expect(diagnosis.escalation?.copyText).toContain('Source location: Singapore (sin)')
+    expect(diagnosis.escalation?.copyText).toContain('Source datacenter: sin-dc1')
+    expect(diagnosis.escalation?.copyText).toContain('Internal site label: dc-1')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Source ASN/prefix: HETZNER-CLOUD4-AS (AS215859), 203.0.113.0/24',
+    )
+    expect(diagnosis.escalation?.copyText).toContain('Destination:')
+    expect(diagnosis.escalation?.copyText).toContain('Suspect hop:')
+    expect(diagnosis.escalation?.copyText).toContain('Evidence:')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'External evidence paths: direct TCP/443 MTR, direct TCP/443 native raw-socket cross-check, and direct ICMP MTR comparison.',
+    )
     expect(diagnosis.escalation?.copyText).not.toContain('Hopwatch loss')
     expect(diagnosis.escalation?.copyText).not.toContain('our observer')
+    expect(diagnosis.escalation?.copyText).not.toContain('via-namespace')
+    expect(diagnosis.escalation?.copyText).not.toContain('Affected probe paths')
     expect(diagnosis.escalation?.copyText).toContain('Contact: noc.sg@viewqwest.com')
     expect(diagnosis.escalation?.copyText).toContain('Prefix: 132.147.112.0/24')
   })

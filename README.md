@@ -219,10 +219,38 @@ per-hop rollup (hourly MTR aggregates, 90d retention):
   and privileges.
 - **Stateless rendering.** Every page render reads from the on-disk JSON
   snapshots and rollups. Hot-reload the binary and the UI picks up immediately.
+- **Safe SQLite migration path.** JSON remains the source of truth by default,
+  but `hopwatch storage import` can copy snapshots into a SQLite sidecar and
+  verify count + SHA-256 parity before operators opt into dual-writing new
+  snapshots with `storage.sqlite_write = true`.
 - **One binary.** `bun build --compile` produces a self-contained executable
   per platform. Linux needs `mtr` in `PATH`; that's it. `engine='native'` also
   requires a glibc Linux (the built-in prober `dlopen`s `libc.so.6` via
   `bun:ffi`) - on musl distros (Alpine) stay on the default `engine='mtr'`.
+
+### SQLite sidecar migration
+
+SQLite is optional and deliberately starts as a sidecar. Existing JSON snapshot
+files are not deleted or replaced, and the dashboard read-path still uses the
+JSON files until a later migration step switches it over.
+
+```bash
+# Import current JSON snapshots into data_dir/hopwatch.sqlite and verify parity.
+hopwatch storage import --config /etc/hopwatch/hopwatch.toml --strict-extra
+
+# Verify again later. Extra SQLite rows are tolerated by default because the
+# database may intentionally retain older snapshots after JSON retention prunes.
+hopwatch storage verify --config /etc/hopwatch/hopwatch.toml
+```
+
+To dual-write future probe cycles while retaining JSON as the rollback source:
+
+```toml
+[storage]
+sqlite_write = true
+# Optional. Defaults to <data_dir>/hopwatch.sqlite.
+sqlite_path = "/var/lib/hopwatch/hopwatch.sqlite"
+```
 
 ## Building from source
 

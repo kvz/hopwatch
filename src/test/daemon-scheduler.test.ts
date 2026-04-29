@@ -28,8 +28,13 @@ function buildConfig(overrides: { jitterSeconds?: number } = {}): LoadedConfig {
       packets: 10,
     },
     resolvedDataDir: path.join('/tmp', 'hopwatch-sched'),
+    resolvedSqlitePath: path.join('/tmp', 'hopwatch-sched', 'hopwatch.sqlite'),
     server: { data_dir: '/tmp', listen: ':0', node_label: 'test' },
     sourcePath: '/tmp/config.toml',
+    storage: {
+      sqlite_path: '',
+      sqlite_write: false,
+    },
     target: [],
   }
 }

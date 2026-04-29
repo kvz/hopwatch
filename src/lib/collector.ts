@@ -17,6 +17,7 @@ import type { Logger } from './logger.ts'
 import { parseRawMtrOutput, parseStoredRawSnapshot, type RawMtrEvent } from './raw.ts'
 import { updateTargetRollups } from './rollups.ts'
 import { formatCompactCollectedAt, RESERVED_TARGET_FILES } from './snapshot.ts'
+import { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 export interface MtrHistoryTarget {
   slug: string
@@ -299,6 +300,7 @@ async function mapWithConcurrency<T>(
 export interface CollectSnapshotDeps {
   runCommand?: RunCommand
   runNativeProbeFn?: RunNativeProbeFn
+  sqliteStore?: HopwatchSqliteStore
 }
 
 // Promise.race-based timeout wrapper. Node's DNS resolver and Bun's reverse
@@ -429,8 +431,9 @@ export async function collectSnapshot(
     rawEvents,
     target: target.host,
   }
-  parseStoredRawSnapshot(`${JSON.stringify(storedSnapshot)}`)
-  await writeFile(tmpJsonFile, `${JSON.stringify(storedSnapshot, null, 2)}\n`)
+  const snapshotContents = `${JSON.stringify(storedSnapshot, null, 2)}\n`
+  const parsedSnapshot = parseStoredRawSnapshot(snapshotContents)
+  await writeFile(tmpJsonFile, snapshotContents)
   // Publish atomically via link() instead of rename() so a second process
   // probing the same target in the same wall-clock second collides on
   // EEXIST instead of silently overwriting the first snapshot. The common
@@ -449,6 +452,22 @@ export async function collectSnapshot(
     await rm(tmpJsonFile, { force: true })
   }
   await updateLatestSymlink(jsonFile, latestJsonFile)
+  if (deps.sqliteStore != null) {
+    try {
+      deps.sqliteStore.upsertRawSnapshot(
+        {
+          contents: snapshotContents,
+          fileName: path.basename(jsonFile),
+          sourcePath: jsonFile,
+          targetSlug: path.basename(targetDir),
+        },
+        parsedSnapshot,
+      )
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      logger?.error('sqlite sidecar write failed', { error, file: jsonFile, target: target.slug })
+    }
+  }
   await removeOldSnapshots(targetDir, options.keepDays)
   logger?.info('snapshot saved', { file: jsonFile, target: target.slug })
 }
@@ -555,19 +574,38 @@ export async function runCollector(
     runCommand: deps.runCommand,
     runNativeProbeFn: deps.runNativeProbeFn,
   }
+  let sqliteStore: HopwatchSqliteStore | null = null
+  if (config.storage.sqlite_write) {
+    try {
+      sqliteStore = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      logger.error('sqlite sidecar disabled for this cycle', {
+        dbPath: config.resolvedSqlitePath,
+        error,
+      })
+    }
+  }
+  if (sqliteStore != null) {
+    snapshotDeps.sqliteStore = sqliteStore
+  }
   const failedTargetSlugs: string[] = []
 
-  await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
-    try {
-      await collectSnapshot(nodeLabel, timestamp, options, target, snapshotDeps, logger)
-    } catch (err) {
-      if (!(err instanceof Error)) {
-        throw new Error(`Was thrown a non-error: ${err}`)
+  try {
+    await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
+      try {
+        await collectSnapshot(nodeLabel, timestamp, options, target, snapshotDeps, logger)
+      } catch (err) {
+        if (!(err instanceof Error)) {
+          throw new Error(`Was thrown a non-error: ${err}`)
+        }
+        failedTargetSlugs.push(target.slug)
+        logger.error('snapshot failed', { error: err.message, target: target.slug })
       }
-      failedTargetSlugs.push(target.slug)
-      logger.error('snapshot failed', { error: err.message, target: target.slug })
-    }
-  })
+    })
+  } finally {
+    sqliteStore?.close()
+  }
 
   const failedRollupSlugs = await updateRollupsForTargets(
     nodeLabel,

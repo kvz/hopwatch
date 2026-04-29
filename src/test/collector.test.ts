@@ -66,12 +66,17 @@ function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
       packets: 20,
     },
     resolvedDataDir: dataDir,
+    resolvedSqlitePath: path.join(dataDir, 'hopwatch.sqlite'),
     server: {
       data_dir: dataDir,
       listen: ':8080',
       node_label: 'test-observer',
     },
     sourcePath: path.join(dataDir, 'config.toml'),
+    storage: {
+      sqlite_path: '',
+      sqlite_write: false,
+    },
     target: targetHosts.map((host) => ({
       engine: 'mtr',
       group: 'default',
@@ -174,6 +179,29 @@ describe('runCollector', () => {
 
     const result = await runCollector(config, logger, { runCommand })
     expect(result.failedTargetSlugs).toEqual([])
+  })
+
+  test('does not let an unavailable sqlite sidecar block JSON snapshot collection', async () => {
+    const config = buildConfig(dataDir, ['good.example'])
+    config.storage.sqlite_write = true
+    await writeFile(path.join(dataDir, 'not-a-directory'), 'block sqlite open')
+    config.resolvedSqlitePath = path.join(dataDir, 'not-a-directory', 'hopwatch.sqlite')
+    const logger = createLogger({ level: 'error', pretty: false })
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const runCommand = async (): Promise<{ stderr: string; stdout: string }> => ({
+      stdout: MTR_OUTPUT,
+      stderr: '',
+    })
+
+    const result = await runCollector(config, logger, { runCommand })
+
+    const goodEntries = await readdir(path.join(dataDir, 'good.example'))
+    expect(goodEntries.some((name) => /^\d{8}T\d{6}Z\.json$/.test(name))).toBe(true)
+    expect(result.failedTargetSlugs).toEqual([])
+    expect(errorSpy).toHaveBeenCalledWith(
+      'sqlite sidecar disabled for this cycle',
+      expect.objectContaining({ dbPath: config.resolvedSqlitePath }),
+    )
   })
 
   test('passes --tcp -P <port> to mtr when the target uses protocol="tcp"', async () => {

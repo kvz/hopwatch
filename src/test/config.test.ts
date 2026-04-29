@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { loadConfig } from '../lib/config.ts'
+import { formatConfigSummary, loadConfig } from '../lib/config.ts'
 
 describe('loadConfig netns validation', () => {
   let dir: string
@@ -190,6 +190,45 @@ host = "example.com"
 `)
     const config = await loadConfig(configPath)
     expect(config.resolvedDataDir).toBe(dir)
+  })
+
+  test('defaults sqlite storage to an opt-in sidecar under data_dir', async () => {
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.storage.sqlite_write).toBe(false)
+    expect(config.resolvedSqlitePath).toBe(path.join(dir, 'hopwatch.sqlite'))
+    expect(formatConfigSummary(config)).toContain('sqlite:    disabled')
+  })
+
+  test('accepts explicit sqlite sidecar settings', async () => {
+    const dbPath = path.join(dir, 'custom.sqlite')
+    const configPath = await writeConfig(`
+[server]
+listen = ":0"
+data_dir = "${dir}"
+
+[storage]
+sqlite_path = "${dbPath}"
+sqlite_write = true
+
+[[target]]
+id = "t1"
+label = "t1"
+host = "example.com"
+`)
+    const config = await loadConfig(configPath)
+    expect(config.storage.sqlite_write).toBe(true)
+    expect(config.resolvedSqlitePath).toBe(dbPath)
+    expect(formatConfigSummary(config)).toContain(`sqlite:    ${dbPath}`)
   })
 
   test('rejects engine="native" combined with probe_mode="netns"', async () => {

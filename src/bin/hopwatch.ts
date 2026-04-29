@@ -5,6 +5,11 @@ import { formatConfigSummary, type LoadedConfig, loadConfig } from '../lib/confi
 import { refreshRollups, runCollector } from '../lib/core.ts'
 import { startDaemon } from '../lib/daemon.ts'
 import { createLogger, type Logger } from '../lib/logger.ts'
+import {
+  HopwatchSqliteStore,
+  importSnapshotsFromDataDir,
+  verifySqliteAgainstDataDir,
+} from '../lib/sqlite-storage.ts'
 
 // Source the CLI version from package.json (bumped by Changesets on release)
 // so `hopwatch --version` cannot drift from the npm metadata.
@@ -89,6 +94,103 @@ class RollupCommand extends BaseCommand {
   }
 }
 
+class StorageImportCommand extends BaseCommand {
+  static paths = [['storage', 'import']]
+
+  static usage = Command.Usage({
+    description: 'Import existing JSON snapshots into the SQLite sidecar database.',
+  })
+
+  db = Option.String('--db', {
+    description: 'SQLite path; defaults to storage.sqlite_path or data_dir/hopwatch.sqlite',
+  })
+
+  strictExtra = Option.Boolean('--strict-extra', false, {
+    description: 'Fail verification if SQLite contains snapshots no longer present as JSON files.',
+  })
+
+  skipVerify = Option.Boolean('--skip-verify', false, {
+    description: 'Skip count and sha256 verification after import.',
+  })
+
+  async execute(): Promise<number> {
+    const { config, logger } = await this.resolve()
+    const dbPath = this.db ?? config.resolvedSqlitePath
+    const store = await HopwatchSqliteStore.open(dbPath)
+    try {
+      const result = await importSnapshotsFromDataDir(store, config.resolvedDataDir, logger)
+      logger.info('sqlite import completed', {
+        dbPath,
+        failed: result.failed.length,
+        imported: result.imported,
+        scanned: result.scanned,
+      })
+
+      if (result.failed.length > 0) {
+        return 1
+      }
+
+      if (this.skipVerify) {
+        return 0
+      }
+
+      const verify = await verifySqliteAgainstDataDir(store, config.resolvedDataDir, {
+        strictExtra: this.strictExtra,
+      })
+      logger.info('sqlite verification completed', {
+        extraInSqlite: verify.extraInSqlite.length,
+        fileSnapshotCount: verify.fileSnapshotCount,
+        missingInSqlite: verify.missingInSqlite.length,
+        shaMismatches: verify.shaMismatches.length,
+        sqliteIntegrity: verify.sqliteIntegrity,
+        sqliteSnapshotCount: verify.sqliteSnapshotCount,
+      })
+      return verify.ok ? 0 : 1
+    } finally {
+      store.close()
+    }
+  }
+}
+
+class StorageVerifyCommand extends BaseCommand {
+  static paths = [['storage', 'verify']]
+
+  static usage = Command.Usage({
+    description: 'Verify that SQLite contains every current JSON snapshot with matching sha256.',
+  })
+
+  db = Option.String('--db', {
+    description: 'SQLite path; defaults to storage.sqlite_path or data_dir/hopwatch.sqlite',
+  })
+
+  strictExtra = Option.Boolean('--strict-extra', false, {
+    description: 'Fail if SQLite contains snapshots no longer present as JSON files.',
+  })
+
+  async execute(): Promise<number> {
+    const { config, logger } = await this.resolve()
+    const dbPath = this.db ?? config.resolvedSqlitePath
+    const store = await HopwatchSqliteStore.open(dbPath)
+    try {
+      const verify = await verifySqliteAgainstDataDir(store, config.resolvedDataDir, {
+        strictExtra: this.strictExtra,
+      })
+      logger.info('sqlite verification completed', {
+        dbPath,
+        extraInSqlite: verify.extraInSqlite.length,
+        fileSnapshotCount: verify.fileSnapshotCount,
+        missingInSqlite: verify.missingInSqlite.length,
+        shaMismatches: verify.shaMismatches.length,
+        sqliteIntegrity: verify.sqliteIntegrity,
+        sqliteSnapshotCount: verify.sqliteSnapshotCount,
+      })
+      return verify.ok ? 0 : 1
+    } finally {
+      store.close()
+    }
+  }
+}
+
 class ConfigCheckCommand extends BaseCommand {
   static paths = [['config-check']]
 
@@ -114,6 +216,8 @@ cli.register(Builtins.VersionCommand)
 cli.register(DaemonCommand)
 cli.register(ProbeOnceCommand)
 cli.register(RollupCommand)
+cli.register(StorageImportCommand)
+cli.register(StorageVerifyCommand)
 cli.register(ConfigCheckCommand)
 
 cli

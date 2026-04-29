@@ -7,7 +7,7 @@ import relativeTimeSource from '../client/relative-time.ts' with { type: 'text' 
 // @ts-expect-error see note on relativeTimeSource - same import-attribute shape.
 import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
 import type { LoadedConfig } from './config.ts'
-import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
+import { type RenderedTarget, renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import { parseListenAddress } from './listen.ts'
 import type { Logger } from './logger.ts'
 
@@ -177,6 +177,64 @@ export interface SchedulerDependencies {
     logger: Logger,
     // biome-ignore lint/suspicious/noConfusingVoidType: see note above.
   ) => Promise<{ failedTargetSlugs: string[]; failedRollupSlugs: string[] } | void>
+  onCycleComplete?: () => void
+}
+
+interface RenderCacheEntry<T> {
+  generation: number
+  promise: Promise<T>
+}
+
+export interface RenderCache<T> {
+  clear: () => void
+  get: (key: string, render: () => Promise<T>) => Promise<T>
+  size: () => number
+}
+
+export function createRenderCache<T>(): RenderCache<T> {
+  const entries = new Map<string, RenderCacheEntry<T>>()
+  let generation = 0
+
+  return {
+    clear(): void {
+      generation += 1
+      entries.clear()
+    },
+    get(key: string, render: () => Promise<T>): Promise<T> {
+      const existing = entries.get(key)
+      if (existing != null) {
+        return existing.promise
+      }
+
+      const entryGeneration = generation
+      const promise = render().catch((err: unknown) => {
+        const current = entries.get(key)
+        if (current?.promise === promise) {
+          entries.delete(key)
+        }
+        throw err
+      })
+      entries.set(key, { generation: entryGeneration, promise })
+
+      promise.then(
+        () => {
+          const current = entries.get(key)
+          if (current?.promise !== promise) {
+            return
+          }
+          if (current.generation !== generation) {
+            entries.delete(key)
+          }
+        },
+        () => {},
+      )
+
+      return promise
+    },
+    size(): number {
+      return entries.size
+    },
+  }
 }
 
 export function startScheduler(
@@ -237,6 +295,8 @@ export function startScheduler(
         }
 
         logger.error('cycle failed', { message: err.message, stack: err.stack })
+      } finally {
+        deps.onCycleComplete?.()
       }
     })()
     activeRun = run
@@ -284,11 +344,55 @@ export function startScheduler(
 }
 
 export async function startDaemon(config: LoadedConfig, logger: Logger): Promise<void> {
-  const scheduler = startScheduler(config, logger)
-
   const nodeLabel = config.server.node_label ?? 'hopwatch'
   const signature = config.chart.signature
   const dataDir = config.resolvedDataDir
+  const rootRenderCache = createRenderCache<string>()
+  const targetRenderCache = createRenderCache<RenderedTarget>()
+  const warmSelfHost =
+    config.server.public_url == null ? null : new URL(config.server.public_url).host
+
+  function clearRenderCaches(): void {
+    rootRenderCache.clear()
+    targetRenderCache.clear()
+  }
+
+  async function renderCachedRootIndex(selfHost: string | null): Promise<string> {
+    const cacheKey = selfHost ?? ''
+    return rootRenderCache.get(cacheKey, async () =>
+      renderRootIndex(
+        dataDir,
+        config.peer,
+        nodeLabel,
+        selfHost,
+        config.probe.keep_days,
+        Date.now(),
+        signature,
+      ),
+    )
+  }
+
+  function warmRootIndex(reason: string): void {
+    const started = Date.now()
+    void renderCachedRootIndex(warmSelfHost)
+      .then(() => {
+        logger.info('root render cache warmed', {
+          elapsedMs: Date.now() - started,
+          reason,
+        })
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : `Was thrown a non-error: ${err}`
+        logger.error('root render cache warm failed', { message, reason })
+      })
+  }
+
+  const scheduler = startScheduler(config, logger, {
+    onCycleComplete: () => {
+      clearRenderCaches()
+      warmRootIndex('cycle')
+    },
+  })
 
   const server = Bun.serve({
     fetch: async (request): Promise<Response> => {
@@ -328,15 +432,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
         request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? null
 
       if (url.pathname === '/' || url.pathname === '/index.html') {
-        const html = await renderRootIndex(
-          dataDir,
-          config.peer,
-          nodeLabel,
-          selfHost,
-          config.probe.keep_days,
-          Date.now(),
-          signature,
-        )
+        const html = await renderCachedRootIndex(selfHost)
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
         })
@@ -358,21 +454,30 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           return new Response('not found', { status: 404 })
         }
 
-        const rendered = await renderTargetIndex(
-          targetDir,
-          config.peer,
-          nodeLabel,
-          selfHost,
-          targetSlug,
-          Date.now(),
-          signature,
-        ).catch((err: unknown) => {
-          if (!(err instanceof Error)) {
-            throw new Error(`Was thrown a non-error: ${err}`)
-          }
-          logger.error('render target failed', { message: err.message, target: targetSlug })
-          return null
-        })
+        const cacheKey = `${selfHost ?? ''}\0${targetSlug}`
+        const rendered = await targetRenderCache
+          .get(cacheKey, async () => {
+            const target = await renderTargetIndex(
+              targetDir,
+              config.peer,
+              nodeLabel,
+              selfHost,
+              targetSlug,
+              Date.now(),
+              signature,
+            )
+            if (target == null) {
+              throw new Error('target has no snapshots')
+            }
+            return target
+          })
+          .catch((err: unknown) => {
+            if (!(err instanceof Error)) {
+              throw new Error(`Was thrown a non-error: ${err}`)
+            }
+            logger.error('render target failed', { message: err.message, target: targetSlug })
+            return null
+          })
         if (rendered == null) {
           return new Response('not found', { status: 404 })
         }
@@ -400,6 +505,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
     port: server.port,
   })
 
+  warmRootIndex('startup')
   void scheduler.runNow().catch((err: unknown) => {
     if (!(err instanceof Error)) {
       throw new Error(`Was thrown a non-error: ${err}`)

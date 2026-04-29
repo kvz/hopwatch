@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { LoadedConfig } from '../lib/config.ts'
-import { resolveServeFilePath, resolveTargetDirPath, startScheduler } from '../lib/daemon.ts'
+import {
+  createRenderCache,
+  resolveServeFilePath,
+  resolveTargetDirPath,
+  startScheduler,
+} from '../lib/daemon.ts'
 import { parseListenAddress } from '../lib/listen.ts'
 import { createLogger } from '../lib/logger.ts'
 
@@ -111,6 +116,68 @@ describe('startScheduler', () => {
     await drainPromise
     expect(finished).toBe(true)
     await inFlight
+  })
+
+  test('calls the cycle-complete hook after a collector run', async () => {
+    const config = buildConfig()
+    const logger = createLogger({ level: 'error', pretty: false })
+    const onCycleComplete = vi.fn()
+    const runCollectorFn = vi.fn(async () => {})
+
+    const scheduler = startScheduler(config, logger, { onCycleComplete, runCollectorFn })
+    try {
+      await scheduler.runNow()
+      expect(onCycleComplete).toHaveBeenCalledTimes(1)
+    } finally {
+      scheduler.stop()
+    }
+  })
+})
+
+describe('createRenderCache', () => {
+  test('coalesces concurrent renders for the same key', async () => {
+    const cache = createRenderCache<string>()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const render = vi.fn(async () => {
+      await gate
+      return 'html'
+    })
+
+    const first = cache.get('root', render)
+    const second = cache.get('root', render)
+    release()
+
+    await expect(first).resolves.toBe('html')
+    await expect(second).resolves.toBe('html')
+    expect(render).toHaveBeenCalledTimes(1)
+  })
+
+  test('clear invalidates cached renders', async () => {
+    const cache = createRenderCache<string>()
+    const render = vi.fn(async () => `html-${render.mock.calls.length}`)
+
+    await expect(cache.get('root', render)).resolves.toBe('html-1')
+    await expect(cache.get('root', render)).resolves.toBe('html-1')
+    cache.clear()
+    await expect(cache.get('root', render)).resolves.toBe('html-2')
+
+    expect(render).toHaveBeenCalledTimes(2)
+  })
+
+  test('does not cache failed renders', async () => {
+    const cache = createRenderCache<string>()
+    const render = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce('html')
+
+    await expect(cache.get('root', render)).rejects.toThrow('boom')
+    await expect(cache.get('root', render)).resolves.toBe('html')
+
+    expect(render).toHaveBeenCalledTimes(2)
   })
 })
 

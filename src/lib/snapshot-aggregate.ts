@@ -1225,19 +1225,40 @@ function summarizeTcpConnectImpact(
   const ports = [...new Set(connectSnapshots.map((snapshot) => snapshot.port))].sort(
     (left, right) => left - right,
   )
+  const coveredDestinationSet = new Set(connectSnapshots.map((snapshot) => snapshot.host))
+  const coveredDestinations = destinations.filter((destination) =>
+    coveredDestinationSet.has(destination),
+  )
+  const missingDestinations = destinations.filter(
+    (destination) => !coveredDestinationSet.has(destination),
+  )
   const destinationLabel =
-    destinations.length === 1 ? destinations[0] : `${destinations.length} affected destinations`
+    missingDestinations.length === 0
+      ? destinations.length === 1
+        ? destinations[0]
+        : `${destinations.length} affected destinations`
+      : coveredDestinations.length === 1
+        ? coveredDestinations[0]
+        : `${coveredDestinations.length} covered destinations (${formatEnglishList(coveredDestinations)})`
   const portLabel = formatTcpConnectProbeLabel(ports)
+  const missingCoverageSuffix =
+    missingDestinations.length === 0
+      ? ''
+      : ` No TCP connect ${
+          missingDestinations.length === 1 ? 'probe exists' : 'probes exist'
+        } for ${formatEnglishList(missingDestinations)}, so application impact is not confirmed for ${
+          missingDestinations.length === 1 ? 'that destination' : 'those destinations'
+        }.`
 
   if (lossCount === 0) {
-    const sentence = `${portLabel} probes to ${destinationLabel} stayed healthy (${lossCount}/${lossValues.length} lossy snapshots), so this is traceroute/MTR evidence rather than confirmed end-to-end application impact.`
+    const sentence = `${portLabel} probes to ${destinationLabel} stayed healthy (${lossCount}/${lossValues.length} lossy snapshots), so this is traceroute/MTR evidence rather than confirmed end-to-end application impact.${missingCoverageSuffix}`
     return {
       evidenceLine: `Application impact: ${sentence}`,
       summarySentence: sentence,
     }
   }
 
-  const sentence = `${portLabel} probes to ${destinationLabel} also saw destination loss (${lossCount}/${lossValues.length} lossy snapshots, ~${averageLossPct.toFixed(1)}% average), so end-to-end application impact is observed.`
+  const sentence = `${portLabel} probes to ${destinationLabel} also saw destination loss (${lossCount}/${lossValues.length} lossy snapshots, ~${averageLossPct.toFixed(1)}% average), so end-to-end application impact is observed for the covered destination set.${missingCoverageSuffix}`
   return {
     evidenceLine: `Application impact: ${sentence}`,
     summarySentence: sentence,

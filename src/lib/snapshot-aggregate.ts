@@ -1007,7 +1007,7 @@ function buildCrossTargetEscalation({
   return {
     contactEmails: route.contactEmails,
     copyText: [
-      `Please investigate persistent packet loss observed by continuous MTR-style probes from ${formatSourceIdentityInline(sourceIdentity)} to ${destinationList}.`,
+      `Please investigate persistent packet loss observed by continuous MTR-style traceroute probes from ${formatSourceIdentityInline(sourceIdentity)} to ${destinationList}.`,
       '',
       'Source:',
       ...formatSourceIdentityLines(sourceIdentity),
@@ -1130,7 +1130,7 @@ function formatExternalEvidenceLines(
     return []
   }
 
-  const lines = [`External evidence paths: ${formatEnglishList(uniqueMethodLabels)}.`]
+  const lines = [`Probe evidence paths: ${formatEnglishList(uniqueMethodLabels)}.`]
   const rawMtrExample = selectInlineRawMtrExample(methods, rawMtrSamplesByTarget)
   if (rawMtrExample != null) {
     lines.push(
@@ -1197,9 +1197,9 @@ function trimInlineRawMtrExample(rawText: string): string {
   return `${trimmed.slice(0, maxChars).trimEnd()}\n… [truncated]`
 }
 
-function formatPortList(ports: number[]): string {
+function formatTcpConnectProbeLabel(ports: number[]): string {
   if (ports.length === 0) return 'TCP connect'
-  return `TCP/${ports.join(',')}`
+  return `TCP/${ports.join(',')} connect`
 }
 
 function summarizeTcpConnectImpact(
@@ -1227,7 +1227,7 @@ function summarizeTcpConnectImpact(
   )
   const destinationLabel =
     destinations.length === 1 ? destinations[0] : `${destinations.length} affected destinations`
-  const portLabel = formatPortList(ports)
+  const portLabel = formatTcpConnectProbeLabel(ports)
 
   if (lossCount === 0) {
     const sentence = `${portLabel} probes to ${destinationLabel} stayed healthy (${lossCount}/${lossValues.length} lossy snapshots), so this is traceroute/MTR evidence rather than confirmed end-to-end application impact.`
@@ -1417,12 +1417,14 @@ export function getCrossTargetDiagnosis(
   })
   const escalationSuffix =
     escalation == null ? 'consider escalating with the upstream network' : escalation.summaryAction
+  const applicationImpactSuffix =
+    tcpConnectImpact == null ? '' : ` ${tcpConnectImpact.summarySentence}`
   return {
     className: severe ? 'bad' : 'warn',
     escalation,
     label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
     shape,
-    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - ${escalationSuffix}.${timelineSuffix}${siblingsSuffix}`,
+    summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - ${escalationSuffix}.${applicationImpactSuffix}${timelineSuffix}${siblingsSuffix}`,
     suspect: primary,
   }
 }

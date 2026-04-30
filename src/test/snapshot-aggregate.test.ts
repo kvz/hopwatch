@@ -624,7 +624,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.summary).toContain('0.5%')
     expect(diagnosis.summary).toContain('middlebox')
     expect(diagnosis.summary).toContain(
-      'TCP/443 probes to s3.us-west-2.amazonaws.com stayed healthy',
+      'TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
     )
     expect(diagnosis.summary).not.toContain('across 1 destination')
     expect(diagnosis.summary).not.toContain('TCP connect check')
@@ -729,7 +729,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.summary).toContain('Report this to Viewqwest Pte Ltd (AS18106)')
     expect(diagnosis.summary).toContain('noc.sg@viewqwest.com')
     expect(diagnosis.escalation?.copyText).toContain(
-      'persistent packet loss observed by continuous MTR-style probes from probe-1.example.net, egress 203.0.113.10, Hetzner Cloud Singapore (sin) / sin-dc1',
+      'persistent packet loss observed by continuous MTR-style traceroute probes from probe-1.example.net, egress 203.0.113.10, Hetzner Cloud Singapore (sin) / sin-dc1',
     )
     expect(diagnosis.escalation?.copyText).toContain('Source:')
     expect(diagnosis.escalation?.copyText).toContain('Source hostname: probe-1.example.net')
@@ -746,7 +746,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain('Suspect hop:')
     expect(diagnosis.escalation?.copyText).toContain('Evidence:')
     expect(diagnosis.escalation?.copyText).toContain(
-      'External evidence paths: direct TCP/443 MTR, direct TCP/443 native raw-socket cross-check, and direct ICMP MTR comparison.',
+      'Probe evidence paths: direct TCP/443 MTR, direct TCP/443 native raw-socket cross-check, and direct ICMP MTR comparison.',
     )
     expect(diagnosis.escalation?.copyText).toContain(
       'Live latest raw MTR output (may differ by the time this message is read): https://hopwatch.example.net/hopwatch/tcp-mtr/latest.txt, https://hopwatch.example.net/hopwatch/icmp/latest.txt',
@@ -755,7 +755,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       'Problematic raw MTR example (direct TCP/443 MTR, collected 2026-04-29 18:35:07 UTC, destination loss 50.0%, worst-hop loss 50.0%):',
     )
     expect(diagnosis.escalation?.copyText).toContain(
-      'Application impact: TCP/443 probes to s3.us-west-2.amazonaws.com stayed healthy',
+      'Application impact: TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
     )
     expect(diagnosis.escalation?.copyText).toContain('```text')
     expect(diagnosis.escalation?.copyText).toContain('132.147.112.101')
@@ -798,6 +798,31 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
 
     const diagnosis = getCrossTargetDiagnosis([sourceOwnedIssue], undefined, {
       networkOwnersByHopHost: new Map([['5.161.8.130', hetznerCloudOwner]]),
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 'google.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 'google-com-tcp-connect',
+            }),
+          ],
+          target: 'tcp-connect-cross-checks',
+        },
+      ],
       sourceIdentity: {
         datacenter: 'ash-dc1',
         egressIp: '5.161.82.43',
@@ -819,6 +844,12 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       'recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com)',
     )
     expect(diagnosis.summary).toContain('source and suspect hop are in the same network')
+    expect(diagnosis.summary).toContain(
+      'TCP/443 connect probes to 2 affected destinations stayed healthy',
+    )
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Application impact: TCP/443 connect probes to 2 affected destinations stayed healthy',
+    )
     expect(diagnosis.escalation?.copyText).toContain(
       'Recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com).',
     )

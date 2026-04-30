@@ -1,5 +1,13 @@
 # hopwatch
 
+## 0.4.3
+
+### Patch Changes
+
+- 2bb57b8: Avoid overstating TCP connect probe coverage in cross-target application-impact diagnoses, keep
+  scheduled probe cycles on the configured start-to-start cadence, and hide stale retired targets from
+  the root dashboard.
+
 ## 0.4.2
 
 ### Patch Changes

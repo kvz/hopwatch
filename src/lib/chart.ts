@@ -1,7 +1,6 @@
 import { quantile } from './raw.ts'
-import type { MtrRollupBucket } from './rollups.ts'
+import type { MtrRollupBucket, MtrRollupFile, RollupGranularity } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
-import type { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 export interface ChartPoint {
   destinationLossPct: number | null
@@ -22,6 +21,10 @@ export interface ChartDefinition {
   rangeLabel: string
   rangeMs: number
   sourceLabel: string
+}
+
+export interface ChartStore {
+  getRollupFile(targetSlug: string, granularity: RollupGranularity): MtrRollupFile | null
 }
 
 export function bucketTimestamp(bucketStart: string, granularity: 'hour' | 'day'): number {
@@ -124,7 +127,7 @@ export function buildThumbnailChartDefinition(
 }
 
 export async function loadChartDefinitions(
-  store: HopwatchSqliteStore,
+  store: ChartStore,
   targetSlug: string,
   snapshots: SnapshotSummary[],
   now: number,

@@ -15,7 +15,7 @@ import {
   type NetworkOwnerContactOverride,
   type NetworkOwnerInfo,
 } from './network-owner.ts'
-import type { MtrRollupBucket } from './rollups.ts'
+import type { MtrRollupBucket, MtrRollupFile, RollupGranularity } from './rollups.ts'
 import { parseCollectedAt, type SnapshotSummary } from './snapshot.ts'
 import {
   type DiagnosisAggregate,
@@ -33,9 +33,9 @@ import {
   summarizeSnapshots,
 } from './snapshot-aggregate.ts'
 import type { SourceIdentity } from './source-identity.ts'
-import type { HopwatchSqliteStore } from './sqlite-storage.ts'
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+const RETIRED_TARGET_GRACE_MS = 2 * 60 * 60 * 1000
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
 export interface RenderedTarget {
@@ -43,12 +43,21 @@ export interface RenderedTarget {
   latestSnapshot: SnapshotSummary
 }
 
+export interface PageSnapshotStore {
+  getNetworkOwnerCache(ip: string, now?: Date): NetworkOwnerInfo | null
+  getRollupFile(targetSlug: string, granularity: RollupGranularity): MtrRollupFile | null
+  getSnapshotRawText(targetSlug: string, fileName: string): string | null
+  listSnapshotSummaries(targetSlug: string): SnapshotSummary[]
+  listTargetSlugs(): string[]
+  upsertNetworkOwnerCache(owner: NetworkOwnerInfo, now?: Date): void
+}
+
 function renderDocument(element: ReactElement): string {
   return `<!doctype html>\n${renderToStaticMarkup(element)}`
 }
 
 async function getCachedNetworkOwner(
-  store: HopwatchSqliteStore,
+  store: PageSnapshotStore,
   ip: string,
   contactOverrides: NetworkOwnerContactOverride[],
 ): Promise<NetworkOwnerInfo | null> {
@@ -64,6 +73,25 @@ async function getCachedNetworkOwner(
   }
 
   return null
+}
+
+function isStaleRetiredTarget(
+  targetSlug: string,
+  snapshots: SnapshotSummary[],
+  now: number,
+  activeTargetSlugs: Set<string> | null,
+): boolean {
+  if (activeTargetSlugs == null || activeTargetSlugs.has(targetSlug)) {
+    return false
+  }
+
+  const latestCollectedAt = snapshots[0]?.collectedAt
+  if (latestCollectedAt == null) {
+    return true
+  }
+
+  const latestTimestamp = parseCollectedAt(latestCollectedAt)
+  return latestTimestamp == null || now - latestTimestamp > RETIRED_TARGET_GRACE_MS
 }
 
 function scoreRawMtrEvidenceSnapshot(snapshot: SnapshotSummary): number {
@@ -91,7 +119,7 @@ function selectRawMtrEvidenceSnapshot(snapshots: SnapshotSummary[]): SnapshotSum
 }
 
 export async function renderTargetIndex(
-  store: HopwatchSqliteStore,
+  store: PageSnapshotStore,
   peers: PeerConfig[],
   selfLabel: string,
   selfHost: string | null,
@@ -148,7 +176,7 @@ export async function renderTargetIndex(
 }
 
 export async function renderRootIndex(
-  store: HopwatchSqliteStore,
+  store: PageSnapshotStore,
   peers: PeerConfig[],
   selfLabel: string,
   selfHost: string | null,
@@ -158,7 +186,9 @@ export async function renderRootIndex(
   sourceIdentity?: SourceIdentity,
   publicBaseUrl?: string,
   networkOwnerContactOverrides: NetworkOwnerContactOverride[] = [],
+  activeTargetSlugs: string[] | null = null,
 ): Promise<string> {
+  const activeTargetSlugSet = activeTargetSlugs == null ? null : new Set(activeTargetSlugs)
   const targetSummaries: Array<{
     aggregate: SnapshotAggregate
     diagnosisAggregate: DiagnosisAggregate
@@ -172,6 +202,9 @@ export async function renderRootIndex(
   for (const targetSlug of store.listTargetSlugs()) {
     const snapshots = store.listSnapshotSummaries(targetSlug)
     if (snapshots.length === 0) {
+      continue
+    }
+    if (isStaleRetiredTarget(targetSlug, snapshots, now, activeTargetSlugSet)) {
       continue
     }
 

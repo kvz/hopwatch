@@ -867,6 +867,53 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     )
   })
 
+  test('diagnosis does not overstate TCP connect coverage for partly covered destinations', () => {
+    const sourceOwnedIssue = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com', 'google.com'],
+      asn: null,
+      averageLossPct: 51,
+      host: '5.161.8.130',
+      icmpAverageLossPct: 51,
+      icmpTargetCount: 2,
+      tcpAverageLossPct: 52,
+      tcpTargetCount: 2,
+      targetCount: 4,
+      targets: ['s3-us-west-2-tcp-mtr', 's3-us-west-2-tcp-native', 'google-com', 'google-com'],
+      totalDownstreamLoss: 1252,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 2000,
+    }
+
+    const diagnosis = getCrossTargetDiagnosis([sourceOwnedIssue], undefined, {
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 0,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+          ],
+          target: 's3-us-west-2-tcp-connect',
+        },
+      ],
+    })
+
+    expect(diagnosis.summary).toContain(
+      'TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
+    )
+    expect(diagnosis.summary).toContain(
+      'No TCP connect probe exists for google.com, so application impact is not confirmed for that destination.',
+    )
+    expect(diagnosis.summary).not.toContain('TCP/443 connect probes to 2 affected destinations')
+    expect(diagnosis.escalation).toBeNull()
+  })
+
   test('does NOT flag protocol-selective when ICMP is also lossy (real capacity problem)', () => {
     // Both protocols see substantial loss - that's not policy-driven, it's
     // the classic "sick router drops packets" signature. Fall through to

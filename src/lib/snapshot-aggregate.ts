@@ -323,6 +323,8 @@ export interface RawMtrEvidenceSample {
 
 interface TcpConnectImpactSummary {
   evidenceLine: string
+  hasConfirmedApplicationImpact: boolean
+  hasHealthyCounterEvidence: boolean
   summarySentence: string
 }
 
@@ -1162,13 +1164,68 @@ function selectInlineRawMtrExample(
   rawMtrSamplesByTarget: Map<string, RawMtrEvidenceSample> | undefined,
 ): InlineRawMtrExample | null {
   if (rawMtrSamplesByTarget == null) return null
-  const preferred =
-    methods.find((method) => method.target.includes('tcp-mtr')) ??
-    methods.find((method) => method.rawMtrUrl != null)
-  if (preferred == null) return null
-  const sample = rawMtrSamplesByTarget.get(preferred.target)
-  if (sample == null || sample.rawText.trim() === '') return null
-  return { label: preferred.label, sample }
+
+  const candidates = methods
+    .filter((method) => method.rawMtrUrl != null)
+    .map((method) => {
+      const sample = rawMtrSamplesByTarget.get(method.target)
+      if (sample == null || sample.rawText.trim() === '') return null
+      return { label: method.label, sample, target: method.target }
+    })
+    .filter((candidate): candidate is InlineRawMtrExample & { target: string } => candidate != null)
+    .sort((left, right) => {
+      return Number(right.target.includes('tcp-mtr')) - Number(left.target.includes('tcp-mtr'))
+    })
+
+  return (
+    candidates.find((candidate) => !hasAmbiguousTrailingDestinationRow(candidate.sample.rawText)) ??
+    null
+  )
+}
+
+interface ParsedRawMtrHopRow {
+  host: string
+  lossPct: number
+  sent: number
+}
+
+function parseRawMtrHopRow(line: string): ParsedRawMtrHopRow | null {
+  const match = /^\s*\d+\.\|--\s+(.+?)\s{2,}([0-9.]+)%\s+(\d+)\b/.exec(line)
+  if (match == null) return null
+  const [, host, lossPct, sent] = match
+  return {
+    host,
+    lossPct: Number(lossPct),
+    sent: Number(sent),
+  }
+}
+
+function normalizeRawMtrHost(host: string): string {
+  return host
+    .replace(/\s*\([^)]*\)\s*/g, '')
+    .replaceAll('…', '')
+    .trim()
+    .toLowerCase()
+}
+
+function hostLooksRelated(left: string, right: string): boolean {
+  const leftNormalized = normalizeRawMtrHost(left)
+  const rightNormalized = normalizeRawMtrHost(right)
+  if (leftNormalized === '' || rightNormalized === '') return false
+  return leftNormalized.startsWith(rightNormalized) || rightNormalized.startsWith(leftNormalized)
+}
+
+function hasAmbiguousTrailingDestinationRow(rawText: string): boolean {
+  const rows = rawText
+    .split('\n')
+    .map(parseRawMtrHopRow)
+    .filter((row): row is ParsedRawMtrHopRow => row != null)
+  const last = rows.at(-1)
+  if (last == null || last.lossPct !== 0 || last.sent > 1) return false
+
+  return rows
+    .slice(0, -1)
+    .some((row) => row.lossPct > 0 && row.sent > last.sent && hostLooksRelated(row.host, last.host))
 }
 
 function formatInlineRawMtrExampleLabel(example: InlineRawMtrExample): string {
@@ -1254,6 +1311,8 @@ function summarizeTcpConnectImpact(
     const sentence = `${portLabel} probes to ${destinationLabel} stayed healthy (${lossCount}/${lossValues.length} lossy snapshots), so this is traceroute/MTR evidence rather than confirmed end-to-end application impact.${missingCoverageSuffix}`
     return {
       evidenceLine: `Application impact: ${sentence}`,
+      hasConfirmedApplicationImpact: false,
+      hasHealthyCounterEvidence: true,
       summarySentence: sentence,
     }
   }
@@ -1261,6 +1320,8 @@ function summarizeTcpConnectImpact(
   const sentence = `${portLabel} probes to ${destinationLabel} also saw destination loss (${lossCount}/${lossValues.length} lossy snapshots, ~${averageLossPct.toFixed(1)}% average), so end-to-end application impact is observed for the covered destination set.${missingCoverageSuffix}`
   return {
     evidenceLine: `Application impact: ${sentence}`,
+    hasConfirmedApplicationImpact: true,
+    hasHealthyCounterEvidence: false,
     summarySentence: sentence,
   }
 }
@@ -1384,26 +1445,32 @@ export function getCrossTargetDiagnosis(
     primary.affectedDestinations,
     perTargetSnapshots,
   )
+  const tracerouteOnly = tcpConnectImpact?.hasHealthyCounterEvidence === true
+  const tracerouteOnlySuffix =
+    'No network escalation is recommended from this traceroute-only signal unless application probes start failing too'
 
   if (shape.kind === 'protocol_selective') {
     const icmpPct = primary.icmpAverageLossPct ?? 0
     const tcpPct = primary.tcpAverageLossPct ?? 0
     const owner = networkOwnersByHopHost?.get(primary.host) ?? null
-    const escalation = buildCrossTargetEscalation({
-      applicationImpactLine: tcpConnectImpact?.evidenceLine,
-      destinationList: `${destinationList}${moreDestinations}`,
-      hopDisplay,
-      owner,
-      primary,
-      publicBaseUrl,
-      rawMtrSamplesByTarget,
-      shapeKind: shape.kind,
-      sourceIdentity,
-      sourceNetworkOwner,
-      timelineLine,
-    })
-    const escalationSuffix =
-      escalation == null
+    const escalation = tracerouteOnly
+      ? null
+      : buildCrossTargetEscalation({
+          applicationImpactLine: tcpConnectImpact?.evidenceLine,
+          destinationList: `${destinationList}${moreDestinations}`,
+          hopDisplay,
+          owner,
+          primary,
+          publicBaseUrl,
+          rawMtrSamplesByTarget,
+          shapeKind: shape.kind,
+          sourceIdentity,
+          sourceNetworkOwner,
+          timelineLine,
+        })
+    const escalationSuffix = tracerouteOnly
+      ? ` ${tracerouteOnlySuffix}.`
+      : escalation == null
         ? ' The fix is typically upstream of hopwatch: raise it with the network owning this hop, or re-route around it.'
         : ` ${capitalizeSentence(escalation.summaryAction)}.`
     const applicationImpactSuffix =
@@ -1411,9 +1478,9 @@ export function getCrossTargetDiagnosis(
         ? ' Use the TCP connect check to confirm end-to-end application impact.'
         : ` ${tcpConnectImpact.summarySentence}`
     return {
-      className: 'bad',
+      className: tracerouteOnly ? 'warn' : 'bad',
       escalation,
-      label: 'Protocol-selective loss',
+      label: tracerouteOnly ? 'Traceroute-only protocol loss' : 'Protocol-selective loss',
       shape,
       summary: `Hop ${hopDisplay}${asnLabel} drops ~${tcpPct.toFixed(1)}% of TCP traceroute probes to ${destinationList}${moreDestinations} but only ~${icmpPct.toFixed(1)}% of ICMP probes on the same hop (${probePathPhrase}). Protocol-selective loss points to a middlebox policer or asymmetric ECMP on a per-flow-hash basis - not plain capacity - so ICMP-only monitoring would report this path as healthy.${applicationImpactSuffix}${escalationSuffix}${timelineSuffix}${siblingsSuffix}`,
       suspect: primary,
@@ -1423,27 +1490,36 @@ export function getCrossTargetDiagnosis(
   const lossLabel =
     primary.averageLossPct == null ? '' : ` at ~${primary.averageLossPct.toFixed(1)}% average loss`
   const owner = networkOwnersByHopHost?.get(primary.host) ?? null
-  const escalation = buildCrossTargetEscalation({
-    applicationImpactLine: tcpConnectImpact?.evidenceLine,
-    destinationList: `${destinationList}${moreDestinations}`,
-    hopDisplay,
-    owner,
-    primary,
-    publicBaseUrl,
-    rawMtrSamplesByTarget,
-    shapeKind: shape.kind,
-    sourceIdentity,
-    sourceNetworkOwner,
-    timelineLine,
-  })
-  const escalationSuffix =
-    escalation == null ? 'consider escalating with the upstream network' : escalation.summaryAction
+  const escalation = tracerouteOnly
+    ? null
+    : buildCrossTargetEscalation({
+        applicationImpactLine: tcpConnectImpact?.evidenceLine,
+        destinationList: `${destinationList}${moreDestinations}`,
+        hopDisplay,
+        owner,
+        primary,
+        publicBaseUrl,
+        rawMtrSamplesByTarget,
+        shapeKind: shape.kind,
+        sourceIdentity,
+        sourceNetworkOwner,
+        timelineLine,
+      })
+  const escalationSuffix = tracerouteOnly
+    ? tracerouteOnlySuffix
+    : escalation == null
+      ? 'consider escalating with the upstream network'
+      : escalation.summaryAction
   const applicationImpactSuffix =
     tcpConnectImpact == null ? '' : ` ${tcpConnectImpact.summarySentence}`
   return {
-    className: severe ? 'bad' : 'warn',
+    className: tracerouteOnly ? 'warn' : severe ? 'bad' : 'warn',
     escalation,
-    label: severe ? 'Upstream path degraded' : 'Shared hop flaky',
+    label: tracerouteOnly
+      ? 'Traceroute-only loss'
+      : severe
+        ? 'Upstream path degraded'
+        : 'Shared hop flaky',
     shape,
     summary: `Hop ${hopDisplay}${asnLabel} sits on the path to ${destinationCount} ${destinationNoun} (${destinationList}${moreDestinations}) via ${probePathPhrase} and coincides with ${primary.totalDownstreamLoss} downstream-loss snapshots${lossLabel} - ${escalationSuffix}.${applicationImpactSuffix}${timelineSuffix}${siblingsSuffix}`,
     suspect: primary,

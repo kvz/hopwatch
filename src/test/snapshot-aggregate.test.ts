@@ -619,13 +619,14 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       ],
     })
     expect(diagnosis.shape.kind).toBe('protocol_selective')
-    expect(diagnosis.label).toBe('Protocol-selective loss')
+    expect(diagnosis.label).toBe('Traceroute-only protocol loss')
     expect(diagnosis.summary).toContain('51.0%')
     expect(diagnosis.summary).toContain('0.5%')
     expect(diagnosis.summary).toContain('middlebox')
     expect(diagnosis.summary).toContain(
       'TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
     )
+    expect(diagnosis.summary).toContain('No network escalation is recommended')
     expect(diagnosis.summary).not.toContain('across 1 destination')
     expect(diagnosis.summary).not.toContain('TCP connect check')
   })
@@ -692,7 +693,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
           snapshots: [
             snapshot({
               collectedAt: '20260420T110000Z',
-              destinationLossPct: 0,
+              destinationLossPct: 20,
               host: 's3.us-west-2.amazonaws.com',
               port: 443,
               protocol: 'tcp',
@@ -755,7 +756,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       'Problematic raw MTR example (direct TCP/443 MTR, collected 2026-04-29 18:35:07 UTC, destination loss 50.0%, worst-hop loss 50.0%):',
     )
     expect(diagnosis.escalation?.copyText).toContain(
-      'Application impact: TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
+      'Application impact: TCP/443 connect probes to s3.us-west-2.amazonaws.com also saw destination loss',
     )
     expect(diagnosis.escalation?.copyText).toContain('```text')
     expect(diagnosis.escalation?.copyText).toContain('132.147.112.101')
@@ -767,7 +768,86 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     expect(diagnosis.escalation?.copyText).toContain('Prefix: 132.147.112.0/24')
   })
 
-  test('diagnosis routes source-owned suspect hops to the source provider network team', () => {
+  test('escalation copy does not inline ambiguous MTR examples with a trailing healthy destination row', () => {
+    const issue = {
+      affectedDestinations: ['s3.us-west-2.amazonaws.com'],
+      asn: null,
+      averageLossPct: 40,
+      host: '132.147.112.101',
+      icmpAverageLossPct: 40,
+      icmpTargetCount: 0,
+      tcpAverageLossPct: 40,
+      tcpTargetCount: 1,
+      targetCount: 2,
+      targets: ['s3-us-west-2-tcp-mtr', 's3-us-west-2-tcp-native'],
+      totalDownstreamLoss: 20,
+      totalIsolatedLoss: 0,
+      totalSampleCount: 30,
+    }
+
+    const diagnosis = getCrossTargetDiagnosis([issue], undefined, {
+      networkOwnersByHopHost: new Map([
+        [
+          '132.147.112.101',
+          {
+            asName: 'VIEWQWEST-SG-AP Viewqwest Pte Ltd, SG',
+            asn: 'AS18106',
+            contactEmails: ['noc.sg@viewqwest.com'],
+            country: 'SG',
+            fetchedAt: '2026-04-29T00:00:00.000Z',
+            ip: '132.147.112.101',
+            prefix: '132.147.112.0/24',
+            rdapName: 'VIEWQWEST-NET',
+            registry: 'apnic',
+            source: 'test',
+          },
+        ],
+      ]),
+      perTargetSnapshots: [
+        {
+          engine: 'connect',
+          protocol: 'tcp',
+          snapshots: [
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: 20,
+              host: 's3.us-west-2.amazonaws.com',
+              port: 443,
+              protocol: 'tcp',
+              target: 's3-us-west-2-tcp-connect',
+            }),
+          ],
+          target: 's3-us-west-2-tcp-connect',
+        },
+      ],
+      publicBaseUrl: 'https://hopwatch.example.net/hopwatch/',
+      rawMtrSamplesByTarget: new Map([
+        [
+          's3-us-west-2-tcp-mtr',
+          {
+            collectedAt: '20260429T183507Z',
+            destinationLossPct: 90,
+            rawText: [
+              '# target=s3.us-west-2.amazonaws.com',
+              '',
+              'Start: 2026-04-29T18:35:07Z',
+              'HOST: probe-1                                Loss%   Snt   Last    Avg   Best   Wrst  StDev',
+              ' 21.|-- s3-us-west-2.amazonaws.com (52.92.1.1)  90.0%    10   137.2   137.2   137.2   137.2     0.0',
+              ' 22.|-- s3-us-west-2.amazonaws.com (52.92.1.2)   0.0%     1    87.4    87.4    87.4    87.4     0.0',
+            ].join('\n'),
+            worstHopLossPct: 100,
+          },
+        ],
+      ]),
+    })
+
+    expect(diagnosis.escalation?.copyText).not.toContain('Problematic raw MTR example')
+    expect(diagnosis.escalation?.copyText).toContain(
+      'Live latest raw MTR output (may differ by the time this message is read): https://hopwatch.example.net/hopwatch/s3-us-west-2-tcp-mtr/latest.txt',
+    )
+  })
+
+  test('diagnosis downgrades source-owned suspect hops when connect probes are healthy', () => {
     const sourceOwnedIssue = {
       affectedDestinations: ['s3.us-west-2.amazonaws.com', 'google.com'],
       asn: null,
@@ -840,30 +920,13 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       },
     })
 
-    expect(diagnosis.summary).toContain(
-      'recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com)',
-    )
-    expect(diagnosis.summary).toContain('source and suspect hop are in the same network')
+    expect(diagnosis.label).toBe('Traceroute-only loss')
+    expect(diagnosis.className).toBe('warn')
+    expect(diagnosis.escalation).toBeNull()
+    expect(diagnosis.summary).not.toContain('recommended escalation')
+    expect(diagnosis.summary).toContain('No network escalation is recommended')
     expect(diagnosis.summary).toContain(
       'TCP/443 connect probes to 2 affected destinations stayed healthy',
-    )
-    expect(diagnosis.escalation?.copyText).toContain(
-      'Application impact: TCP/443 connect probes to 2 affected destinations stayed healthy',
-    )
-    expect(diagnosis.escalation?.copyText).toContain(
-      'Recommended escalation: Hetzner Cloud network team / AS213230 (network@hetzner.com, abuse@hetzner.com).',
-    )
-    expect(diagnosis.escalation?.copyText).toContain(
-      'The source egress IP and suspect hop are both announced by HETZNER-CLOUD2-AS (AS213230)',
-    )
-    expect(diagnosis.escalation?.copyText).toContain(
-      'the pattern affects 2 external destinations across 4 probe paths from ash-dc1',
-    )
-    expect(diagnosis.escalation?.copyText).toContain(
-      'Contact: network@hetzner.com, abuse@hetzner.com',
-    )
-    expect(diagnosis.escalation?.copyText).not.toContain(
-      'use the owner/ASN as the escalation target',
     )
   })
 

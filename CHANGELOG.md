@@ -1,5 +1,13 @@
 # hopwatch
 
+## 0.4.4
+
+### Patch Changes
+
+- Downgrade cross-target diagnoses to traceroute-only when TCP connect probes stay healthy, suppress
+  network escalation copy in that case, and avoid inlining ambiguous MTR examples whose final
+  destination row is a single healthy reply.
+
 ## 0.4.3
 
 ### Patch Changes

@@ -88,6 +88,37 @@ describe('startScheduler', () => {
     }
   })
 
+  test('schedules recurring cycles relative to cycle start time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-30T00:00:00Z'))
+    try {
+      const config = buildConfig({ jitterSeconds: 0 })
+      const logger = createLogger({ level: 'error', pretty: false })
+      const runCollectorFn = vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10 * 60 * 1000)
+        })
+      })
+
+      const scheduler = startScheduler(config, logger, { runCollectorFn })
+      try {
+        const firstRun = scheduler.runNow()
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+        await firstRun
+
+        await vi.advanceTimersByTimeAsync(50 * 60 * 1000 - 1)
+        expect(runCollectorFn).toHaveBeenCalledTimes(1)
+
+        await vi.advanceTimersByTimeAsync(1)
+        expect(runCollectorFn).toHaveBeenCalledTimes(2)
+      } finally {
+        scheduler.stop()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('drain() awaits the in-flight cycle started before stop()', async () => {
     const config = buildConfig()
     const logger = createLogger({ level: 'error', pretty: false })

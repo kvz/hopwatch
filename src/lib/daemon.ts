@@ -101,8 +101,8 @@ export function startScheduler(
       timer = null
     }
 
+    const started = Date.now()
     const run = (async (): Promise<void> => {
-      const started = Date.now()
       try {
         const result = await runCollectorFn(config, logger)
         const failedTargetSlugs = result?.failedTargetSlugs ?? []
@@ -143,7 +143,7 @@ export function startScheduler(
 
     if (!cancelled) {
       const jitter = Math.floor(Math.random() * Math.max(jitterMs, 1))
-      schedule(intervalMs + jitter)
+      schedule(Math.max(0, started + intervalMs + jitter - Date.now()))
     }
   }
 
@@ -250,6 +250,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
             asn: contact.asn,
             contactEmails: contact.contact_emails,
           })),
+          config.target.map((target) => target.id),
         )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },

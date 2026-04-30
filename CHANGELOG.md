@@ -1,5 +1,11 @@
 # hopwatch
 
+## 0.4.2
+
+### Patch Changes
+
+- Clarify escalation copy around MTR-style traceroute evidence versus TCP connect application impact.
+
 ## 0.4.1
 
 ### Patch Changes

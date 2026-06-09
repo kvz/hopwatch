@@ -71,7 +71,7 @@ jobs:
           fi
           echo "tag=$resolved" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ steps.tag.outputs.tag }}
           lfs: true

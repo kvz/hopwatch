@@ -35,7 +35,7 @@ jobs:
 
       - name: Create Release Pull Request or GitHub Release
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d
         with:
           title: "chore: release"
           commit: "chore: release"

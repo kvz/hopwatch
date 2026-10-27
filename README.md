@@ -185,6 +185,112 @@ server {
 Bind hopwatch to loopback only (`listen = "127.0.0.1:8080"`) when fronting it
 with nginx.
 
+## Fast sentinels and external alerts
+
+Full MTR targets keep their existing 900-second cadence. To capture short outages,
+add a **separate** TCP-connect target with an explicit `interval_seconds`:
+
+```toml
+[metrics]
+enabled = true                  # optional /metrics endpoint; disabled by default
+
+[[target]]
+id = "s3-eu-sentinel"
+label = "S3 EU sentinel"
+host = "s3.eu-west-1.amazonaws.com"
+engine = "connect"
+protocol = "tcp"
+port = 443
+interval_seconds = 30
+packets = 3                     # optional, 3–5; defaults to 3 for sentinels
+```
+
+An explicit target interval opts into the sentinel scheduler: minimum 30 seconds,
+at most six targets, one independent slot per target, jitter capped at two seconds,
+and a ten-second deadline including DNS. A slow MTR cannot occupy a sentinel slot;
+a target never overlaps itself. DNS is resolved once per sample with a two-second
+budget, then connections to that IP share the remaining deadline. TCP refusal and
+timeout count as destination loss; DNS, socket setup and collector errors are
+recorded as collector failures. This measures TCP handshake availability, not HTTP,
+TLS, DNS health or which network owner caused a failure. Intermediate-router loss
+alone never contributes to these external destination-loss metrics.
+
+At the maximum settings, six targets × five connects / 30 seconds is one new TCP
+connection per second on average, with at most six active connect attempts.
+Sentinels retain only 24 hours of small raw snapshots (about 2,881 per target at
+30 seconds) and do not generate rollups. Pruning also removes their hop, event and
+RTT rows. Full traceroute targets retain their existing raw/rollup history. Keep
+both target entries when you need fast detection and long-term path diagnostics.
+Intervals above 2,147,481 seconds are rejected to prevent JavaScript timer overflow.
+If an existing ID is converted, its sentinel charts use current raw samples;
+previous rollups remain stored but are not used by the sentinel views.
+
+Every new snapshot, including collector failures, carries ISO UTC `startedAt`,
+`finishedAt`, `scheduledAt`, a separate `cycleId`, `destinationIp` when known, and
+explicit engine/protocol. `collectedAt` and the filename now identify the target's
+actual start, rather than when it entered the cycle queue. JSON raw `sent`/`reply`
+events from connect and native engines carry monotonic `offsetMs` relative to
+`startedAt`. These are application observations, not packet-capture timestamps.
+MTR's buffered raw output does not provide event times: those offsets remain absent,
+so use its target start/end range rather than inferring packet times from event
+order. The target page shows actual ranges and gaps between samples. Old snapshots
+remain readable and explicitly show that actual timing is unavailable. Existing
+relational SQLite databases receive nullable columns automatically; no history is
+rewritten. Collector failures are visible as gaps and excluded from loss rollups.
+If collection fails after some TCP replies, those partial events and the resolved
+IP remain in raw artifacts; they do not contribute health measurements or hop
+attribution. Native probes retain their resolved IP even without any replies.
+
+When enabled, `GET /metrics` exposes Prometheus text gauges for every configured
+target, including targets without any samples. It supplies destination loss and
+latency, last sample and last successful sample timestamps, latest collector
+failure, retained-history collector-failure count, and consecutive failed/loss
+sample counts (capped at two). Counters here are **gauges**, not lifetime totals;
+pruning reduces the retained failure count. A successful sample means at least one
+destination reply. Missing timestamps are zero and unavailable loss/latency is
+`NaN`. State is read from SQLite, so repeated scrapes cannot count the same bad
+probe twice and restarting the daemon preserves evidence.
+
+Route alerts in your existing Prometheus/Grafana/Alertmanager installation. For
+30-second sentinels, suggested expressions are:
+
+```promql
+# Two successive samples with >=50% destination loss, while samples are fresh.
+(hopwatch_consecutive_destination_loss_samples{sentinel="true"} >= 2)
+  and (time() - hopwatch_sample_timestamp_seconds{sentinel="true"} <= 90)
+
+# Two failed samples, with the latest caused by a collector/DNS error.
+(hopwatch_consecutive_failed_samples{sentinel="true"} >= 2)
+  and (hopwatch_collector_failure{sentinel="true"} == 1)
+
+# Missing or stale samples are a different alert from network loss.
+time() - hopwatch_sample_timestamp_seconds{sentinel="true"} > 90
+```
+
+Also alert on Prometheus `up == 0` for the observer: an unreachable daemon cannot
+report its own staleness. With 30-second cadence, two seconds of jitter and a
+ten-second deadline, two failed samples are available within **74 seconds** of
+outage onset across scheduler phases, assuming the daemon/event loop and storage
+are responsive. Tests simulate 90-second and two-minute failures across phases.
+Collection and rendering share the daemon event loop; heavy synchronous work can
+delay these application observations, which is why actual ranges and gaps matter.
+Budget external scraping and evaluation separately: 15-second scrapes plus
+15-second evaluations add up to 30 seconds (up to 104 seconds to alert evaluation),
+before any Alertmanager grouping or notification delay. No webhook, Slack or
+PagerDuty calls are made by hopwatch. The metrics endpoint is off unless enabled;
+use the same trusted network/auth proxy as the dashboard.
+
+For api2's `scripts/configs/hopwatch.sh`, after Kevin approves a release and rollout:
+keep `[probe] interval_seconds = 900` and the existing MTR entries, emit
+`[metrics] enabled = true` in the generated TOML, and add up to six distinct
+connect sentinel entries. Start with S3 EU TCP/443, an independent public HTTPS
+control and a local Hetzner HTTPS control (for example `fsn1.your-objectstorage.com`).
+Connect does not support `probe_mode = "netns"`; keep existing namespace MTR targets
+and pair faster namespace checks only when a supported engine is available. Add
+an authenticated scrape of the observer's proxied `/hopwatch/metrics`, and configure
+external routing/rules. Updating the installed binary, observer configuration,
+alert routing and any diagnostic-on-alert workflow are separate operational steps.
+
 ## How it looks
 
 Same plot conventions as SmokePing: smoke bands (interquartile range),
@@ -403,14 +509,13 @@ that's easier to drop onto a host. Pick whichever matches your situation.
 **Stick with SmokePing when you need…**
 
 - **Non-MTR probes.** SmokePing ships dozens of probes (HTTP, DNS, SSH, SSL
-  handshake, TCP connect, IRTT, etc.). hopwatch currently only runs MTR.
+  handshake, TCP connect, IRTT, etc.). hopwatch provides traceroute and TCP-connect measurements.
 - **Distributed master/slave topology.** SmokePing has first-class support
   for slaves reporting back to a central master. hopwatch only links peers
   via URL in the top-nav; each instance stores its own data.
 - **Email/paging alerts with pattern matching.** SmokePing's alert rules and
-  matchers (`>U 2 20%`, etc.) are a whole language. hopwatch has none of that,
-  and probably never will - alerting belongs in the alerting system you
-  already run.
+  matchers (`>U 2 20%`, etc.) are a whole language. hopwatch exposes optional Prometheus gauges for external alerting;
+  pattern matching and notification routing belong in the alerting system you already run.
 - **Decade-plus historical rollups on a tiny disk.** rrdtool's pre-sized
   round-robin archives are hard to beat for long retention on constrained
   storage. hopwatch keeps recent raw snapshots plus hourly/daily rollups in

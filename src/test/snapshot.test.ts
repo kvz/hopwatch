@@ -18,6 +18,24 @@ function hop(partial: Partial<HopRecord> & { index: number }): HopRecord {
 }
 
 describe('parseStoredSnapshotSummary', () => {
+  test('keeps multiline collector diagnostics inside one raw-text comment', () => {
+    const summary = parseStoredSnapshotSummary(
+      JSON.stringify({
+        schemaVersion: 2,
+        collectedAt: '20260420T120000Z',
+        fileName: 'fixture.json',
+        host: 'example.com',
+        label: 'Example',
+        observer: 'observer',
+        probeMode: 'default',
+        target: 'example.com',
+        rawEvents: [],
+        failure: 'mtr failed\r\nstderr line two\nline three',
+      }),
+    )
+    expect(summary.rawText).toContain('# failure=mtr failed\\r\\nstderr line two\\nline three\n')
+    expect(summary.rawText.split('\n')).not.toContain('stderr line two')
+  })
   test('reports a blackholed trace as 100% destination loss instead of unknown', () => {
     // v2 snapshot with `sent` events at every ttl but no `reply` or `host`
     // events anywhere - the path is fully black-holed. Previously this

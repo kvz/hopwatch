@@ -17,7 +17,9 @@ import {
   selectSnapshotsInWindow,
   shouldSurfaceHopIssueForRoot,
   summarizeCrossTargetHopIssues,
+  summarizeDiagnoses,
   summarizeHopIssues,
+  summarizeHopProtocolStats,
   summarizeSnapshots,
 } from '../lib/snapshot-aggregate.ts'
 
@@ -75,6 +77,87 @@ describe('selectSnapshotsInWindow', () => {
 })
 
 describe('summarizeSnapshots', () => {
+  test('partial collector failures cannot contribute hop loss or protocol evidence', () => {
+    const failed = snapshot({
+      collectedAt: '20260420T110000Z',
+      failure: 'EMFILE',
+      destinationHopIndex: 2,
+      hops: [
+        {
+          index: 1,
+          host: 'router.example',
+          asn: null,
+          lossPct: 50,
+          sent: 2,
+          avgMs: 1,
+          bestMs: 1,
+          lastMs: 1,
+          worstMs: 1,
+          stdevMs: 0,
+        },
+      ],
+    })
+    expect(summarizeHopIssues([failed])).toEqual([])
+    expect(
+      summarizeHopProtocolStats([
+        { target: 'broken', engine: 'native', protocol: 'tcp', snapshots: [failed] },
+      ]).size,
+    ).toBe(0)
+    expect(
+      findUnaffectedSiblingDestinations(
+        'router.example',
+        [],
+        [
+          {
+            target: 'broken',
+            engine: 'native',
+            protocol: 'tcp',
+            snapshots: [{ ...failed, hops: failed.hops.map((hop) => ({ ...hop, lossPct: 0 })) }],
+          },
+        ],
+      ),
+    ).toEqual([])
+  })
+  test('collector failures cannot improve measured health or make a failure-only history Stable', () => {
+    const failed = snapshot({
+      collectedAt: '20260420T110000Z',
+      failure: 'DNS lookup failed',
+      destinationLossPct: null,
+      diagnosis: {
+        kind: 'unknown',
+        label: 'Collector failure',
+        summary: 'DNS lookup failed',
+        suspectHopHost: null,
+        suspectHopIndex: null,
+      },
+    })
+    const failures = Array.from({ length: 10 }, () => failed)
+    const loss = snapshot({
+      collectedAt: '20260420T110000Z',
+      destinationLossPct: 5,
+      diagnosis: {
+        kind: 'destination_loss',
+        label: 'Loss',
+        summary: '',
+        suspectHopHost: null,
+        suspectHopIndex: null,
+      },
+    })
+    const mixed = [
+      loss,
+      snapshot({ collectedAt: '20260420T113000Z' }),
+      snapshot({ collectedAt: '20260420T114500Z' }),
+      ...failures,
+    ]
+    expect(summarizeSnapshots(mixed).sampleCount).toBe(3)
+    expect(summarizeDiagnoses(mixed).sampleCount).toBe(3)
+    expect(
+      getHistoricalSeverityBadge(summarizeSnapshots(mixed), summarizeDiagnoses(mixed)).label,
+    ).toBe('Degraded')
+    expect(
+      getHistoricalSeverityBadge(summarizeSnapshots(failures), summarizeDiagnoses(failures)).label,
+    ).toBe('Unknown')
+  })
   test('averages destination loss across in-window snapshots', () => {
     const snaps = [
       snapshot({ collectedAt: '20260420T110000Z', destinationLossPct: 10 }),
@@ -930,7 +1013,10 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     )
   })
 
-  test('diagnosis does not overstate TCP connect coverage for partly covered destinations', () => {
+  test.each([
+    undefined,
+    'DNS lookup failed',
+  ])('does not count unmeasured TCP coverage (%s)', (failure) => {
     const sourceOwnedIssue = {
       affectedDestinations: ['s3.us-west-2.amazonaws.com', 'google.com'],
       asn: null,
@@ -961,6 +1047,15 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
               protocol: 'tcp',
               target: 's3-us-west-2-tcp-connect',
             }),
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: null,
+              failure,
+              host: 'google.com',
+              port: 8443,
+              protocol: 'tcp',
+              target: 'google-connect',
+            }),
           ],
           target: 's3-us-west-2-tcp-connect',
         },
@@ -971,7 +1066,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       'TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
     )
     expect(diagnosis.summary).toContain(
-      'No TCP connect probe exists for google.com, so application impact is not confirmed for that destination.',
+      'No usable TCP connect measurement exists for google.com, so application impact is not confirmed for that destination.',
     )
     expect(diagnosis.summary).not.toContain('TCP/443 connect probes to 2 affected destinations')
     expect(diagnosis.escalation).toBeNull()

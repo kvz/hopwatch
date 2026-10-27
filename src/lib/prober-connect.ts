@@ -1,3 +1,4 @@
+import { lookup } from 'node:dns/promises'
 import net from 'node:net'
 
 import type { RawMtrEvent } from './raw.ts'
@@ -8,86 +9,130 @@ export interface ConnectProbeRequest {
   packets: number
   port: number
   timeoutMs: number
+  signal?: AbortSignal
+  timeOriginMs?: number
+  // Absolute monotonic deadline, including collector/import setup time.
+  deadlineAtMs?: number
+  onEvent?: (event: RawMtrEvent) => void
 }
 
-interface ConnectAttemptResult {
-  remoteAddress: string | null
-  rttUs: number | null
+export interface ConnectProbeDependencies {
+  lookupFn?: typeof lookup
 }
 
-function perAttemptTimeoutMs(request: ConnectProbeRequest): number {
-  return Math.min(5_000, Math.max(1_000, Math.floor(request.timeoutMs / request.packets)))
-}
-
-async function runConnectAttempt(request: ConnectProbeRequest): Promise<ConnectAttemptResult> {
-  const startedAt = process.hrtime.bigint()
-  const family = request.ipVersion === '4' ? 4 : 6
-  const timeoutMs = perAttemptTimeoutMs(request)
-
-  return await new Promise((resolve) => {
-    const socket = net.connect({
-      family,
-      host: request.host,
-      port: request.port,
-      timeout: timeoutMs,
-    })
-    let settled = false
-
-    const finish = (result: ConnectAttemptResult): void => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      resolve(result)
+async function runConnectAttempt(
+  request: ConnectProbeRequest,
+  address: string,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<number | null> {
+  signal.throwIfAborted()
+  const started = performance.now()
+  return await new Promise((resolve, reject) => {
+    const socket = net.connect({ host: address, port: request.port })
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    const abort = (): void => {
+      cleanup()
+      reject(new Error('TCP connect probe deadline exceeded'))
     }
-
-    socket.once('connect', () => {
-      const elapsedUs = Number((process.hrtime.bigint() - startedAt) / 1_000n)
-      finish({
-        remoteAddress: socket.remoteAddress ?? null,
-        rttUs: elapsedUs,
-      })
-    })
-    socket.once('timeout', () => {
-      finish({ remoteAddress: null, rttUs: null })
-    })
-    socket.once('error', () => {
-      finish({ remoteAddress: null, rttUs: null })
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+      socket.destroy()
+    }
+    const finish = (rttUs: number | null): void => {
+      cleanup()
+      resolve(rttUs)
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    socket.once('connect', () =>
+      finish(Math.max(0, Math.round((performance.now() - started) * 1_000))),
+    )
+    socket.once('error', (err: NodeJS.ErrnoException) => {
+      // Resource/permission errors describe the collector. Other socket
+      // errors (including interface-down errors) are failed TCP attempts;
+      // keep earlier replies in the sample without attributing an owner.
+      if (
+        [
+          'EMFILE',
+          'ENFILE',
+          'ENOMEM',
+          'ENOBUFS',
+          'EACCES',
+          'EPERM',
+          'EINVAL',
+          'EADDRNOTAVAIL',
+          'EADDRINUSE',
+        ].includes(err.code ?? '')
+      ) {
+        cleanup()
+        reject(err)
+      } else finish(null)
     })
   })
 }
 
-export async function probeTargetConnect(request: ConnectProbeRequest): Promise<RawMtrEvent[]> {
-  const events: RawMtrEvent[] = [
-    {
-      host: request.host,
-      hopIndex: 0,
-      kind: 'dns',
-    },
-  ]
-
-  for (let probeId = 0; probeId < request.packets; probeId += 1) {
-    events.push({
-      hopIndex: 0,
-      kind: 'sent',
-      probeId,
-    })
-    const result = await runConnectAttempt(request)
-    if (result.remoteAddress != null) {
-      events.push({
-        hopIndex: 0,
-        host: result.remoteAddress,
-        kind: 'host',
-      })
+export async function probeTargetConnect(
+  request: ConnectProbeRequest,
+  deps: ConnectProbeDependencies = {},
+): Promise<RawMtrEvent[]> {
+  const origin = request.timeOriginMs ?? performance.now()
+  const offsetMs = (): number => Math.max(0, performance.now() - origin)
+  const controller = new AbortController()
+  const signal =
+    request.signal == null
+      ? controller.signal
+      : AbortSignal.any([controller.signal, request.signal])
+  const deadlineAt = request.deadlineAtMs ?? performance.now() + request.timeoutMs
+  try {
+    // Resolve before recording any sends. A DNS error is a collector failure,
+    // not evidence that a destination received and dropped TCP packets.
+    let dnsTimer: ReturnType<typeof setTimeout> | undefined
+    const address = await new Promise<string>((resolve, reject) => {
+      dnsTimer = setTimeout(
+        () => reject(new Error('DNS lookup deadline exceeded')),
+        Math.max(0, Math.min(2_000, deadlineAt - performance.now())),
+      )
+      const abort = (): void => reject(new Error('DNS/probe deadline exceeded'))
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) {
+        abort()
+        return
+      }
+      const resolution =
+        net.isIP(request.host) !== 0
+          ? Promise.resolve({ address: request.host })
+          : (deps.lookupFn ?? lookup)(request.host, request.ipVersion === '4' ? 4 : 6)
+      resolution
+        .then((result) => resolve(result.address), reject)
+        .finally(() => signal.removeEventListener('abort', abort))
+    }).finally(() => clearTimeout(dnsTimer))
+    signal.throwIfAborted()
+    const events: RawMtrEvent[] = []
+    const emit = (event: RawMtrEvent): void => {
+      events.push(event)
+      request.onEvent?.(event)
     }
-    if (result.rttUs != null) {
-      events.push({
-        hopIndex: 0,
-        kind: 'reply',
-        probeId,
-        rttUs: result.rttUs,
-      })
+    emit({ host: request.host, hopIndex: 0, kind: 'dns' })
+    // Include the resolved destination even on total connection loss.
+    emit({ host: address, hopIndex: 0, kind: 'host' })
+    for (let probeId = 0; probeId < request.packets; probeId++) {
+      signal.throwIfAborted()
+      const budget = Math.floor((deadlineAt - performance.now() - 50) / (request.packets - probeId))
+      // Each awaited operation owns a timeout inside the shared deadline.
+      // A late callback may leave no time for more attempts: retain actual
+      // sends/replies rather than discarding evidence or inventing sends.
+      if (budget <= 0) {
+        if (probeId === 0) throw new Error('TCP connect probe deadline exceeded')
+        break
+      }
+      emit({ hopIndex: 0, kind: 'sent', probeId, offsetMs: offsetMs() })
+      const rttUs = await runConnectAttempt(request, address, signal, Math.min(5_000, budget))
+      if (rttUs != null) emit({ hopIndex: 0, kind: 'reply', probeId, rttUs, offsetMs: offsetMs() })
     }
+    return events
+  } finally {
+    // Also removes a pending DNS abort listener when lookup never settles.
+    controller.abort()
   }
-
-  return events
 }

@@ -131,9 +131,12 @@ export async function loadChartDefinitions(
   targetSlug: string,
   snapshots: SnapshotSummary[],
   now: number,
+  useRollups = true,
 ): Promise<ChartDefinition[]> {
-  const hourlyRollup = store.getRollupFile(targetSlug, 'hour')
-  const dailyRollup = store.getRollupFile(targetSlug, 'day')
+  // Sentinels use current raw history even if this ID had older rollups before
+  // opting in. Preserve those historical files without rendering frozen data.
+  const hourlyRollup = useRollups ? store.getRollupFile(targetSlug, 'hour') : null
+  const dailyRollup = useRollups ? store.getRollupFile(targetSlug, 'day') : null
 
   return [
     {

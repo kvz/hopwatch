@@ -1,5 +1,5 @@
 import net from 'node:net'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { probeTargetConnect } from '../lib/prober-connect.ts'
 
 describe('probeTargetConnect', () => {
@@ -43,10 +43,140 @@ describe('probeTargetConnect', () => {
     ])
     expect(events.filter((event) => event.kind === 'sent')).toHaveLength(3)
     expect(events.filter((event) => event.kind === 'reply')).toHaveLength(3)
+    const timed = events.filter((event) => event.kind === 'sent' || event.kind === 'reply')
+    expect(timed.every((event) => typeof event.offsetMs === 'number')).toBe(true)
+    expect(timed.map((event) => event.offsetMs)).toEqual(
+      timed.map((event) => event.offsetMs).sort((a, b) => (a ?? 0) - (b ?? 0)),
+    )
     expect(events.filter((event) => event.kind === 'host').at(-1)).toEqual({
       host: '127.0.0.1',
       hopIndex: 0,
       kind: 'host',
     })
+  })
+
+  test('reports DNS errors separately from destination loss and bounds a stuck resolver', async () => {
+    vi.useFakeTimers()
+    try {
+      const probe = probeTargetConnect(
+        { host: 'stuck.example', ipVersion: '4', packets: 3, port: 443, timeoutMs: 10_000 },
+        {
+          lookupFn: vi.fn(() => new Promise(() => {})) as never,
+        },
+      )
+      const assertion = expect(probe).rejects.toThrow(/DNS.*deadline/)
+      await vi.advanceTimersByTimeAsync(2_001)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('retains the resolved IP on total TCP failure', async () => {
+    const server = net.createServer()
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address() as net.AddressInfo
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    const events = await probeTargetConnect({
+      host: '127.0.0.1',
+      ipVersion: '4',
+      packets: 3,
+      port: address.port,
+      timeoutMs: 10_000,
+    })
+    expect(events.filter((event) => event.kind === 'reply')).toEqual([])
+    expect(events.filter((event) => event.kind === 'sent')).toHaveLength(3)
+    expect(events).toContainEqual({ kind: 'host', hopIndex: 0, host: '127.0.0.1' })
+  })
+
+  test('preserves actual sends when a late callback exhausts the remaining budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const fakeNow = performance.now.bind(performance)
+    let lagMs = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => fakeNow() + lagMs)
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      vi.spyOn(socket, 'destroy').mockImplementation(() => {
+        lagMs = 10_000
+        return socket
+      })
+      return socket
+    })
+    try {
+      const promise = probeTargetConnect({
+        host: '127.0.0.1',
+        ipVersion: '4',
+        packets: 3,
+        port: 443,
+        timeoutMs: 10_000,
+      }).then(
+        (events) => ({ events }),
+        (error) => ({ error }),
+      )
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(await promise).toMatchObject({
+        events: expect.arrayContaining([expect.objectContaining({ kind: 'sent', probeId: 0 })]),
+      })
+      expect(connect).toHaveBeenCalledTimes(1)
+    } finally {
+      connect.mockRestore()
+      clock.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  test.each([
+    'EADDRNOTAVAIL',
+    'EADDRINUSE',
+  ])('classifies local address exhaustion %s as a collector failure', async (code) => {
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      queueMicrotask(() => socket.emit('error', Object.assign(new Error(code), { code })))
+      return socket
+    })
+    try {
+      await expect(
+        probeTargetConnect({
+          host: '127.0.0.1',
+          ipVersion: '4',
+          packets: 3,
+          port: 443,
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow(code)
+    } finally {
+      connect.mockRestore()
+    }
+  })
+
+  test.each([
+    'ENETDOWN',
+    'ECONNABORTED',
+    'EPIPE',
+  ])('keeps earlier successes when a later connection fails with %s', async (code) => {
+    let attempts = 0
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      const success = attempts++ === 0
+      queueMicrotask(() =>
+        success
+          ? socket.emit('connect')
+          : socket.emit('error', Object.assign(new Error(code), { code })),
+      )
+      return socket
+    })
+    try {
+      const events = await probeTargetConnect({
+        host: '127.0.0.1',
+        ipVersion: '4',
+        packets: 3,
+        port: 443,
+        timeoutMs: 10_000,
+      })
+      expect(events.filter((event) => event.kind === 'sent')).toHaveLength(3)
+      expect(events.filter((event) => event.kind === 'reply')).toHaveLength(1)
+    } finally {
+      connect.mockRestore()
+    }
   })
 })

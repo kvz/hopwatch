@@ -1,9 +1,11 @@
 import path from 'node:path'
 import { describe, expect, test, vi } from 'vitest'
+import { runCollector } from '../lib/collector.ts'
 import type { LoadedConfig } from '../lib/config.ts'
 import { startScheduler } from '../lib/daemon.ts'
 import { parseListenAddress } from '../lib/listen.ts'
 import { createLogger } from '../lib/logger.ts'
+import type { StoredRawSnapshot } from '../lib/raw.ts'
 
 function buildConfig(overrides: { jitterSeconds?: number } = {}): LoadedConfig {
   return {
@@ -34,6 +36,133 @@ function buildConfig(overrides: { jitterSeconds?: number } = {}): LoadedConfig {
 }
 
 describe('startScheduler', () => {
+  test('sentinels keep sampling while MTR is blocked and never overlap themselves', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-27T15:23:00Z'))
+    const config = buildConfig({ jitterSeconds: 0 })
+    config.target = [
+      {
+        id: 'trace',
+        host: 'trace.example',
+        label: 'Trace',
+        engine: 'mtr',
+        protocol: 'icmp',
+        port: 443,
+        probe_mode: 'default',
+      },
+      {
+        id: 'sentinel',
+        host: 's3.example',
+        label: 'Sentinel',
+        engine: 'connect',
+        protocol: 'tcp',
+        port: 443,
+        probe_mode: 'default',
+        interval_seconds: 30,
+      },
+    ]
+    const starts: number[] = []
+    let active = 0
+    let maxActive = 0
+    let release = (): void => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const runCollectorFn = vi.fn(async (subset: LoadedConfig) => {
+      if (subset.target.some((target) => target.id === 'trace')) await gate
+      if (subset.target.some((target) => target.id === 'sentinel')) {
+        starts.push(Date.now())
+        maxActive = Math.max(maxActive, ++active)
+        await new Promise((resolve) => setTimeout(resolve, 10_000))
+        active--
+      }
+    })
+    const scheduler = startScheduler(config, createLogger({ level: 'error' }), { runCollectorFn })
+    try {
+      void scheduler.runNow()
+      await vi.advanceTimersByTimeAsync(95_000)
+      expect(starts).toHaveLength(4)
+      expect(maxActive).toBe(1)
+      expect(starts.map((start) => start - starts[0])).toEqual([0, 30_000, 60_000, 90_000])
+    } finally {
+      scheduler.stop()
+      release()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await scheduler.drain()
+      vi.useRealTimers()
+    }
+  })
+
+  test.each(
+    [90, 120].flatMap((duration) => [0, 1, 10, 20, 29, 31].map((phase) => ({ duration, phase }))),
+  )('observes $duration-second outages within 75 seconds at phase $phase with maximum jitter', async ({
+    duration,
+    phase,
+  }) => {
+    vi.useFakeTimers()
+    const base = Date.parse('2026-10-27T15:23:00Z')
+    vi.setSystemTime(new Date(base))
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.999999)
+    const config = buildConfig({ jitterSeconds: 30 })
+    config.target = [
+      {
+        id: 'sentinel',
+        host: 'example.com',
+        label: 'Sentinel',
+        engine: 'connect',
+        protocol: 'tcp',
+        port: 443,
+        probe_mode: 'default',
+        interval_seconds: 30,
+      },
+    ]
+    const samples: StoredRawSnapshot[] = []
+    const onset = base + 60_000 + phase * 1000
+    const logger = createLogger({ level: 'error' })
+    const scheduler = startScheduler(config, logger, {
+      runCollectorFn: (subset, log, deps) =>
+        runCollector(subset, log, {
+          ...deps,
+          openStoreFn: async () => ({
+            close() {},
+            insertRawSnapshot(_input, snapshot) {
+              samples.push(snapshot)
+            },
+            pruneRawSnapshots() {
+              return 0
+            },
+            updateRollupsForTarget() {},
+          }),
+          runConnectProbeFn: async () => {
+            const failed = Date.now() >= onset && Date.now() < onset + duration * 1000
+            await new Promise((resolve) => setTimeout(resolve, 9_999))
+            return [
+              { kind: 'host', hopIndex: 0, host: '203.0.113.1' },
+              { kind: 'sent', hopIndex: 0, probeId: 0 },
+              ...(failed ? [] : [{ kind: 'reply' as const, hopIndex: 0, probeId: 0, rttUs: 1000 }]),
+            ]
+          },
+        }),
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(260_000)
+      const failures = samples.filter(
+        (sample) => !sample.rawEvents.some((event) => event.kind === 'reply'),
+      )
+      expect(failures.length).toBeGreaterThanOrEqual(2)
+      expect(Date.parse(failures[1].finishedAt ?? '') - onset).toBeLessThanOrEqual(75_000)
+      expect(Date.parse(failures[0].startedAt ?? '')).toBeGreaterThanOrEqual(onset)
+      expect(samples.at(-1)?.rawEvents.some((event) => event.kind === 'reply')).toBe(true)
+      expect(samples.every((sample) => sample.startedAt === sample.scheduledAt)).toBe(true)
+    } finally {
+      scheduler.stop()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await scheduler.drain()
+      random.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   test('coalesces overlapping runNow calls into a single in-flight cycle', async () => {
     const config = buildConfig()
     const logger = createLogger({ level: 'error', pretty: false })

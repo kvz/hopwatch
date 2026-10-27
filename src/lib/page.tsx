@@ -126,6 +126,7 @@ export async function renderTargetIndex(
   targetSlug: string,
   now = Date.now(),
   signature?: string,
+  useRollups = true,
 ): Promise<RenderedTarget | null> {
   const snapshots = store.listSnapshotSummaries(targetSlug)
   if (snapshots.length === 0) {
@@ -151,8 +152,8 @@ export async function renderTargetIndex(
   const hopIssues = summarizeHopIssues(lastWeekSnapshots)
     .filter((hop) => hop.host !== '???')
     .slice(0, 5)
-  const charts = await loadChartDefinitions(store, targetSlug, snapshots, now)
-  const hourlyRollup = store.getRollupFile(targetSlug, 'hour')
+  const charts = await loadChartDefinitions(store, targetSlug, snapshots, now, useRollups)
+  const hourlyRollup = useRollups ? store.getRollupFile(targetSlug, 'hour') : null
 
   const html = renderDocument(
     <TargetIndexPage
@@ -187,6 +188,7 @@ export async function renderRootIndex(
   publicBaseUrl?: string,
   networkOwnerContactOverrides: NetworkOwnerContactOverride[] = [],
   activeTargetSlugs: string[] | null = null,
+  rawOnlyTargetSlugs: ReadonlySet<string> = new Set(),
 ): Promise<string> {
   const activeTargetSlugSet = activeTargetSlugs == null ? null : new Set(activeTargetSlugs)
   const targetSummaries: Array<{
@@ -214,7 +216,9 @@ export async function renderRootIndex(
     // rollups are treated as no history rather than fatal - the root page
     // should still render for fresh installs that have not accumulated a
     // full hour yet.
-    const hourlyRollup = store.getRollupFile(targetSlug, 'hour')
+    const hourlyRollup = rawOnlyTargetSlugs.has(targetSlug)
+      ? null
+      : store.getRollupFile(targetSlug, 'hour')
     targetSummaries.push({
       aggregate: summarizeSnapshots(lastWeekSnapshots),
       diagnosisAggregate: summarizeDiagnoses(lastWeekSnapshots),

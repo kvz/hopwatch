@@ -16,24 +16,28 @@ export interface RawHopRecord {
 }
 
 const sentEventSchema = z.object({
+  offsetMs: z.number().nonnegative().optional(),
   kind: z.literal('sent'),
   hopIndex: z.number().int().min(0),
   probeId: z.number().int().min(0),
 })
 
 const hostEventSchema = z.object({
+  offsetMs: z.number().nonnegative().optional(),
   kind: z.literal('host'),
   hopIndex: z.number().int().min(0),
   host: z.string().min(1),
 })
 
 const dnsEventSchema = z.object({
+  offsetMs: z.number().nonnegative().optional(),
   kind: z.literal('dns'),
   hopIndex: z.number().int().min(0),
   host: z.string().min(1),
 })
 
 const replyEventSchema = z.object({
+  offsetMs: z.number().nonnegative().optional(),
   kind: z.literal('reply'),
   hopIndex: z.number().int().min(0),
   probeId: z.number().int().min(0),
@@ -52,6 +56,12 @@ export type RawMtrEvent = z.infer<typeof rawMtrEventSchema>
 const storedRawSnapshotSchema = z.object({
   schemaVersion: z.literal(2),
   collectedAt: z.string().min(1),
+  startedAt: z.string().datetime().optional(),
+  finishedAt: z.string().datetime().optional(),
+  scheduledAt: z.string().datetime().optional(),
+  cycleId: z.string().optional(),
+  destinationIp: z.string().nullable().optional(),
+  failure: z.string().optional(),
   fileName: z.string().min(1),
   host: z.string().min(1),
   label: z.string().min(1),

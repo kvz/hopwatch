@@ -376,7 +376,7 @@ export function aggregateSnapshotsToRollupBuckets(
   // the hourly window anyway.
   const includeHops = granularity === 'hour'
   return reduceToRollupBuckets(
-    snapshots,
+    snapshots.filter((snapshot) => snapshot.failure == null),
     granularity,
     (snapshot) => getCollectedAtDate(snapshot.collectedAt),
     (state, snapshot) => {

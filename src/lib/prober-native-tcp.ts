@@ -50,6 +50,7 @@ import type { RawMtrEvent } from './raw.ts'
 import { IPPROTO_TCP, parseIcmpTcpReply } from './tcp.ts'
 
 export interface NativeTcpProbeOptions {
+  timeOriginMs?: number
   hostIp: string
   port: number
   maxHops?: number
@@ -138,6 +139,8 @@ interface InflightProbe {
 }
 
 export async function probeTargetNativeTcp(options: NativeTcpProbeOptions): Promise<RawMtrEvent[]> {
+  const timeOriginMs = options.timeOriginMs ?? performance.now()
+  const offsetMs = (): number => Math.max(0, performance.now() - timeOriginMs)
   const maxHops = options.maxHops ?? DEFAULTS.maxHops
   const packets = options.packets ?? DEFAULTS.packets
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs
@@ -199,7 +202,7 @@ export async function probeTargetNativeTcp(options: NativeTcpProbeOptions): Prom
     const hopIndex = probe.ttl - 1
     recordHostEvent(hopIndex, parsed.srcIcmp)
     const rttUs = Math.max(0, Math.round((arrivedNs - probe.sendTimeNs) / 1000))
-    events.push({ kind: 'reply', hopIndex, probeId: probe.seq, rttUs })
+    events.push({ offsetMs: offsetMs(), kind: 'reply', hopIndex, probeId: probe.seq, rttUs })
     return true
   }
 
@@ -242,7 +245,7 @@ export async function probeTargetNativeTcp(options: NativeTcpProbeOptions): Prom
         const hopIndex = probe.ttl - 1
         recordHostEvent(hopIndex, options.hostIp)
         const rttUs = Math.max(0, Math.round((arrivedNs - probe.sendTimeNs) / 1000))
-        events.push({ kind: 'reply', hopIndex, probeId: probe.seq, rttUs })
+        events.push({ offsetMs: offsetMs(), kind: 'reply', hopIndex, probeId: probe.seq, rttUs })
         if (destHopIndex == null || hopIndex < destHopIndex) {
           destHopIndex = hopIndex
         }
@@ -312,7 +315,7 @@ export async function probeTargetNativeTcp(options: NativeTcpProbeOptions): Prom
           srcPort: opened.srcPort,
           ttl,
         })
-        events.push({ kind: 'sent', hopIndex: ttl - 1, probeId: seq })
+        events.push({ offsetMs: offsetMs(), kind: 'sent', hopIndex: ttl - 1, probeId: seq })
 
         const nextSendAtNs = Bun.nanoseconds() + probeIntervalMs * 1_000_000
         while (Bun.nanoseconds() < nextSendAtNs && Bun.nanoseconds() < deadlineNs) {

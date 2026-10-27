@@ -7,10 +7,12 @@ import copyButtonsSource from '../client/copy-buttons.ts' with { type: 'text' }
 import relativeTimeSource from '../client/relative-time.ts' with { type: 'text' }
 // @ts-expect-error see note on relativeTimeSource - same import-attribute shape.
 import sortableTablesSource from '../client/sortable-tables.ts' with { type: 'text' }
+import type { CollectorDependencies } from './collector.ts'
 import type { LoadedConfig } from './config.ts'
 import { renderRootIndex, renderTargetIndex, runCollector } from './core.ts'
 import { parseListenAddress } from './listen.ts'
 import type { Logger } from './logger.ts'
+import { metricsResponse } from './metrics.ts'
 import {
   buildSourceIdentity,
   type SourceIdentity,
@@ -67,6 +69,7 @@ export interface SchedulerDependencies {
   runCollectorFn?: (
     config: LoadedConfig,
     logger: Logger,
+    deps?: CollectorDependencies,
     // biome-ignore lint/suspicious/noConfusingVoidType: see note above.
   ) => Promise<{ failedTargetSlugs: string[]; failedRollupSlugs: string[] } | void>
   onCycleComplete?: () => void
@@ -77,6 +80,47 @@ export function startScheduler(
   logger: Logger,
   deps: SchedulerDependencies = {},
 ): SchedulerHandle {
+  const sentinels = config.target.filter((target) => target.interval_seconds != null)
+  if (sentinels.length === 0) return startCycleScheduler(config, logger, deps)
+  // Each of the (at most six) lightweight targets owns a slot. Slow traces and
+  // rollups never occupy those slots, and a target's next tick awaits its run.
+  const handles = sentinels.map((target) =>
+    startCycleScheduler(
+      {
+        ...config,
+        probe: {
+          ...config.probe,
+          interval_seconds: target.interval_seconds ?? 30,
+          jitter_seconds: Math.min(config.probe.jitter_seconds, 2),
+          concurrency: 1,
+        },
+        target: [target],
+      },
+      logger,
+      deps,
+    ),
+  )
+  const slowTargets = config.target.filter((target) => target.interval_seconds == null)
+  if (slowTargets.length > 0)
+    handles.push(startCycleScheduler({ ...config, target: slowTargets }, logger, deps))
+  return {
+    drain: async () => {
+      await Promise.all(handles.map((handle) => handle.drain()))
+    },
+    runNow: async () => {
+      await Promise.all(handles.map((handle) => handle.runNow()))
+    },
+    stop: () => {
+      for (const handle of handles) handle.stop()
+    },
+  }
+}
+
+function startCycleScheduler(
+  config: LoadedConfig,
+  logger: Logger,
+  deps: SchedulerDependencies,
+): SchedulerHandle {
   const intervalMs = config.probe.interval_seconds * 1000
   const jitterMs = config.probe.jitter_seconds * 1000
   const runCollectorFn = deps.runCollectorFn ?? runCollector
@@ -84,7 +128,7 @@ export function startScheduler(
   let activeRun: Promise<void> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
 
-  async function runOnce(): Promise<void> {
+  async function runOnce(scheduledAt = new Date()): Promise<void> {
     if (cancelled) {
       return
     }
@@ -104,7 +148,7 @@ export function startScheduler(
     const started = Date.now()
     const run = (async (): Promise<void> => {
       try {
-        const result = await runCollectorFn(config, logger)
+        const result = await runCollectorFn(config, logger, { scheduledAt })
         const failedTargetSlugs = result?.failedTargetSlugs ?? []
         const failedRollupSlugs = result?.failedRollupSlugs ?? []
         // A "cycle complete" log on a partially-broken cycle (snapshot
@@ -152,9 +196,10 @@ export function startScheduler(
       return
     }
 
+    const scheduledAt = new Date(Date.now() + delay)
     timer = setTimeout(() => {
       timer = null
-      void runOnce()
+      void runOnce(scheduledAt)
     }, delay)
   }
 
@@ -183,8 +228,16 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   const signature = config.chart.signature
   const store = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
   const baseSourceIdentity = await loadDaemonSourceIdentity(config, logger)
+  const sentinelTargetSlugs = new Set(
+    config.target.filter((target) => target.interval_seconds != null).map((target) => target.id),
+  )
 
-  const scheduler = startScheduler(config, logger)
+  // Reuse the daemon connection: fast ticks should not re-run schema setup or
+  // compete with this process's rollup writer through separate connections.
+  const scheduler = startScheduler(config, logger, {
+    runCollectorFn: (subset, log, deps) =>
+      runCollector(subset, log, { ...deps, sqliteStore: store }),
+  })
 
   const server = Bun.serve({
     fetch: async (request): Promise<Response> => {
@@ -192,6 +245,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
       if (url.pathname === '/healthz') {
         return new Response('ok', { status: 200 })
       }
+      if (url.pathname === '/metrics') return metricsResponse(config, store)
 
       // The script tag uses `./assets/sortable-tables.js` so that it resolves
       // both under the daemon's own root (`/`) and behind a reverse-proxy
@@ -251,6 +305,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
             contactEmails: contact.contact_emails,
           })),
           config.target.map((target) => target.id),
+          sentinelTargetSlugs,
         )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
@@ -338,6 +393,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           targetSlug,
           Date.now(),
           signature,
+          !sentinelTargetSlugs.has(targetSlug),
         ).catch((err: unknown) => {
           if (!(err instanceof Error)) {
             throw new Error(`Was thrown a non-error: ${err}`)

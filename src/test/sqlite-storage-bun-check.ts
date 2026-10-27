@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
 import type { MtrRollupFile } from '../lib/rollups.ts'
+import { summarizeStoredRawSnapshot } from '../lib/snapshot.ts'
 import { HopwatchSqliteStore } from '../lib/sqlite-storage.ts'
 
 function destinationEvents(): RawMtrEvent[] {
@@ -213,6 +214,89 @@ async function checkLegacyBlobSchemasFailFast(rootDir: string): Promise<void> {
   )
 }
 
+async function checkProbeTimingMigrationAndRetention(rootDir: string): Promise<void> {
+  const dbPath = path.join(rootDir, 'timing.sqlite')
+  let store = await HopwatchSqliteStore.open(dbPath)
+  const insert = (raw: StoredRawSnapshot): void =>
+    store.insertRawSnapshot(
+      {
+        contents: snapshotJson(raw),
+        fileName: raw.fileName,
+        sourcePath: `sqlite://sentinel/${raw.fileName}`,
+        targetSlug: 'sentinel',
+      },
+      raw,
+    )
+  const legacy = snapshot()
+  insert(legacy)
+  store.close()
+  // Recreate the previous relational schema with an existing legacy snapshot.
+  const db = new Database(dbPath)
+  for (const name of [
+    'started_at',
+    'finished_at',
+    'scheduled_at',
+    'cycle_id',
+    'destination_ip',
+    'failure',
+  ])
+    if (tableColumns(dbPath, 'snapshots').includes(name))
+      db.run(`ALTER TABLE snapshots DROP COLUMN ${name}`)
+  if (tableColumns(dbPath, 'snapshot_events').includes('offset_ms'))
+    db.run('ALTER TABLE snapshot_events DROP COLUMN offset_ms')
+  db.close()
+  store = await HopwatchSqliteStore.open(dbPath)
+  assert.deepEqual(JSON.parse(store.getLatestSnapshotJson('sentinel') ?? '{}'), legacy)
+  const timed: StoredRawSnapshot = {
+    ...snapshot(),
+    engine: 'connect',
+    protocol: 'tcp',
+    collectedAt: '20261027T152300Z',
+    fileName: '20261027T152300Z.json',
+    startedAt: '2026-10-27T15:23:00.123Z',
+    finishedAt: '2026-10-27T15:23:10.000Z',
+    scheduledAt: '2026-10-27T15:23:00.000Z',
+    cycleId: '20261027T152300Z',
+    destinationIp: '203.0.113.5',
+    rawEvents: destinationEvents().map((event, i) => ({ ...event, offsetMs: i * 10 })),
+  }
+  insert(timed)
+  assert.deepEqual(JSON.parse(store.getLatestSnapshotJson('sentinel') ?? '{}'), timed)
+  assert.equal(store.listSnapshotSummaries('sentinel')[0].startedAt, timed.startedAt)
+  assert.match(
+    store.getLatestSnapshotRawText('sentinel') ?? '',
+    /finishedAt=2026-10-27T15:23:10.000Z/,
+  )
+  insert({ ...timed, collectedAt: '20261027T152330Z', fileName: '20261027T152330Z.json' })
+  store.close()
+  store = await HopwatchSqliteStore.open(dbPath)
+  assert.equal(store.getProbeStatus('sentinel').recent.length, 2)
+  assert.equal(store.getProbeStatus('sentinel').recent[0].destinationLossPct, 50)
+  const failure: StoredRawSnapshot = {
+    ...timed,
+    collectedAt: '20261027T152400Z',
+    fileName: '20261027T152400Z.json',
+    rawEvents: timed.rawEvents,
+    failure: 'EMFILE after earlier replies',
+  }
+  insert(failure)
+  const status = store.getProbeStatus('sentinel')
+  assert.equal(status.collectorFailures, 1)
+  assert.equal(status.recent[0].destinationLossPct, null)
+  assert.equal(status.lastSuccess?.collectedAt, '20261027T152330Z')
+  assert.equal(store.listSnapshotSummaries('sentinel')[0].diagnosis.label, 'Collector failure')
+  assert.equal(store.listSnapshotSummaries('sentinel')[0].destinationAvgRttMs, null)
+  assert.deepEqual(JSON.parse(store.getLatestSnapshotJson('sentinel') ?? '{}'), failure)
+  assert.equal(
+    store.getLatestSnapshotRawText('sentinel'),
+    summarizeStoredRawSnapshot(failure).rawText,
+  )
+  assert.equal(store.pruneRawSnapshots('sentinel', 1, Date.parse('2026-10-28T15:24:01Z')), 4)
+  assert.equal(store.getProbeStatus('sentinel').recent.length, 0)
+  assert.equal(store.verify().orphanedSnapshotDetailRows, 0)
+  store.close()
+}
+
 async function main(): Promise<void> {
   const rootDir = process.argv[2]
   if (rootDir == null) {
@@ -222,6 +306,7 @@ async function main(): Promise<void> {
   try {
     await checkRelationalStorage(rootDir)
     await checkLegacyBlobSchemasFailFast(rootDir)
+    await checkProbeTimingMigrationAndRetention(rootDir)
   } finally {
     await rm(rootDir, { force: true, recursive: true })
   }

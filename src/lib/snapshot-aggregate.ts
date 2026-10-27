@@ -60,6 +60,7 @@ export function selectSnapshotsInWindow(
 // pre-filter once and reuse the slice for multiple aggregates (as page.tsx
 // does) avoids redoing the cutoff walk per helper.
 export function summarizeSnapshots(snapshotsInWindow: SnapshotSummary[]): SnapshotAggregate {
+  snapshotsInWindow = snapshotsInWindow.filter((snapshot) => snapshot.failure == null)
   return {
     averageDestinationLossPct: average(
       snapshotsInWindow.flatMap((snapshot) =>
@@ -91,6 +92,8 @@ export function summarizeDiagnoses(snapshotsInWindow: SnapshotSummary[]): Diagno
   }
 
   for (const snapshot of snapshotsInWindow) {
+    // A failed collector is missing evidence, never another healthy sample.
+    if (snapshot.failure != null) continue
     aggregate.sampleCount += 1
     if (snapshot.diagnosis.kind === 'destination_loss') {
       aggregate.destinationLossCount += 1
@@ -110,11 +113,12 @@ export function getHistoricalSeverityBadge(
   aggregate: SnapshotAggregate,
   diagnosisAggregate: DiagnosisAggregate,
 ): SeverityBadge {
-  if (diagnosisAggregate.sampleCount === 0) {
+  const measuredCount = diagnosisAggregate.sampleCount - diagnosisAggregate.unknownCount
+  if (measuredCount === 0) {
     return {
       className: 'unknown',
       label: 'Unknown',
-      summary: 'No snapshots were collected in this window.',
+      summary: 'No usable probe measurements were collected in this window.',
     }
   }
 
@@ -126,8 +130,7 @@ export function getHistoricalSeverityBadge(
     }
   }
 
-  const destinationLossRate =
-    diagnosisAggregate.destinationLossCount / diagnosisAggregate.sampleCount
+  const destinationLossRate = diagnosisAggregate.destinationLossCount / measuredCount
   if (destinationLossRate >= 0.2 || (aggregate.averageDestinationLossPct ?? 0) >= 10) {
     return {
       className: 'bad',
@@ -153,6 +156,7 @@ export function summarizeHopIssues(snapshotsInWindow: SnapshotSummary[]): HopAgg
   const latestTsByHost = new Map<string, number>()
 
   for (const snapshot of snapshotsInWindow) {
+    if (snapshot.failure != null) continue
     const destinationLossPct = snapshot.destinationLossPct ?? 0
     const snapshotTs = parseCollectedAt(snapshot.collectedAt) ?? 0
     // Use `<` rather than `!==` so we drop both the destination hop and any
@@ -379,6 +383,7 @@ export function summarizeHopProtocolStats(
   const accum = new Map<string, Map<ProbeProtocol, Accum>>()
   for (const entry of perTarget) {
     for (const snap of entry.snapshots) {
+      if (snap.failure != null) continue
       // Skip the destination hop and anything past it: we are measuring
       // intermediate hops' behavior, and a hop counted as "destination" on
       // one target may happen to be an intermediate on another.
@@ -583,6 +588,7 @@ export function findUnaffectedSiblingDestinations(
     let traversedClean = false
     let traversedLossy = false
     for (const snap of entry.snapshots) {
+      if (snap.failure != null) continue
       const destIndex = snap.destinationHopIndex ?? Number.POSITIVE_INFINITY
       for (const hop of snap.hops) {
         if (hop.host !== hopHost) continue
@@ -1268,7 +1274,13 @@ function summarizeTcpConnectImpact(
   const destinationSet = new Set(destinations)
   const connectSnapshots = perTargetSnapshots.flatMap((entry) => {
     if (entry.engine !== 'connect' || entry.protocol !== 'tcp') return []
-    return entry.snapshots.filter((snapshot) => destinationSet.has(snapshot.host))
+    // A configured probe or collector failure is not measured coverage.
+    return entry.snapshots.filter(
+      (snapshot) =>
+        destinationSet.has(snapshot.host) &&
+        snapshot.failure == null &&
+        snapshot.destinationLossPct != null,
+    )
   })
   if (connectSnapshots.length === 0) return null
 
@@ -1301,8 +1313,8 @@ function summarizeTcpConnectImpact(
   const missingCoverageSuffix =
     missingDestinations.length === 0
       ? ''
-      : ` No TCP connect ${
-          missingDestinations.length === 1 ? 'probe exists' : 'probes exist'
+      : ` No usable TCP connect ${
+          missingDestinations.length === 1 ? 'measurement exists' : 'measurements exist'
         } for ${formatEnglishList(missingDestinations)}, so application impact is not confirmed for ${
           missingDestinations.length === 1 ? 'that destination' : 'those destinations'
         }.`

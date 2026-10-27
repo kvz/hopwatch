@@ -50,6 +50,10 @@ const targetSchema = z.object({
   // motivates TCP probing (S3, R2, Hetzner Object Storage). Operators can
   // override per target when probing a non-HTTPS service.
   port: z.number().int().min(1).max(65535).default(443),
+  // An explicit cadence opts a separate TCP-connect target into the fast lane.
+  // Full traceroutes retain the global cadence and their existing packet budget.
+  interval_seconds: z.number().int().min(30).optional(),
+  packets: z.number().int().min(3).max(5).optional(),
 })
 export type TargetConfig = z.infer<typeof targetSchema>
 
@@ -164,6 +168,7 @@ const configSchema = z.object({
   probe: probeSchema.default({}),
   chart: chartSchema.default({}),
   storage: storageSchema.default({}),
+  metrics: z.object({ enabled: z.boolean().default(false) }).optional(),
   network_owner_contact: z.array(networkOwnerContactSchema).default([]),
   target: z.array(targetSchema).default([]),
   peer: z.array(peerSchema).default([]),
@@ -317,7 +322,16 @@ export async function loadConfig(configPath: string): Promise<LoadedConfig> {
   // Dedup case-insensitively to catch the collision everywhere, even though
   // Linux filesystems treat them as distinct paths.
   const idsLower = new Set<string>()
+  if (config.target.filter((target) => target.interval_seconds != null).length > 6) {
+    throw new Error('at most 6 sentinel targets may set interval_seconds')
+  }
   for (const target of config.target) {
+    if (target.interval_seconds != null && target.engine !== 'connect') {
+      throw new Error(`sentinel '${target.id}' requires engine='connect'`)
+    }
+    if (target.packets != null && target.interval_seconds == null) {
+      throw new Error(`target '${target.id}' packets requires a sentinel interval_seconds`)
+    }
     const idLower = target.id.toLowerCase()
     if (idsLower.has(idLower)) {
       throw new Error(`duplicate target id: ${target.id}`)

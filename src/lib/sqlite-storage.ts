@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import type { MtrHistoryTarget } from './collector.ts'
 import type { ProbeEngine, ProbeMode, ProbeProtocol } from './config.ts'
+import type { ProbeStatus, ProbeStatusSample } from './metrics.ts'
 import type { NetworkOwnerInfo } from './network-owner.ts'
 import { parseStoredRawSnapshot, type RawMtrEvent, type StoredRawSnapshot } from './raw.ts'
 import {
@@ -58,6 +59,12 @@ type SnapshotStatementParams = [
   string, // protocol
   number, // port
   string, // engine
+  string | null, // started_at
+  string | null, // finished_at
+  string | null, // scheduled_at
+  string | null, // cycle_id
+  string | null, // destination_ip
+  string | null, // failure
   number, // raw_event_count
   number, // hop_count
   number | null, // destination_loss_pct
@@ -88,6 +95,7 @@ type SnapshotHopStatementParams = [
 type SnapshotDestinationSampleStatementParams = [string, string, number, number]
 
 type SnapshotEventStatementParams = [
+  number | null, // offset_ms
   string,
   string,
   number,
@@ -173,6 +181,13 @@ interface SnapshotCountRow {
 }
 
 interface SnapshotRow {
+  started_at: string | null
+  finished_at: string | null
+  scheduled_at: string | null
+  cycle_id: string | null
+  destination_ip: string | null
+  failure: string | null
+
   collected_at: string
   destination_avg_rtt_ms: number | null
   destination_hop_index: number | null
@@ -220,6 +235,7 @@ interface SnapshotDestinationSampleRow {
 }
 
 interface SnapshotEventRow {
+  offset_ms: number | null
   event_order: number
   hop_index: number
   host: string | null
@@ -365,7 +381,12 @@ function rawEventFromRow(row: SnapshotEventRow): RawMtrEvent {
     if (row.probe_id == null) {
       throw new Error('Stored sent event is missing probe_id')
     }
-    return { kind: 'sent', hopIndex: row.hop_index, probeId: row.probe_id }
+    return {
+      kind: 'sent',
+      hopIndex: row.hop_index,
+      probeId: row.probe_id,
+      ...(row.offset_ms == null ? {} : { offsetMs: row.offset_ms }),
+    }
   }
 
   if (row.kind === 'reply') {
@@ -374,6 +395,7 @@ function rawEventFromRow(row: SnapshotEventRow): RawMtrEvent {
     }
     return {
       kind: 'reply',
+      ...(row.offset_ms == null ? {} : { offsetMs: row.offset_ms }),
       hopIndex: row.hop_index,
       probeId: row.probe_id,
       rttUs: row.rtt_us,
@@ -383,12 +405,24 @@ function rawEventFromRow(row: SnapshotEventRow): RawMtrEvent {
   if (row.host == null) {
     throw new Error(`Stored ${row.kind} event is missing host`)
   }
-  return { kind: row.kind, hopIndex: row.hop_index, host: row.host }
+  return {
+    kind: row.kind,
+    hopIndex: row.hop_index,
+    host: row.host,
+    ...(row.offset_ms == null ? {} : { offsetMs: row.offset_ms }),
+  }
 }
 
 function rawSnapshotFromRow(row: SnapshotRow, rawEvents: RawMtrEvent[]): StoredRawSnapshot {
   return {
     collectedAt: row.collected_at,
+    ...(row.started_at == null ? {} : { startedAt: row.started_at }),
+    ...(row.finished_at == null ? {} : { finishedAt: row.finished_at }),
+    ...(row.scheduled_at == null ? {} : { scheduledAt: row.scheduled_at }),
+    ...(row.cycle_id == null ? {} : { cycleId: row.cycle_id }),
+    ...(row.destination_ip == null ? {} : { destinationIp: row.destination_ip }),
+    ...(row.failure == null ? {} : { failure: row.failure }),
+
     engine: row.engine,
     fileName: row.file_name,
     host: row.host,
@@ -412,6 +446,13 @@ function snapshotSummaryFromRows(
 ): SnapshotSummary {
   return {
     collectedAt: row.collected_at,
+    ...(row.started_at == null ? {} : { startedAt: row.started_at }),
+    ...(row.finished_at == null ? {} : { finishedAt: row.finished_at }),
+    ...(row.scheduled_at == null ? {} : { scheduledAt: row.scheduled_at }),
+    ...(row.cycle_id == null ? {} : { cycleId: row.cycle_id }),
+    ...(row.destination_ip == null ? {} : { destinationIp: row.destination_ip }),
+    ...(row.failure == null ? {} : { failure: row.failure }),
+
     destinationAvgRttMs: row.destination_avg_rtt_ms,
     destinationHopIndex: row.destination_hop_index,
     destinationLossPct: row.destination_loss_pct,
@@ -420,7 +461,16 @@ function snapshotSummaryFromRows(
     destinationRttP50Ms: row.destination_rtt_p50_ms,
     destinationRttP90Ms: row.destination_rtt_p90_ms,
     destinationRttSamplesMs: destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
-    diagnosis: diagnoseSnapshot(hops, row.destination_loss_pct, row.destination_hop_index),
+    diagnosis:
+      row.failure == null
+        ? diagnoseSnapshot(hops, row.destination_loss_pct, row.destination_hop_index)
+        : {
+            kind: 'unknown',
+            label: 'Collector failure',
+            summary: row.failure,
+            suspectHopHost: null,
+            suspectHopIndex: null,
+          },
     engine: row.engine,
     fileName: row.file_name,
     hopCount: row.hop_count,
@@ -497,6 +547,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       )
     `)
     this.initializeSnapshotTables()
+    this.initializeTimingColumns()
     this.initializeRollupTables()
     this.initializeNetworkOwnerTables()
     this.createIndexes()
@@ -504,7 +555,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       .query<unknown, [string, string]>(
         'INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)',
       )
-      .run('schema_version', '4')
+      .run('schema_version', '5')
   }
 
   private tableColumns(tableName: string): Set<string> {
@@ -531,6 +582,23 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     }
 
     this.createSnapshotDetailTables()
+  }
+
+  private initializeTimingColumns(): void {
+    const columns = this.tableColumns('snapshots')
+    for (const name of [
+      'started_at',
+      'finished_at',
+      'scheduled_at',
+      'cycle_id',
+      'destination_ip',
+      'failure',
+    ]) {
+      if (!columns.has(name)) this.db.run(`ALTER TABLE snapshots ADD COLUMN ${name} TEXT`)
+    }
+    if (!this.tableColumns('snapshot_events').has('offset_ms')) {
+      this.db.run('ALTER TABLE snapshot_events ADD COLUMN offset_ms REAL')
+    }
   }
 
   private createSnapshotsTable(tableName: string): void {
@@ -870,6 +938,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             protocol,
             port,
             engine,
+            started_at,
+            finished_at,
+            scheduled_at,
+            cycle_id,
+            destination_ip,
+            failure,
             raw_event_count,
             hop_count,
             destination_loss_pct,
@@ -881,7 +955,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             destination_rtt_p50_ms,
             destination_rtt_p90_ms
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(target_slug, file_name) DO UPDATE SET
             collected_at = excluded.collected_at,
             source_path = excluded.source_path,
@@ -896,6 +970,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             protocol = excluded.protocol,
             port = excluded.port,
             engine = excluded.engine,
+            started_at = excluded.started_at,
+            finished_at = excluded.finished_at,
+            scheduled_at = excluded.scheduled_at,
+            cycle_id = excluded.cycle_id,
+            destination_ip = excluded.destination_ip,
+            failure = excluded.failure,
             raw_event_count = excluded.raw_event_count,
             hop_count = excluded.hop_count,
             destination_loss_pct = excluded.destination_loss_pct,
@@ -932,6 +1012,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             protocol,
             port,
             engine,
+            started_at,
+            finished_at,
+            scheduled_at,
+            cycle_id,
+            destination_ip,
+            failure,
             raw_event_count,
             hop_count,
             destination_loss_pct,
@@ -943,7 +1029,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
             destination_rtt_p50_ms,
             destination_rtt_p90_ms
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(...this.snapshotStatementParams(input))
@@ -967,6 +1053,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       input.rawSnapshot.protocol,
       input.rawSnapshot.port,
       input.rawSnapshot.engine,
+      input.rawSnapshot.startedAt ?? null,
+      input.rawSnapshot.finishedAt ?? null,
+      input.rawSnapshot.scheduledAt ?? null,
+      input.rawSnapshot.cycleId ?? null,
+      input.rawSnapshot.destinationIp ?? null,
+      input.rawSnapshot.failure ?? null,
       input.rawSnapshot.rawEvents.length,
       input.summary.hopCount,
       input.summary.destinationLossPct,
@@ -1043,6 +1135,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     const insertEvent = this.db.query<unknown, SnapshotEventStatementParams>(
       `
         INSERT INTO snapshot_events (
+          offset_ms,
           target_slug,
           file_name,
           event_order,
@@ -1052,11 +1145,12 @@ export class HopwatchSqliteStore implements HopwatchStorage {
           rtt_us,
           host
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
     for (const [eventOrder, event] of input.rawSnapshot.rawEvents.entries()) {
       insertEvent.run(
+        event.offsetMs ?? null,
         input.targetSlug,
         input.fileName,
         eventOrder,
@@ -1076,6 +1170,26 @@ export class HopwatchSqliteStore implements HopwatchStorage {
       )
       .all()
       .map((row) => row.target_slug)
+  }
+
+  getProbeStatus(targetSlug: string): ProbeStatus {
+    const select = `SELECT collected_at AS collectedAt, finished_at AS finishedAt,
+      destination_loss_pct AS destinationLossPct, destination_avg_rtt_ms AS destinationAvgRttMs,
+      failure FROM snapshots WHERE target_slug = ?`
+    const recent = this.db
+      .query<ProbeStatusSample, [string]>(`${select} ORDER BY collected_at DESC LIMIT 2`)
+      .all(targetSlug)
+    const lastSuccess = this.db
+      .query<ProbeStatusSample, [string]>(`${select}
+      AND failure IS NULL AND destination_loss_pct < 100 ORDER BY collected_at DESC LIMIT 1`)
+      .get(targetSlug)
+    const count =
+      this.db
+        .query<CountRow, [string]>(
+          'SELECT COUNT(*) AS count FROM snapshots WHERE target_slug = ? AND failure IS NOT NULL',
+        )
+        .get(targetSlug)?.count ?? 0
+    return { recent, lastSuccess, collectorFailures: count }
   }
 
   listSnapshotSummaries(targetSlug: string): SnapshotSummary[] {
@@ -1144,7 +1258,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
         ? this.db
             .query<SnapshotEventRow & { file_name: string }, [string]>(
               `
-                SELECT file_name, event_order, kind, hop_index, probe_id, rtt_us, host
+                SELECT file_name, event_order, kind, hop_index, probe_id, rtt_us, host, offset_ms
                 FROM snapshot_events
                 WHERE target_slug = ?
                 ORDER BY file_name ASC, event_order ASC
@@ -1154,7 +1268,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
         : this.db
             .query<SnapshotEventRow & { file_name: string }, [string, string]>(
               `
-                SELECT file_name, event_order, kind, hop_index, probe_id, rtt_us, host
+                SELECT file_name, event_order, kind, hop_index, probe_id, rtt_us, host, offset_ms
                 FROM snapshot_events
                 WHERE target_slug = ? AND file_name >= ?
                 ORDER BY file_name ASC, event_order ASC
@@ -1198,7 +1312,7 @@ export class HopwatchSqliteStore implements HopwatchStorage {
     const events = this.db
       .query<SnapshotEventRow, [string, string]>(
         `
-          SELECT event_order, kind, hop_index, probe_id, rtt_us, host
+          SELECT event_order, kind, hop_index, probe_id, rtt_us, host, offset_ms
           FROM snapshot_events
           WHERE target_slug = ? AND file_name = ?
           ORDER BY event_order ASC

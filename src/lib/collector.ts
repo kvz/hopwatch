@@ -1,8 +1,14 @@
 import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { execa } from 'execa'
 import type { LoadedConfig, ProbeEngine, ProbeMode, ProbeProtocol, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
-import { parseRawMtrOutput, parseStoredRawSnapshot, type RawMtrEvent } from './raw.ts'
+import {
+  parseRawMtrOutput,
+  parseStoredRawSnapshot,
+  type RawMtrEvent,
+  resolveDestinationHopIndex,
+} from './raw.ts'
 import { formatCompactCollectedAt } from './snapshot.ts'
 import { HopwatchSqliteStore, type HopwatchStorage } from './sqlite-storage.ts'
 
@@ -16,6 +22,8 @@ export interface MtrHistoryTarget {
   group: string
   protocol: ProbeProtocol
   port: number
+  intervalSeconds?: number
+  packets?: number
 }
 
 export function targetFromConfig(config: TargetConfig): MtrHistoryTarget {
@@ -29,10 +37,13 @@ export function targetFromConfig(config: TargetConfig): MtrHistoryTarget {
     group: config.group ?? 'default',
     protocol: config.protocol,
     port: config.port,
+    intervalSeconds: config.interval_seconds,
+    packets: config.packets,
   }
 }
 
 export interface NativeProbeRequest {
+  timeOriginMs?: number
   hostIp: string
   packets: number
   maxHops: number
@@ -49,6 +60,8 @@ export interface ConnectProbeRequest {
   timeoutMs: number
   ipVersion: '4' | '6'
   port: number
+  signal?: AbortSignal
+  timeOriginMs?: number
 }
 
 export type RunConnectProbeFn = (request: ConnectProbeRequest) => Promise<RawMtrEvent[]>
@@ -60,6 +73,7 @@ async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMt
   if (request.protocol === 'tcp') {
     const { probeTargetNativeTcp } = await import('./prober-native-tcp.ts')
     return probeTargetNativeTcp({
+      timeOriginMs: request.timeOriginMs,
       hostIp: request.hostIp,
       maxHops: request.maxHops,
       packets: request.packets,
@@ -69,6 +83,7 @@ async function defaultRunNativeProbe(request: NativeProbeRequest): Promise<RawMt
   }
   const { probeTargetNative } = await import('./prober-native.ts')
   return probeTargetNative({
+    timeOriginMs: request.timeOriginMs,
     hostIp: request.hostIp,
     maxHops: request.maxHops,
     packets: request.packets,
@@ -117,6 +132,7 @@ export interface CollectorOptions {
 }
 
 export interface CollectorDependencies {
+  scheduledAt?: Date
   getNow?: () => Date
   openStoreFn?: (dbPath: string) => Promise<HopwatchStorage>
   runCommand?: RunCommand
@@ -171,6 +187,10 @@ async function mapWithConcurrency<T>(
 }
 
 export interface CollectSnapshotDeps {
+  getNow?: () => Date
+  scheduledAt?: Date
+  signal?: AbortSignal
+  timeOriginMs?: number
   runCommand?: RunCommand
   runConnectProbeFn?: RunConnectProbeFn
   runNativeProbeFn?: RunNativeProbeFn
@@ -195,21 +215,14 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
   }
 }
 
-export async function collectSnapshot(
-  nodeLabel: string,
-  timestamp: string,
+async function collectProbeEvents(
   options: CollectorOptions,
   target: MtrHistoryTarget,
   deps: CollectSnapshotDeps = {},
-  logger?: Logger,
-): Promise<void> {
+): Promise<RawMtrEvent[]> {
   const runCommand = deps.runCommand ?? execFileAsync
   const runConnectProbeFn = deps.runConnectProbeFn ?? defaultRunConnectProbe
   const runNativeProbeFn = deps.runNativeProbeFn ?? defaultRunNativeProbe
-  if (deps.sqliteStore == null) {
-    throw new Error('collectSnapshot requires an open SQLite store')
-  }
-
   let rawEvents: RawMtrEvent[]
   if (target.engine === 'connect') {
     if (target.protocol !== 'tcp') {
@@ -226,6 +239,8 @@ export async function collectSnapshot(
 
     rawEvents = await runConnectProbeFn({
       host: target.host,
+      signal: deps.signal,
+      timeOriginMs: deps.timeOriginMs,
       ipVersion: options.ipVersion,
       packets: options.packets,
       port: target.port,
@@ -251,6 +266,7 @@ export async function collectSnapshot(
       `DNS lookup for '${target.host}' timed out after ${dnsDeadlineMs}ms`,
     )
     rawEvents = await runNativeProbeFn({
+      timeOriginMs: deps.timeOriginMs,
       hostIp: resolved.address,
       maxHops: 30,
       packets: options.packets,
@@ -310,11 +326,62 @@ export async function collectSnapshot(
     rawEvents = parseRawMtrOutput(stdout)
   }
 
+  return rawEvents
+}
+
+export async function collectSnapshot(
+  nodeLabel: string,
+  timestamp: string,
+  options: CollectorOptions,
+  target: MtrHistoryTarget,
+  deps: CollectSnapshotDeps = {},
+  logger?: Logger,
+): Promise<void> {
+  if (deps.sqliteStore == null) throw new Error('collectSnapshot requires an open SQLite store')
+  const getNow = deps.getNow ?? (() => new Date())
+  const startedAt = getNow()
+  const timeOriginMs = performance.now()
+  const sentinel = target.intervalSeconds != null
+  const settings = sentinel
+    ? { ...options, packets: target.packets ?? 3, probeTimeoutMs: 10_000 }
+    : options
+  const controller = new AbortController()
+  let rawEvents: RawMtrEvent[] = []
+  let failure: string | undefined
+  try {
+    rawEvents = await withTimeout(
+      collectProbeEvents(settings, target, {
+        ...deps,
+        signal: controller.signal,
+        timeOriginMs,
+      }),
+      settings.probeTimeoutMs,
+      `probe for '${target.slug}' exceeded ${settings.probeTimeoutMs}ms deadline`,
+    )
+  } catch (err) {
+    failure = (err instanceof Error ? err.message : String(err)).slice(0, 1000)
+  } finally {
+    controller.abort()
+  }
+  const collectedAt = getTimestamp(startedAt)
+  const destinationHop = resolveDestinationHopIndex(rawEvents)
+  const destinationIp = [...rawEvents]
+    .reverse()
+    .find(
+      (event) =>
+        event.kind === 'host' && event.hopIndex === destinationHop && isIP(event.host) !== 0,
+    )
   const storedSnapshot = {
     schemaVersion: 2 as const,
-    collectedAt: timestamp,
+    collectedAt,
+    startedAt: startedAt.toISOString(),
+    finishedAt: getNow().toISOString(),
+    scheduledAt: (deps.scheduledAt ?? startedAt).toISOString(),
+    cycleId: timestamp,
+    destinationIp: destinationIp?.kind === 'host' ? destinationIp.host : null,
+    ...(failure == null ? {} : { failure }),
     engine: target.engine,
-    fileName: `${timestamp}.json`,
+    fileName: `${collectedAt}.json`,
     host: target.host,
     label: target.label,
     netns: target.netns,
@@ -326,7 +393,6 @@ export async function collectSnapshot(
     target: target.host,
   }
   const snapshotContents = `${JSON.stringify(storedSnapshot, null, 2)}\n`
-  const parsedSnapshot = parseStoredRawSnapshot(snapshotContents)
   deps.sqliteStore.insertRawSnapshot(
     {
       contents: snapshotContents,
@@ -334,9 +400,10 @@ export async function collectSnapshot(
       sourcePath: `sqlite://${target.slug}/${storedSnapshot.fileName}`,
       targetSlug: target.slug,
     },
-    parsedSnapshot,
+    parseStoredRawSnapshot(snapshotContents),
   )
   logger?.info('snapshot saved', { fileName: storedSnapshot.fileName, target: target.slug })
+  if (failure != null) throw new Error(failure)
 }
 
 async function updateRollupsForTargets(
@@ -350,6 +417,12 @@ async function updateRollupsForTargets(
   const failedTargetSlugs: string[] = []
   await mapWithConcurrency(options.targets, options.concurrency, async (target) => {
     try {
+      // Sentinels retain one day of small raw samples; the slow trace targets
+      // supply long-term rollups. Avoid rebuilding rollups on every fast tick.
+      if (target.intervalSeconds != null) {
+        store.pruneRawSnapshots(target.slug, 1, nowDate.getTime())
+        return
+      }
       store.updateRollupsForTarget(target, nodeLabel, nowDate, undefined, fullRebuild)
       store.pruneRawSnapshots(target.slug, options.keepDays, nowDate.getTime())
     } catch (err) {
@@ -385,6 +458,7 @@ export async function runCollector(
   // mock `runNativeProbeFn` bypass the FFI load entirely and therefore also
   // bypass this guard - the check is about protecting the real code path.
   const nativeTargets = config.target.filter((target) => target.engine === 'native')
+  let nativeFailure: string | undefined
   // An explicit `warmupNativeEngineFn` in deps opts into the warmup path and
   // bypasses the platform check below, so tests can exercise the "libc failed
   // to load" branch on any OS without smuggling a no-op runNativeProbeFn in.
@@ -398,9 +472,7 @@ export async function runCollector(
     deps.runNativeProbeFn == null &&
     deps.warmupNativeEngineFn == null
   ) {
-    throw new Error(
-      `target '${nativeTargets[0].id}' uses engine='native' but collector is running on ${process.platform}; engine='native' requires Linux`,
-    )
+    nativeFailure = `engine='native' requires Linux; collector is running on ${process.platform}`
   }
   // Linux-but-musl (Alpine, distroless-musl) does not ship glibc, so
   // dlopen('libc.so.6') inside the native prober fails with an opaque
@@ -413,9 +485,7 @@ export async function runCollector(
       await warmup()
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      throw new Error(
-        `target '${nativeTargets[0].id}' uses engine='native' but libc.so.6 could not be loaded (${reason}); engine='native' requires glibc Linux`,
-      )
+      nativeFailure = `libc.so.6 could not be loaded (${reason}); engine='native' requires glibc Linux`
     }
   }
 
@@ -424,9 +494,16 @@ export async function runCollector(
   const nowDate = (deps.getNow ?? (() => new Date()))()
   const timestamp = getTimestamp(nowDate)
   const snapshotDeps: CollectSnapshotDeps = {
+    getNow: deps.getNow,
+    scheduledAt: deps.scheduledAt ?? nowDate,
     runCommand: deps.runCommand,
     runConnectProbeFn: deps.runConnectProbeFn,
-    runNativeProbeFn: deps.runNativeProbeFn,
+    runNativeProbeFn:
+      nativeFailure == null
+        ? deps.runNativeProbeFn
+        : async () => {
+            throw new Error(nativeFailure)
+          },
   }
   const openStore =
     deps.openStoreFn ??

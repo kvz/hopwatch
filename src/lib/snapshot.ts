@@ -44,6 +44,12 @@ const snapshotDiagnosisSchema = z.object({
 export type SnapshotDiagnosis = z.infer<typeof snapshotDiagnosisSchema>
 
 export interface SnapshotSummary {
+  startedAt?: string
+  finishedAt?: string
+  scheduledAt?: string
+  cycleId?: string
+  destinationIp?: string | null
+  failure?: string
   collectedAt: string
   destinationAvgRttMs: number | null
   // 1-based hop index of the destination (matches `HopRecord.index`). Can
@@ -111,10 +117,16 @@ export function renderSnapshotRawText(
     | 'protocol'
     | 'target'
     | 'rawEvents'
+    | 'startedAt'
+    | 'finishedAt'
+    | 'scheduledAt'
+    | 'cycleId'
+    | 'destinationIp'
+    | 'failure'
   >,
   hops: HopRecord[],
 ): string {
-  const startLine = `Start: ${formatReportCollectedAt(snapshot.collectedAt)}`
+  const startLine = `Start: ${snapshot.startedAt ?? formatReportCollectedAt(snapshot.collectedAt)}`
   const hostColumn = `HOST: ${snapshot.observer}`.padEnd(42, ' ')
   const headerLine = `${hostColumn}  Loss%   Snt   Last    Avg   Best   Wrst  StDev`
   const hopLines = hops.map((hop) => {
@@ -140,6 +152,9 @@ export function renderSnapshotRawText(
     `# port=${snapshot.port}`,
     `# probe_mode=${snapshot.probeMode}`,
     `# collected_at=${snapshot.collectedAt}`,
+    ...(['startedAt', 'finishedAt', 'scheduledAt', 'cycleId', 'destinationIp', 'failure'] as const)
+      .filter((key) => snapshot[key] != null)
+      .map((key) => `# ${key}=${snapshot[key]}`),
     '',
     startLine,
     headerLine,
@@ -183,6 +198,12 @@ export function summarizeStoredRawSnapshot(rawSnapshot: StoredRawSnapshot): Snap
 
   return {
     collectedAt: rawSnapshot.collectedAt,
+    startedAt: rawSnapshot.startedAt,
+    finishedAt: rawSnapshot.finishedAt,
+    scheduledAt: rawSnapshot.scheduledAt,
+    cycleId: rawSnapshot.cycleId,
+    destinationIp: rawSnapshot.destinationIp,
+    failure: rawSnapshot.failure,
     destinationAvgRttMs,
     destinationHopIndex: destinationHopIndex1Based,
     destinationLossPct,
@@ -191,7 +212,16 @@ export function summarizeStoredRawSnapshot(rawSnapshot: StoredRawSnapshot): Snap
     destinationRttP50Ms,
     destinationRttP90Ms,
     destinationRttSamplesMs: destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs,
-    diagnosis: diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based),
+    diagnosis:
+      rawSnapshot.failure == null
+        ? diagnoseSnapshot(hops, destinationLossPct, destinationHopIndex1Based)
+        : {
+            kind: 'unknown',
+            label: 'Collector failure',
+            summary: rawSnapshot.failure,
+            suspectHopHost: null,
+            suspectHopIndex: null,
+          },
     engine: rawSnapshot.engine,
     fileName: rawSnapshot.fileName,
     hopCount: hops.length,

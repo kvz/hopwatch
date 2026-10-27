@@ -35,6 +35,10 @@ jitter_seconds   = 30
 # Leave empty unless you run probes from Linux network namespaces.
 namespace_dir    = ""
 
+# External alert scraping is opt-in. No notifications are sent by hopwatch.
+# [metrics]
+# enabled = true
+
 [chart]
 # Rotated signature rendered along the right edge of every chart.
 # Defaults to "RRDTOOL / TOBI OETIKER" as attribution to Tobi Oetiker,
@@ -80,3 +84,16 @@ label = "EU"
 id    = "us"
 url   = "https://hopwatch-us.example.com"
 label = "US"
+
+# Optional fast sentinel, separate from the full MTR targets above.
+# At most six, minimum interval 30s, 3–5 packets, fixed 10s deadline, 24h retention.
+# engine="connect" only supports the host namespace.
+# [[target]]
+# id = "s3-eu-sentinel"
+# label = "S3 EU sentinel"
+# host = "s3.eu-west-1.amazonaws.com"
+# engine = "connect"
+# protocol = "tcp"
+# port = 443
+# interval_seconds = 30
+# packets = 3

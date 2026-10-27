@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { NetworkOwnerInfo } from '../lib/network-owner.ts'
-import { type PageSnapshotStore, renderRootIndex } from '../lib/page.tsx'
+import { type PageSnapshotStore, renderRootIndex, renderTargetIndex } from '../lib/page.tsx'
 import type { MtrRollupFile } from '../lib/rollups.ts'
 import type { SnapshotSummary } from '../lib/snapshot.ts'
 
@@ -80,6 +80,33 @@ function snapshot(partial: Partial<SnapshotSummary> & { collectedAt: string }): 
 }
 
 describe('renderRootIndex', () => {
+  test('target pages show actual probe ranges, gaps, and explicit legacy uncertainty', async () => {
+    const current = snapshot({
+      collectedAt: '20261027T152400Z',
+      startedAt: '2026-10-27T15:24:00.000Z',
+      finishedAt: '2026-10-27T15:24:10.000Z',
+    })
+    const previous = snapshot({
+      collectedAt: '20261027T152330Z',
+      startedAt: '2026-10-27T15:23:30.000Z',
+      finishedAt: '2026-10-27T15:23:40.000Z',
+    })
+    const store = new MemoryPageStore(
+      new Map([['example', [current, previous, snapshot({ collectedAt: '20261027T150000Z' })]]]),
+    )
+    const rendered = await renderTargetIndex(
+      store,
+      [],
+      'observer',
+      null,
+      'example',
+      Date.parse('2026-10-27T15:25:00Z'),
+    )
+    expect(rendered?.html).toContain('2026-10-27T15:24:00.000Z')
+    expect(rendered?.html).toContain('2026-10-27T15:24:10.000Z')
+    expect(rendered?.html).toContain('Gap before probe: 20.0s')
+    expect(rendered?.html).toContain('Actual probe times unavailable (legacy cycle timestamp)')
+  })
   test('hides stale targets that are no longer in the active config', async () => {
     const now = Date.UTC(2026, 3, 30, 12, 0, 0)
     const store = new MemoryPageStore(

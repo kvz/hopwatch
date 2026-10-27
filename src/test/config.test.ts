@@ -22,6 +22,63 @@ describe('loadConfig netns validation', () => {
     return configPath
   }
 
+  test('loads opt-in sentinel cadence and external metrics without changing legacy defaults', async () => {
+    const config = await loadConfig(
+      await writeConfig(`
+[metrics]
+enabled = true
+[[target]]
+id = "sentinel"
+label = "S3 sentinel"
+host = "s3.eu-west-1.amazonaws.com"
+engine = "connect"
+protocol = "tcp"
+interval_seconds = 30
+packets = 3
+`),
+    )
+    expect(config.probe.interval_seconds).toBe(900)
+    expect(config.target[0]).toMatchObject({ interval_seconds: 30, packets: 3 })
+    expect(config.metrics?.enabled).toBe(true)
+  })
+
+  test.each([
+    'interval_seconds = 1',
+    'interval_seconds = 30\npackets = 20',
+    'interval_seconds = 30\nengine = "mtr"',
+  ])('rejects an unbounded or heavyweight sentinel: %s', async (settings) => {
+    const engine = settings.includes('engine') ? '' : 'engine = "connect"'
+    await expect(
+      loadConfig(
+        await writeConfig(`
+[[target]]
+id = "sentinel"
+label = "Sentinel"
+host = "example.com"
+protocol = "tcp"
+${engine}
+${settings}
+`),
+      ),
+    ).rejects.toThrow(/sentinel|interval_seconds|packets/)
+  })
+
+  test('limits the sentinel set to six independent slots', async () => {
+    const targets = Array.from(
+      { length: 7 },
+      (_, index) => `
+[[target]]
+id = "sentinel-${index}"
+label = "Sentinel"
+host = "example.com"
+engine = "connect"
+protocol = "tcp"
+interval_seconds = 30
+`,
+    ).join('\n')
+    await expect(loadConfig(await writeConfig(targets))).rejects.toThrow(/at most 6 sentinel/)
+  })
+
   test('rejects a netns name that contains path traversal', async () => {
     const configPath = await writeConfig(`
 [server]

@@ -37,6 +37,14 @@ function destinationEvents(sentCount: number, rttUs: number[]): RawMtrEvent[] {
 }
 
 describe('aggregateSnapshotsToRollupBuckets', () => {
+  test('collector failures remain gaps instead of being counted as destination loss', () => {
+    const healthy = snap('20261027T152300Z', destinationEvents(3, [1000, 2000, 3000]))
+    const failure = { ...snap('20261027T152330Z', []), failure: 'DNS lookup failed' }
+    const [bucket] = aggregateSnapshotsToRollupBuckets([healthy, failure], 'hour')
+    expect(bucket.snapshotCount).toBe(1)
+    expect(bucket.destinationLossPct).toBe(0)
+    expect(aggregateSnapshotsToRollupBuckets([failure], 'hour')).toEqual([])
+  })
   test('returns an empty array when no snapshots are provided', () => {
     expect(aggregateSnapshotsToRollupBuckets([], 'hour')).toEqual([])
   })

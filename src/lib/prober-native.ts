@@ -27,6 +27,7 @@ import {
 import type { RawMtrEvent } from './raw.ts'
 
 export interface NativeProbeOptions {
+  timeOriginMs?: number
   // Already-resolved IPv4 target. DNS resolution is the caller's job so they
   // can share a resolver or enforce a netns-bound lookup.
   hostIp: string
@@ -113,6 +114,8 @@ function nextProbeId(): number {
 }
 
 export async function probeTargetNative(options: NativeProbeOptions): Promise<RawMtrEvent[]> {
+  const timeOriginMs = options.timeOriginMs ?? performance.now()
+  const offsetMs = (): number => Math.max(0, performance.now() - timeOriginMs)
   const maxHops = options.maxHops ?? DEFAULTS.maxHops
   const packets = options.packets ?? DEFAULTS.packets
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs
@@ -183,7 +186,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
       return true
     }
     const rttUs = Math.max(0, Math.round((arrivedNs - sendNs) / 1000))
-    events.push({ kind: 'reply', hopIndex, probeId: parsed.seq, rttUs })
+    events.push({ offsetMs: offsetMs(), kind: 'reply', hopIndex, probeId: parsed.seq, rttUs })
     if (parsed.kind === 'echo_reply' && (destHopIndex == null || hopIndex < destHopIndex)) {
       destHopIndex = hopIndex
     }
@@ -226,7 +229,7 @@ export async function probeTargetNative(options: NativeProbeOptions): Promise<Ra
           sendTimeNs.delete(seq)
           continue
         }
-        events.push({ kind: 'sent', hopIndex: ttl - 1, probeId: seq })
+        events.push({ offsetMs: offsetMs(), kind: 'sent', hopIndex: ttl - 1, probeId: seq })
         // Pace the next send while opportunistically draining replies. Using
         // a real sleep (not a spin) gives the kernel time to accept incoming
         // Time Exceeded packets and lets destHopIndex settle before cycle N+1.

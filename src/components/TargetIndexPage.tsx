@@ -19,6 +19,7 @@ import { HopHeatmap } from './HopHeatmap.tsx'
 import { HopHost } from './HopHost.tsx'
 import { Layout } from './Layout.tsx'
 import { LossFunnel } from './LossFunnel.tsx'
+import { ProbeTiming } from './ProbeTiming.tsx'
 import { RelativeTime } from './RelativeTime.tsx'
 import { TopNav } from './TopNav.tsx'
 
@@ -117,13 +118,13 @@ export function TargetIndexPage({
         Probing <code>{latestSnapshot.host}</code>
         {probeIsNetns ? <> from a Linux network namespace</> : null} with{' '}
         {latestSnapshot.protocol === 'tcp'
-          ? `TCP SYN to port ${latestSnapshot.port}`
+          ? `${latestSnapshot.engine === 'connect' ? 'TCP connect' : 'TCP SYN'} to port ${latestSnapshot.port}`
           : 'ICMP traceroute'}
         . Destination loss counts only the final hop; worst-hop loss may include intermediate router
         reply rate-limiting and is shown muted for that reason.
       </p>
       <p className="freshness">
-        Last probe cycle:{' '}
+        Last target probe:{' '}
         <strong>
           <RelativeTime collectedAt={latestSnapshot.collectedAt} now={now} />
         </strong>{' '}
@@ -131,6 +132,7 @@ export function TargetIndexPage({
           ({absoluteLatestCollectedAt})
         </span>
       </p>
+      <ProbeTiming snapshot={latestSnapshot} previous={snapshots[1]} />
 
       <section className="panel" id="summary">
         <h2>Summary</h2>
@@ -385,6 +387,7 @@ export function TargetIndexPage({
                           title={snapshot.collectedAt}
                         />
                         <div className="cell-subtle">{absoluteCollectedAt}</div>
+                        <ProbeTiming snapshot={snapshot} previous={snapshots[i + 1]} />
                       </td>
                       <td>
                         <span className={`loss ${getLossClass(snapshot.destinationLossPct)}`}>

@@ -88,4 +88,35 @@ describe('probeTargetConnect', () => {
     expect(events.filter((event) => event.kind === 'sent')).toHaveLength(3)
     expect(events).toContainEqual({ kind: 'host', hopIndex: 0, host: '127.0.0.1' })
   })
+
+  test.each([
+    'ENETDOWN',
+    'ECONNABORTED',
+    'EPIPE',
+  ])('keeps earlier successes when a later connection fails with %s', async (code) => {
+    let attempts = 0
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      const success = attempts++ === 0
+      queueMicrotask(() =>
+        success
+          ? socket.emit('connect')
+          : socket.emit('error', Object.assign(new Error(code), { code })),
+      )
+      return socket
+    })
+    try {
+      const events = await probeTargetConnect({
+        host: '127.0.0.1',
+        ipVersion: '4',
+        packets: 3,
+        port: 443,
+        timeoutMs: 10_000,
+      })
+      expect(events.filter((event) => event.kind === 'sent')).toHaveLength(3)
+      expect(events.filter((event) => event.kind === 'reply')).toHaveLength(1)
+    } finally {
+      connect.mockRestore()
+    }
+  })
 })

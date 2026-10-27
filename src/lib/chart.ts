@@ -132,6 +132,8 @@ export async function loadChartDefinitions(
   snapshots: SnapshotSummary[],
   now: number,
 ): Promise<ChartDefinition[]> {
+  // Sentinel targets intentionally use these raw-snapshot paths and fallbacks;
+  // rendering does not require a second writer producing sentinel rollups.
   const hourlyRollup = store.getRollupFile(targetSlug, 'hour')
   const dailyRollup = store.getRollupFile(targetSlug, 'day')
 

@@ -112,6 +112,67 @@ describe('runCollector', () => {
     await rm(dataDir, { recursive: true, force: true })
   })
 
+  test('preserves native results returned after the native drain and reverse-DNS budgets', async () => {
+    vi.useFakeTimers()
+    try {
+      const config = buildConfig(dataDir, ['native'])
+      config.target[0].engine = 'native'
+      config.target[0].host = '127.0.0.1'
+      config.probe.interval_seconds = 30
+      const store = new FakeHopwatchStore()
+      const promise = runCollector(
+        config,
+        createLogger({ level: 'error' }),
+        withStore(store, {
+          runNativeProbeFn: async (request) => {
+            await new Promise((resolve) => setTimeout(resolve, request.timeoutMs + 1000))
+            return [
+              { kind: 'host', hopIndex: 0, host: '127.0.0.1' },
+              { kind: 'sent', hopIndex: 0, probeId: 1 },
+              { kind: 'reply', hopIndex: 0, probeId: 1, rttUs: 1000 },
+            ]
+          },
+        }),
+      )
+      await vi.advanceTimersByTimeAsync(61_001)
+      expect((await promise).failedTargetSlugs).toEqual([])
+      expect(store.snapshotFor('native')?.rawEvents).toHaveLength(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('keeps known native initialization errors even when the target cannot resolve', async () => {
+    const config = buildConfig(dataDir, ['unresolvable.invalid'])
+    config.target[0].engine = 'native'
+    const store = new FakeHopwatchStore()
+    await runCollector(
+      config,
+      createLogger({ level: 'error' }),
+      withStore(store, {
+        warmupNativeEngineFn: () => {
+          throw new Error('missing glibc')
+        },
+      }),
+    )
+    expect(store.snapshotFor('unresolvable.invalid')?.failure).toContain('requires glibc Linux')
+  })
+
+  test('can borrow the daemon store without opening, migrating or closing another connection', async () => {
+    const store = new FakeHopwatchStore()
+    const openStoreFn = vi.fn(async () => {
+      throw new Error('should reuse store')
+    })
+    await runCollector(buildConfig(dataDir, ['example']), createLogger({ level: 'error' }), {
+      sqliteStore: store,
+      openStoreFn,
+      runCommand: async () => ({ stdout: MTR_OUTPUT, stderr: '' }),
+    })
+    expect(openStoreFn).not.toHaveBeenCalled()
+    expect(store.closedCount).toBe(0)
+    expect(store.snapshotFor('example')).toBeDefined()
+  })
+
   test('timestamps queued targets at their actual start and persists collector failures', async () => {
     const config = buildConfig(dataDir, ['first.example', 'second.example'])
     config.probe.concurrency = 1

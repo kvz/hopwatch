@@ -17,6 +17,7 @@ import {
   selectSnapshotsInWindow,
   shouldSurfaceHopIssueForRoot,
   summarizeCrossTargetHopIssues,
+  summarizeDiagnoses,
   summarizeHopIssues,
   summarizeSnapshots,
 } from '../lib/snapshot-aggregate.ts'
@@ -75,6 +76,46 @@ describe('selectSnapshotsInWindow', () => {
 })
 
 describe('summarizeSnapshots', () => {
+  test('collector failures cannot improve measured health or make a failure-only history Stable', () => {
+    const failed = snapshot({
+      collectedAt: '20260420T110000Z',
+      failure: 'DNS lookup failed',
+      destinationLossPct: null,
+      diagnosis: {
+        kind: 'unknown',
+        label: 'Collector failure',
+        summary: 'DNS lookup failed',
+        suspectHopHost: null,
+        suspectHopIndex: null,
+      },
+    })
+    const failures = Array.from({ length: 10 }, () => failed)
+    const loss = snapshot({
+      collectedAt: '20260420T110000Z',
+      destinationLossPct: 5,
+      diagnosis: {
+        kind: 'destination_loss',
+        label: 'Loss',
+        summary: '',
+        suspectHopHost: null,
+        suspectHopIndex: null,
+      },
+    })
+    const mixed = [
+      loss,
+      snapshot({ collectedAt: '20260420T113000Z' }),
+      snapshot({ collectedAt: '20260420T114500Z' }),
+      ...failures,
+    ]
+    expect(summarizeSnapshots(mixed).sampleCount).toBe(3)
+    expect(summarizeDiagnoses(mixed).sampleCount).toBe(3)
+    expect(
+      getHistoricalSeverityBadge(summarizeSnapshots(mixed), summarizeDiagnoses(mixed)).label,
+    ).toBe('Degraded')
+    expect(
+      getHistoricalSeverityBadge(summarizeSnapshots(failures), summarizeDiagnoses(failures)).label,
+    ).toBe('Unknown')
+  })
   test('averages destination loss across in-window snapshots', () => {
     const snaps = [
       snapshot({ collectedAt: '20260420T110000Z', destinationLossPct: 10 }),

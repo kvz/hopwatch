@@ -104,7 +104,8 @@ describe('renderRootIndex', () => {
     )
     expect(rendered?.html).toContain('2026-10-27T15:24:00.000Z')
     expect(rendered?.html).toContain('2026-10-27T15:24:10.000Z')
-    expect(rendered?.html).toContain('Gap before probe: 20.0s')
+    expect(rendered?.html).toContain('Gap since previous finish: 20.0s')
+    expect(rendered?.html).toContain('15:24:00.000 UTC</time>')
     expect(rendered?.html).toContain('Actual probe times unavailable (legacy cycle timestamp)')
   })
   test('hides stale targets that are no longer in the active config', async () => {

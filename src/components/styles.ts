@@ -34,6 +34,8 @@ main {
 
 h1, h2 { margin: 0 0 12px; line-height: 1.1; }
 p, li { line-height: 1.5; }
+.cell-subtle.probe-timing { max-width: 150px; white-space: normal; overflow-wrap: anywhere; }
+.probe-timing.probe-timing--summary { max-width: none; margin: -8px 0 20px; }
 a { color: var(--accent); }
 
 .network-token {

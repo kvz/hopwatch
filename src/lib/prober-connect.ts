@@ -46,16 +46,17 @@ async function runConnectAttempt(
       finish(Math.max(0, Math.round((performance.now() - started) * 1_000))),
     )
     socket.once('error', (err: NodeJS.ErrnoException) => {
+      // Resource/permission errors describe the collector. Other socket
+      // errors (including interface-down errors) are failed TCP attempts;
+      // keep earlier replies in the sample without attributing an owner.
       if (
-        ['ECONNREFUSED', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET'].includes(
+        ['EMFILE', 'ENFILE', 'ENOMEM', 'ENOBUFS', 'EACCES', 'EPERM', 'EINVAL'].includes(
           err.code ?? '',
         )
       ) {
-        finish(null)
-      } else {
         cleanup()
         reject(err)
-      }
+      } else finish(null)
     })
   })
 }

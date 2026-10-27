@@ -229,7 +229,12 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   const store = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
   const baseSourceIdentity = await loadDaemonSourceIdentity(config, logger)
 
-  const scheduler = startScheduler(config, logger)
+  // Reuse the daemon connection: fast ticks should not re-run schema setup or
+  // compete with this process's rollup writer through separate connections.
+  const scheduler = startScheduler(config, logger, {
+    runCollectorFn: (subset, log, deps) =>
+      runCollector(subset, log, { ...deps, sqliteStore: store }),
+  })
 
   const server = Bun.serve({
     fetch: async (request): Promise<Response> => {

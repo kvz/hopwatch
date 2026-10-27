@@ -387,7 +387,7 @@ export function TargetIndexPage({
                           title={snapshot.collectedAt}
                         />
                         <div className="cell-subtle">{absoluteCollectedAt}</div>
-                        <ProbeTiming snapshot={snapshot} previous={snapshots[i + 1]} />
+                        <ProbeTiming snapshot={snapshot} previous={snapshots[i + 1]} compact />
                       </td>
                       <td>
                         <span className={`loss ${getLossClass(snapshot.destinationLossPct)}`}>

@@ -239,8 +239,10 @@ async function checkProbeTimingMigrationAndRetention(rootDir: string): Promise<v
     'destination_ip',
     'failure',
   ])
-    db.run(`ALTER TABLE snapshots DROP COLUMN ${name}`)
-  db.run('ALTER TABLE snapshot_events DROP COLUMN offset_ms')
+    if (tableColumns(dbPath, 'snapshots').includes(name))
+      db.run(`ALTER TABLE snapshots DROP COLUMN ${name}`)
+  if (tableColumns(dbPath, 'snapshot_events').includes('offset_ms'))
+    db.run('ALTER TABLE snapshot_events DROP COLUMN offset_ms')
   db.close()
   store = await HopwatchSqliteStore.open(dbPath)
   assert.deepEqual(JSON.parse(store.getLatestSnapshotJson('sentinel') ?? '{}'), legacy)

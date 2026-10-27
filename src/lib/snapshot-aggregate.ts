@@ -60,6 +60,7 @@ export function selectSnapshotsInWindow(
 // pre-filter once and reuse the slice for multiple aggregates (as page.tsx
 // does) avoids redoing the cutoff walk per helper.
 export function summarizeSnapshots(snapshotsInWindow: SnapshotSummary[]): SnapshotAggregate {
+  snapshotsInWindow = snapshotsInWindow.filter((snapshot) => snapshot.failure == null)
   return {
     averageDestinationLossPct: average(
       snapshotsInWindow.flatMap((snapshot) =>
@@ -91,6 +92,8 @@ export function summarizeDiagnoses(snapshotsInWindow: SnapshotSummary[]): Diagno
   }
 
   for (const snapshot of snapshotsInWindow) {
+    // A failed collector is missing evidence, never another healthy sample.
+    if (snapshot.failure != null) continue
     aggregate.sampleCount += 1
     if (snapshot.diagnosis.kind === 'destination_loss') {
       aggregate.destinationLossCount += 1
@@ -110,11 +113,12 @@ export function getHistoricalSeverityBadge(
   aggregate: SnapshotAggregate,
   diagnosisAggregate: DiagnosisAggregate,
 ): SeverityBadge {
-  if (diagnosisAggregate.sampleCount === 0) {
+  const measuredCount = diagnosisAggregate.sampleCount - diagnosisAggregate.unknownCount
+  if (measuredCount === 0) {
     return {
       className: 'unknown',
       label: 'Unknown',
-      summary: 'No snapshots were collected in this window.',
+      summary: 'No usable probe measurements were collected in this window.',
     }
   }
 
@@ -126,8 +130,7 @@ export function getHistoricalSeverityBadge(
     }
   }
 
-  const destinationLossRate =
-    diagnosisAggregate.destinationLossCount / diagnosisAggregate.sampleCount
+  const destinationLossRate = diagnosisAggregate.destinationLossCount / measuredCount
   if (destinationLossRate >= 0.2 || (aggregate.averageDestinationLossPct ?? 0) >= 10) {
     return {
       className: 'bad',

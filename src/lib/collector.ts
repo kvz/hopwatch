@@ -132,6 +132,7 @@ export interface CollectorOptions {
 }
 
 export interface CollectorDependencies {
+  sqliteStore?: HopwatchStorage
   scheduledAt?: Date
   getNow?: () => Date
   openStoreFn?: (dbPath: string) => Promise<HopwatchStorage>
@@ -187,6 +188,7 @@ async function mapWithConcurrency<T>(
 }
 
 export interface CollectSnapshotDeps {
+  nativeFailure?: string
   getNow?: () => Date
   scheduledAt?: Date
   signal?: AbortSignal
@@ -250,6 +252,7 @@ async function collectProbeEvents(
       throw new Error(`connect probe for '${target.slug}' returned no events`)
     }
   } else if (target.engine === 'native') {
+    if (deps.nativeFailure != null) throw new Error(deps.nativeFailure)
     if (options.ipVersion !== '4') {
       throw new Error(
         `target '${target.slug}' uses engine='native' but ip_version=${options.ipVersion}; IPv6 is not yet supported`,
@@ -282,8 +285,8 @@ async function collectProbeEvents(
     // etc). Persisting this used to produce a dashboard that disagreed with
     // itself: detail pages classified it as `unknown` (no events) while
     // rollups counted `destinationSentCount === 0` as 100% loss. Treat it
-    // as a hard probe failure instead so the target lands in
-    // failedTargetSlugs and the snapshot is not written at all.
+    // as a collector failure: preserve its error and time range without
+    // counting an empty result as destination packet loss.
     if (rawEvents.length === 0) {
       throw new Error(
         `native probe for '${target.slug}' returned no events (likely raw-socket failure - check CAP_NET_RAW)`,
@@ -349,20 +352,26 @@ export async function collectSnapshot(
   let rawEvents: RawMtrEvent[] = []
   let failure: string | undefined
   try {
-    rawEvents = await withTimeout(
-      collectProbeEvents(settings, target, {
-        ...deps,
-        signal: controller.signal,
-        timeOriginMs,
-      }),
-      settings.probeTimeoutMs,
-      `probe for '${target.slug}' exceeded ${settings.probeTimeoutMs}ms deadline`,
-    )
+    const probe = collectProbeEvents(settings, target, {
+      ...deps,
+      signal: controller.signal,
+      timeOriginMs,
+    })
+    // Native traces own their send/drain and reverse-DNS budgets. Racing that
+    // same deadline discards valid results during the final drain/rDNS phase.
+    rawEvents = sentinel
+      ? await withTimeout(
+          probe,
+          settings.probeTimeoutMs,
+          `probe for '${target.slug}' exceeded ${settings.probeTimeoutMs}ms deadline`,
+        )
+      : await probe
   } catch (err) {
     failure = (err instanceof Error ? err.message : String(err)).slice(0, 1000)
   } finally {
     controller.abort()
   }
+  const finishedAt = getNow().toISOString()
   const collectedAt = getTimestamp(startedAt)
   const destinationHop = resolveDestinationHopIndex(rawEvents)
   const destinationIp = [...rawEvents]
@@ -375,7 +384,7 @@ export async function collectSnapshot(
     schemaVersion: 2 as const,
     collectedAt,
     startedAt: startedAt.toISOString(),
-    finishedAt: getNow().toISOString(),
+    finishedAt,
     scheduledAt: (deps.scheduledAt ?? startedAt).toISOString(),
     cycleId: timestamp,
     destinationIp: destinationIp?.kind === 'host' ? destinationIp.host : null,
@@ -494,21 +503,17 @@ export async function runCollector(
   const nowDate = (deps.getNow ?? (() => new Date()))()
   const timestamp = getTimestamp(nowDate)
   const snapshotDeps: CollectSnapshotDeps = {
+    nativeFailure,
     getNow: deps.getNow,
     scheduledAt: deps.scheduledAt ?? nowDate,
     runCommand: deps.runCommand,
     runConnectProbeFn: deps.runConnectProbeFn,
-    runNativeProbeFn:
-      nativeFailure == null
-        ? deps.runNativeProbeFn
-        : async () => {
-            throw new Error(nativeFailure)
-          },
+    runNativeProbeFn: deps.runNativeProbeFn,
   }
   const openStore =
     deps.openStoreFn ??
     ((dbPath: string): Promise<HopwatchStorage> => HopwatchSqliteStore.open(dbPath))
-  const sqliteStore = await openStore(config.resolvedSqlitePath)
+  const sqliteStore = deps.sqliteStore ?? (await openStore(config.resolvedSqlitePath))
   snapshotDeps.sqliteStore = sqliteStore
   const failedTargetSlugs: string[] = []
   let failedRollupSlugs: string[] = []
@@ -534,7 +539,7 @@ export async function runCollector(
       logger,
     )
   } finally {
-    sqliteStore.close()
+    if (deps.sqliteStore == null) sqliteStore.close()
   }
 
   return { failedTargetSlugs, failedRollupSlugs }

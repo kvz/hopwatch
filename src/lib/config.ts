@@ -19,6 +19,10 @@ export type ProbeEngine = z.infer<typeof probeEngineSchema>
 export const probeProtocolSchema = z.enum(['icmp', 'tcp'])
 export type ProbeProtocol = z.infer<typeof probeProtocolSchema>
 
+// Leave room for two seconds of jitter. Oversized JS timers become 1 ms,
+// which would turn a long sentinel interval into an unbounded probe loop.
+const MAX_SENTINEL_INTERVAL_SECONDS = Math.floor(0x7fffffff / 1000) - 2
+
 const targetSchema = z.object({
   id: z
     .string()
@@ -52,7 +56,7 @@ const targetSchema = z.object({
   port: z.number().int().min(1).max(65535).default(443),
   // An explicit cadence opts a separate TCP-connect target into the fast lane.
   // Full traceroutes retain the global cadence and their existing packet budget.
-  interval_seconds: z.number().int().min(30).optional(),
+  interval_seconds: z.number().int().min(30).max(MAX_SENTINEL_INTERVAL_SECONDS).optional(),
   packets: z.number().int().min(3).max(5).optional(),
 })
 export type TargetConfig = z.infer<typeof targetSchema>

@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
 import type { MtrRollupFile } from '../lib/rollups.ts'
+import { summarizeStoredRawSnapshot } from '../lib/snapshot.ts'
 import { HopwatchSqliteStore } from '../lib/sqlite-storage.ts'
 
 function destinationEvents(): RawMtrEvent[] {
@@ -275,8 +276,8 @@ async function checkProbeTimingMigrationAndRetention(rootDir: string): Promise<v
     ...timed,
     collectedAt: '20261027T152400Z',
     fileName: '20261027T152400Z.json',
-    rawEvents: [],
-    failure: 'DNS unavailable',
+    rawEvents: timed.rawEvents,
+    failure: 'EMFILE after earlier replies',
   }
   insert(failure)
   const status = store.getProbeStatus('sentinel')
@@ -284,6 +285,12 @@ async function checkProbeTimingMigrationAndRetention(rootDir: string): Promise<v
   assert.equal(status.recent[0].destinationLossPct, null)
   assert.equal(status.lastSuccess?.collectedAt, '20261027T152330Z')
   assert.equal(store.listSnapshotSummaries('sentinel')[0].diagnosis.label, 'Collector failure')
+  assert.equal(store.listSnapshotSummaries('sentinel')[0].destinationAvgRttMs, null)
+  assert.deepEqual(JSON.parse(store.getLatestSnapshotJson('sentinel') ?? '{}'), failure)
+  assert.equal(
+    store.getLatestSnapshotRawText('sentinel'),
+    summarizeStoredRawSnapshot(failure).rawText,
+  )
   assert.equal(store.pruneRawSnapshots('sentinel', 1, Date.parse('2026-10-28T15:24:01Z')), 4)
   assert.equal(store.getProbeStatus('sentinel').recent.length, 0)
   assert.equal(store.verify().orphanedSnapshotDetailRows, 0)

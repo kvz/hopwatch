@@ -9,6 +9,7 @@ import type { LoadedConfig } from '../lib/config.ts'
 import { createLogger } from '../lib/logger.ts'
 import { probeTargetConnect } from '../lib/prober-connect.ts'
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
+import { summarizeStoredRawSnapshot } from '../lib/snapshot.ts'
 import type { HopwatchStorage, ImportSnapshotInput } from '../lib/sqlite-storage.ts'
 
 function buildConfig(dataDir: string, targetHosts: string[]): LoadedConfig {
@@ -112,6 +113,69 @@ describe('runCollector', () => {
 
   afterEach(async () => {
     await rm(dataDir, { recursive: true, force: true })
+  })
+
+  test.each([
+    false,
+    true,
+  ])('keeps the resolved native endpoint without reply events (collector failure: %s)', async (failed) => {
+    const config = buildConfig(dataDir, ['native'])
+    Object.assign(config.target[0], { host: '127.0.0.1', engine: 'native' })
+    const store = new FakeHopwatchStore()
+    await runCollector(
+      config,
+      createLogger({ level: 'error' }),
+      withStore(store, {
+        runNativeProbeFn: async () => {
+          if (failed) throw new Error('raw socket failed')
+          return [{ kind: 'sent', hopIndex: 0, probeId: 0 }]
+        },
+      }),
+    )
+    expect(store.snapshotFor('native')?.destinationIp).toBe('127.0.0.1')
+    expect(store.snapshotFor('native')?.rawEvents.some((event) => event.kind === 'host')).toBe(
+      false,
+    )
+    expect(store.snapshotFor('native')?.failure != null).toBe(failed)
+  })
+
+  test.each([
+    'EMFILE',
+    'ENOBUFS',
+  ])('keeps partial TCP events and IP on later %s while marking the sample unusable', async (code) => {
+    let attempts = 0
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      const success = attempts++ === 0
+      queueMicrotask(() =>
+        success
+          ? socket.emit('connect')
+          : socket.emit('error', Object.assign(new Error(code), { code })),
+      )
+      return socket
+    })
+    try {
+      const config = buildConfig(dataDir, ['sentinel'])
+      Object.assign(config.target[0], {
+        host: '127.0.0.1',
+        engine: 'connect',
+        protocol: 'tcp',
+        interval_seconds: 30,
+      })
+      const store = new FakeHopwatchStore()
+      await runCollector(
+        config,
+        createLogger({ level: 'error' }),
+        withStore(store, { runConnectProbeFn: probeTargetConnect }),
+      )
+      const saved = store.snapshotFor('sentinel')
+      expect(saved).toMatchObject({ destinationIp: '127.0.0.1', failure: code })
+      expect(saved?.rawEvents.filter((event) => event.kind === 'sent')).toHaveLength(2)
+      expect(saved?.rawEvents.filter((event) => event.kind === 'reply')).toHaveLength(1)
+      expect(summarizeStoredRawSnapshot(saved as StoredRawSnapshot).destinationLossPct).toBeNull()
+    } finally {
+      connect.mockRestore()
+    }
   })
 
   test('preserves timed-out connection attempts after delayed sentinel startup', async () => {
@@ -464,6 +528,7 @@ describe('runCollector', () => {
     expect(errorSpy).toHaveBeenCalled()
     expect(store.snapshotFor('native.example')).toMatchObject({
       rawEvents: [],
+      destinationIp: '127.0.0.1',
       failure: expect.stringContaining('returned no events'),
     })
   })

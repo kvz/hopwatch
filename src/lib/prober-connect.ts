@@ -13,6 +13,7 @@ export interface ConnectProbeRequest {
   timeOriginMs?: number
   // Absolute monotonic deadline, including collector/import setup time.
   deadlineAtMs?: number
+  onEvent?: (event: RawMtrEvent) => void
 }
 
 export interface ConnectProbeDependencies {
@@ -107,11 +108,14 @@ export async function probeTargetConnect(
         .finally(() => signal.removeEventListener('abort', abort))
     }).finally(() => clearTimeout(dnsTimer))
     signal.throwIfAborted()
-    const events: RawMtrEvent[] = [
-      { host: request.host, hopIndex: 0, kind: 'dns' },
-      // Include the resolved destination even on total connection loss.
-      { host: address, hopIndex: 0, kind: 'host' },
-    ]
+    const events: RawMtrEvent[] = []
+    const emit = (event: RawMtrEvent): void => {
+      events.push(event)
+      request.onEvent?.(event)
+    }
+    emit({ host: request.host, hopIndex: 0, kind: 'dns' })
+    // Include the resolved destination even on total connection loss.
+    emit({ host: address, hopIndex: 0, kind: 'host' })
     for (let probeId = 0; probeId < request.packets; probeId++) {
       signal.throwIfAborted()
       const budget = Math.floor((deadlineAt - performance.now() - 50) / (request.packets - probeId))
@@ -122,13 +126,13 @@ export async function probeTargetConnect(
         if (probeId === 0) throw new Error('TCP connect probe deadline exceeded')
         break
       }
-      events.push({ hopIndex: 0, kind: 'sent', probeId, offsetMs: offsetMs() })
+      emit({ hopIndex: 0, kind: 'sent', probeId, offsetMs: offsetMs() })
       const rttUs = await runConnectAttempt(request, address, signal, Math.min(5_000, budget))
-      if (rttUs != null)
-        events.push({ hopIndex: 0, kind: 'reply', probeId, rttUs, offsetMs: offsetMs() })
+      if (rttUs != null) emit({ hopIndex: 0, kind: 'reply', probeId, rttUs, offsetMs: offsetMs() })
     }
     return events
   } finally {
+    // Also removes a pending DNS abort listener when lookup never settles.
     controller.abort()
   }
 }

@@ -213,7 +213,11 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
 async function collectProbeEvents(
   options: CollectorOptions,
   target: MtrHistoryTarget,
-  deps: CollectSnapshotDeps = {},
+  deps: CollectSnapshotDeps,
+  observations: {
+    onEvent: (event: RawMtrEvent) => void
+    onDestinationResolved: (address: string) => void
+  },
 ): Promise<RawMtrEvent[]> {
   const runCommand = deps.runCommand ?? execFileAsync
   const runConnectProbeFn = deps.runConnectProbeFn ?? defaultRunConnectProbe
@@ -238,6 +242,7 @@ async function collectProbeEvents(
       timeOriginMs: deps.timeOriginMs,
       deadlineAtMs:
         deps.timeOriginMs == null ? undefined : deps.timeOriginMs + options.probeTimeoutMs,
+      onEvent: observations.onEvent,
       ipVersion: options.ipVersion,
       packets: options.packets,
       port: target.port,
@@ -263,6 +268,7 @@ async function collectProbeEvents(
       dnsDeadlineMs,
       `DNS lookup for '${target.host}' timed out after ${dnsDeadlineMs}ms`,
     )
+    observations.onDestinationResolved(resolved.address)
     rawEvents = await runNativeProbeFn({
       timeOriginMs: deps.timeOriginMs,
       hostIp: resolved.address,
@@ -345,13 +351,28 @@ export async function collectSnapshot(
     : options
   const controller = new AbortController()
   let rawEvents: RawMtrEvent[] = []
+  let resolvedDestinationIp: string | null = null
   let failure: string | undefined
   try {
-    const probe = collectProbeEvents(settings, target, {
-      ...deps,
-      signal: controller.signal,
-      timeOriginMs,
-    })
+    const probe = collectProbeEvents(
+      settings,
+      target,
+      {
+        ...deps,
+        signal: controller.signal,
+        timeOriginMs,
+      },
+      {
+        // Keep diagnostic events if a later resource error or watchdog fails the
+        // sample. The failure marker still excludes it from health conclusions.
+        onEvent: (event) => {
+          rawEvents.push(event)
+        },
+        onDestinationResolved: (address) => {
+          resolvedDestinationIp = address
+        },
+      },
+    )
     // Native traces own their send/drain and reverse-DNS budgets. Racing that
     // same deadline discards valid results during the final drain/rDNS phase.
     rawEvents = sentinel
@@ -382,7 +403,8 @@ export async function collectSnapshot(
     finishedAt,
     scheduledAt: (deps.scheduledAt ?? startedAt).toISOString(),
     cycleId: timestamp,
-    destinationIp: destinationIp?.kind === 'host' ? destinationIp.host : null,
+    destinationIp:
+      resolvedDestinationIp ?? (destinationIp?.kind === 'host' ? destinationIp.host : null),
     ...(failure == null ? {} : { failure }),
     engine: target.engine,
     fileName: `${collectedAt}.json`,
@@ -455,9 +477,9 @@ export async function runCollector(
   deps: CollectorDependencies = {},
 ): Promise<RunCollectorResult> {
   // The native prober uses bun:ffi to dlopen('libc.so.6') + AF_INET raw
-  // sockets - that only exists on Linux. Catch the mismatch here (shared by
-  // both the daemon's scheduler and `hopwatch probe-once`) instead of failing
-  // mid-probe; config-check still passes on any platform so operators can
+  // sockets - that only exists on Linux. Detect the mismatch once per cycle
+  // and persist a clear failure for each affected target; config-check still
+  // passes on any platform so operators can
   // validate linux-targeted configs from a dev machine. Tests that inject a
   // mock `runNativeProbeFn` bypass the FFI load entirely and therefore also
   // bypass this guard - the check is about protecting the real code path.
@@ -480,9 +502,8 @@ export async function runCollector(
   }
   // Linux-but-musl (Alpine, distroless-musl) does not ship glibc, so
   // dlopen('libc.so.6') inside the native prober fails with an opaque
-  // bun:ffi error on every probe cycle. Warm the FFI load up front so the
-  // failure surfaces once, with a clear glibc requirement, before the first
-  // probe - matching the intent of the platform check above.
+  // bun:ffi error on every probe. Warm the FFI load once per cycle and copy
+  // its clear diagnostic into affected snapshots before attempting DNS.
   if (shouldRunWarmup) {
     try {
       const warmup = deps.warmupNativeEngineFn ?? defaultWarmupNativeEngine

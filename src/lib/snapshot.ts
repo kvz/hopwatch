@@ -167,7 +167,7 @@ export function summarizeStoredRawSnapshot(rawSnapshot: StoredRawSnapshot): Snap
   const hops = deriveHopRecordsFromRawEvents(rawSnapshot.rawEvents) as HopRecord[]
   const destinationHopIndex = resolveDestinationHopIndex(rawSnapshot.rawEvents)
   const destinationHop =
-    destinationHopIndex == null
+    rawSnapshot.failure != null || destinationHopIndex == null
       ? null
       : (hops.find((hop) => hop.index === destinationHopIndex + 1) ?? null)
   const destinationAvgRttMs = destinationHop?.avgMs ?? null
@@ -178,15 +178,26 @@ export function summarizeStoredRawSnapshot(rawSnapshot: StoredRawSnapshot): Snap
   // loss observed". Preserve null for the genuinely-empty case (probe
   // tool errored and we have zero events to work with).
   let destinationLossPct = destinationHop?.lossPct ?? null
-  if (destinationLossPct == null && hasAnySentEvent(rawSnapshot.rawEvents)) {
+  if (
+    rawSnapshot.failure == null &&
+    destinationLossPct == null &&
+    hasAnySentEvent(rawSnapshot.rawEvents)
+  ) {
     destinationLossPct = 100
   }
   const destinationHopIndex1Based = destinationHop?.index ?? null
-  const worstHopLossPct = hops.length === 0 ? null : Math.max(...hops.map((hop) => hop.lossPct))
-  const destinationRttSamplesMs = summarizeDestinationSamples(
-    rawSnapshot.rawEvents,
-    destinationHopIndex,
-  ).rttSamplesMs.sort((left, right) => left - right)
+  const worstHopLossPct =
+    rawSnapshot.failure != null || hops.length === 0
+      ? null
+      : Math.max(...hops.map((hop) => hop.lossPct))
+  // Raw hops/events remain available for diagnosis, but an incomplete collector
+  // sample must not publish destination-health measurements.
+  const destinationRttSamplesMs =
+    rawSnapshot.failure != null
+      ? []
+      : summarizeDestinationSamples(rawSnapshot.rawEvents, destinationHopIndex).rttSamplesMs.sort(
+          (left, right) => left - right,
+        )
   const destinationRttMinMs =
     destinationRttSamplesMs.length === 0 ? null : destinationRttSamplesMs[0]
   const destinationRttMaxMs =

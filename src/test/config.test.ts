@@ -44,6 +44,7 @@ packets = 3
 
   test.each([
     'interval_seconds = 1',
+    'interval_seconds = 2147484',
     'interval_seconds = 30\npackets = 20',
     'interval_seconds = 30\nengine = "mtr"',
   ])('rejects an unbounded or heavyweight sentinel: %s', async (settings) => {
@@ -61,6 +62,21 @@ ${settings}
 `),
       ),
     ).rejects.toThrow(/sentinel|interval_seconds|packets/)
+  })
+
+  test('accepts the largest sentinel interval with room for jitter in a signed 32-bit timer', async () => {
+    const config = await loadConfig(
+      await writeConfig(`
+[[target]]
+id = "sentinel"
+label = "Sentinel"
+host = "example.com"
+engine = "connect"
+protocol = "tcp"
+interval_seconds = 2147481
+`),
+    )
+    expect(config.target[0].interval_seconds).toBe(2147481)
   })
 
   test('limits the sentinel set to six independent slots', async () => {

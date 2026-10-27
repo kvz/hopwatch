@@ -156,6 +156,7 @@ export function summarizeHopIssues(snapshotsInWindow: SnapshotSummary[]): HopAgg
   const latestTsByHost = new Map<string, number>()
 
   for (const snapshot of snapshotsInWindow) {
+    if (snapshot.failure != null) continue
     const destinationLossPct = snapshot.destinationLossPct ?? 0
     const snapshotTs = parseCollectedAt(snapshot.collectedAt) ?? 0
     // Use `<` rather than `!==` so we drop both the destination hop and any
@@ -382,6 +383,7 @@ export function summarizeHopProtocolStats(
   const accum = new Map<string, Map<ProbeProtocol, Accum>>()
   for (const entry of perTarget) {
     for (const snap of entry.snapshots) {
+      if (snap.failure != null) continue
       // Skip the destination hop and anything past it: we are measuring
       // intermediate hops' behavior, and a hop counted as "destination" on
       // one target may happen to be an intermediate on another.
@@ -586,6 +588,7 @@ export function findUnaffectedSiblingDestinations(
     let traversedClean = false
     let traversedLossy = false
     for (const snap of entry.snapshots) {
+      if (snap.failure != null) continue
       const destIndex = snap.destinationHopIndex ?? Number.POSITIVE_INFINITY
       for (const hop of snap.hops) {
         if (hop.host !== hopHost) continue

@@ -221,6 +221,7 @@ Sentinels retain only 24 hours of small raw snapshots (about 2,881 per target at
 30 seconds) and do not generate rollups. Pruning also removes their hop, event and
 RTT rows. Full traceroute targets retain their existing raw/rollup history. Keep
 both target entries when you need fast detection and long-term path diagnostics.
+Intervals above 2,147,481 seconds are rejected to prevent JavaScript timer overflow.
 If an existing ID is converted, its sentinel charts use current raw samples;
 previous rollups remain stored but are not used by the sentinel views.
 
@@ -236,6 +237,9 @@ order. The target page shows actual ranges and gaps between samples. Old snapsho
 remain readable and explicitly show that actual timing is unavailable. Existing
 relational SQLite databases receive nullable columns automatically; no history is
 rewritten. Collector failures are visible as gaps and excluded from loss rollups.
+If collection fails after some TCP replies, those partial events and the resolved
+IP remain in raw artifacts; they do not contribute health measurements or hop
+attribution. Native probes retain their resolved IP even without any replies.
 
 When enabled, `GET /metrics` exposes Prometheus text gauges for every configured
 target, including targets without any samples. It supplies destination loss and

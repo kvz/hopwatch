@@ -19,6 +19,7 @@ import {
   summarizeCrossTargetHopIssues,
   summarizeDiagnoses,
   summarizeHopIssues,
+  summarizeHopProtocolStats,
   summarizeSnapshots,
 } from '../lib/snapshot-aggregate.ts'
 
@@ -76,6 +77,47 @@ describe('selectSnapshotsInWindow', () => {
 })
 
 describe('summarizeSnapshots', () => {
+  test('partial collector failures cannot contribute hop loss or protocol evidence', () => {
+    const failed = snapshot({
+      collectedAt: '20260420T110000Z',
+      failure: 'EMFILE',
+      destinationHopIndex: 2,
+      hops: [
+        {
+          index: 1,
+          host: 'router.example',
+          asn: null,
+          lossPct: 50,
+          sent: 2,
+          avgMs: 1,
+          bestMs: 1,
+          lastMs: 1,
+          worstMs: 1,
+          stdevMs: 0,
+        },
+      ],
+    })
+    expect(summarizeHopIssues([failed])).toEqual([])
+    expect(
+      summarizeHopProtocolStats([
+        { target: 'broken', engine: 'native', protocol: 'tcp', snapshots: [failed] },
+      ]).size,
+    ).toBe(0)
+    expect(
+      findUnaffectedSiblingDestinations(
+        'router.example',
+        [],
+        [
+          {
+            target: 'broken',
+            engine: 'native',
+            protocol: 'tcp',
+            snapshots: [{ ...failed, hops: failed.hops.map((hop) => ({ ...hop, lossPct: 0 })) }],
+          },
+        ],
+      ),
+    ).toEqual([])
+  })
   test('collector failures cannot improve measured health or make a failure-only history Stable', () => {
     const failed = snapshot({
       collectedAt: '20260420T110000Z',

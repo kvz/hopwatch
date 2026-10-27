@@ -228,6 +228,9 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
   const signature = config.chart.signature
   const store = await HopwatchSqliteStore.open(config.resolvedSqlitePath)
   const baseSourceIdentity = await loadDaemonSourceIdentity(config, logger)
+  const sentinelTargetSlugs = new Set(
+    config.target.filter((target) => target.interval_seconds != null).map((target) => target.id),
+  )
 
   // Reuse the daemon connection: fast ticks should not re-run schema setup or
   // compete with this process's rollup writer through separate connections.
@@ -302,6 +305,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
             contactEmails: contact.contact_emails,
           })),
           config.target.map((target) => target.id),
+          sentinelTargetSlugs,
         )
         return new Response(html, {
           headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
@@ -389,6 +393,7 @@ export async function startDaemon(config: LoadedConfig, logger: Logger): Promise
           targetSlug,
           Date.now(),
           signature,
+          !sentinelTargetSlugs.has(targetSlug),
         ).catch((err: unknown) => {
           if (!(err instanceof Error)) {
             throw new Error(`Was thrown a non-error: ${err}`)

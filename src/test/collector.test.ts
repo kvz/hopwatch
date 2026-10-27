@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -6,6 +7,7 @@ import type { MtrHistoryTarget } from '../lib/collector.ts'
 import { runCollector } from '../lib/collector.ts'
 import type { LoadedConfig } from '../lib/config.ts'
 import { createLogger } from '../lib/logger.ts'
+import { probeTargetConnect } from '../lib/prober-connect.ts'
 import type { RawMtrEvent, StoredRawSnapshot } from '../lib/raw.ts'
 import type { HopwatchStorage, ImportSnapshotInput } from '../lib/sqlite-storage.ts'
 
@@ -110,6 +112,43 @@ describe('runCollector', () => {
 
   afterEach(async () => {
     await rm(dataDir, { recursive: true, force: true })
+  })
+
+  test('preserves timed-out connection attempts after delayed sentinel startup', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] })
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => new net.Socket())
+    try {
+      const config = buildConfig(dataDir, ['sentinel'])
+      Object.assign(config.target[0], {
+        host: '127.0.0.1',
+        engine: 'connect',
+        protocol: 'tcp',
+        interval_seconds: 30,
+      })
+      const store = new FakeHopwatchStore()
+      const promise = runCollector(
+        config,
+        createLogger({ level: 'error' }),
+        withStore(store, {
+          runConnectProbeFn: async (request) => {
+            await new Promise((resolve) => setTimeout(resolve, 300))
+            return probeTargetConnect(request)
+          },
+        }),
+      )
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect((await promise).failedTargetSlugs).toEqual([])
+      expect(store.snapshotFor('sentinel')?.failure).toBeUndefined()
+      expect(
+        store.snapshotFor('sentinel')?.rawEvents.filter((event) => event.kind === 'sent'),
+      ).toHaveLength(3)
+      expect(
+        store.snapshotFor('sentinel')?.rawEvents.filter((event) => event.kind === 'reply'),
+      ).toHaveLength(0)
+    } finally {
+      connect.mockRestore()
+      vi.useRealTimers()
+    }
   })
 
   test('preserves native results returned after the native drain and reverse-DNS budgets', async () => {

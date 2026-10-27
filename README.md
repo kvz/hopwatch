@@ -221,6 +221,8 @@ Sentinels retain only 24 hours of small raw snapshots (about 2,881 per target at
 30 seconds) and do not generate rollups. Pruning also removes their hop, event and
 RTT rows. Full traceroute targets retain their existing raw/rollup history. Keep
 both target entries when you need fast detection and long-term path diagnostics.
+If an existing ID is converted, its sentinel charts use current raw samples;
+previous rollups remain stored but are not used by the sentinel views.
 
 Every new snapshot, including collector failures, carries ISO UTC `startedAt`,
 `finishedAt`, `scheduledAt`, a separate `cycleId`, `destinationIp` when known, and
@@ -266,6 +268,8 @@ report its own staleness. With 30-second cadence, two seconds of jitter and a
 ten-second deadline, two failed samples are available within **74 seconds** of
 outage onset across scheduler phases, assuming the daemon/event loop and storage
 are responsive. Tests simulate 90-second and two-minute failures across phases.
+Collection and rendering share the daemon event loop; heavy synchronous work can
+delay these application observations, which is why actual ranges and gaps matter.
 Budget external scraping and evaluation separately: 15-second scrapes plus
 15-second evaluations add up to 30 seconds (up to 104 seconds to alert evaluation),
 before any Alertmanager grouping or notification delay. No webhook, Slack or

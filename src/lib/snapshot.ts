@@ -154,7 +154,7 @@ export function renderSnapshotRawText(
     `# collected_at=${snapshot.collectedAt}`,
     ...(['startedAt', 'finishedAt', 'scheduledAt', 'cycleId', 'destinationIp', 'failure'] as const)
       .filter((key) => snapshot[key] != null)
-      .map((key) => `# ${key}=${snapshot[key]}`),
+      .map((key) => `# ${key}=${snapshot[key]?.replaceAll('\r', '\\r').replaceAll('\n', '\\n')}`),
     '',
     startLine,
     headerLine,

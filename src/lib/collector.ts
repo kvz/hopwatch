@@ -3,6 +3,7 @@ import { isIP } from 'node:net'
 import { execa } from 'execa'
 import type { LoadedConfig, ProbeEngine, ProbeMode, ProbeProtocol, TargetConfig } from './config.ts'
 import type { Logger } from './logger.ts'
+import type { ConnectProbeRequest } from './prober-connect.ts'
 import {
   parseRawMtrOutput,
   parseStoredRawSnapshot,
@@ -54,15 +55,7 @@ export interface NativeProbeRequest {
 
 export type RunNativeProbeFn = (request: NativeProbeRequest) => Promise<RawMtrEvent[]>
 
-export interface ConnectProbeRequest {
-  host: string
-  packets: number
-  timeoutMs: number
-  ipVersion: '4' | '6'
-  port: number
-  signal?: AbortSignal
-  timeOriginMs?: number
-}
+export type { ConnectProbeRequest } from './prober-connect.ts'
 
 export type RunConnectProbeFn = (request: ConnectProbeRequest) => Promise<RawMtrEvent[]>
 
@@ -243,6 +236,8 @@ async function collectProbeEvents(
       host: target.host,
       signal: deps.signal,
       timeOriginMs: deps.timeOriginMs,
+      deadlineAtMs:
+        deps.timeOriginMs == null ? undefined : deps.timeOriginMs + options.probeTimeoutMs,
       ipVersion: options.ipVersion,
       packets: options.packets,
       port: target.port,

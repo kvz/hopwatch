@@ -1271,7 +1271,13 @@ function summarizeTcpConnectImpact(
   const destinationSet = new Set(destinations)
   const connectSnapshots = perTargetSnapshots.flatMap((entry) => {
     if (entry.engine !== 'connect' || entry.protocol !== 'tcp') return []
-    return entry.snapshots.filter((snapshot) => destinationSet.has(snapshot.host))
+    // A configured probe or collector failure is not measured coverage.
+    return entry.snapshots.filter(
+      (snapshot) =>
+        destinationSet.has(snapshot.host) &&
+        snapshot.failure == null &&
+        snapshot.destinationLossPct != null,
+    )
   })
   if (connectSnapshots.length === 0) return null
 
@@ -1304,8 +1310,8 @@ function summarizeTcpConnectImpact(
   const missingCoverageSuffix =
     missingDestinations.length === 0
       ? ''
-      : ` No TCP connect ${
-          missingDestinations.length === 1 ? 'probe exists' : 'probes exist'
+      : ` No usable TCP connect ${
+          missingDestinations.length === 1 ? 'measurement exists' : 'measurements exist'
         } for ${formatEnglishList(missingDestinations)}, so application impact is not confirmed for ${
           missingDestinations.length === 1 ? 'that destination' : 'those destinations'
         }.`

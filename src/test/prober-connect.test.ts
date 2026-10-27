@@ -89,6 +89,66 @@ describe('probeTargetConnect', () => {
     expect(events).toContainEqual({ kind: 'host', hopIndex: 0, host: '127.0.0.1' })
   })
 
+  test('preserves actual sends when a late callback exhausts the remaining budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const fakeNow = performance.now.bind(performance)
+    let lagMs = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => fakeNow() + lagMs)
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      vi.spyOn(socket, 'destroy').mockImplementation(() => {
+        lagMs = 10_000
+        return socket
+      })
+      return socket
+    })
+    try {
+      const promise = probeTargetConnect({
+        host: '127.0.0.1',
+        ipVersion: '4',
+        packets: 3,
+        port: 443,
+        timeoutMs: 10_000,
+      }).then(
+        (events) => ({ events }),
+        (error) => ({ error }),
+      )
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(await promise).toMatchObject({
+        events: expect.arrayContaining([expect.objectContaining({ kind: 'sent', probeId: 0 })]),
+      })
+      expect(connect).toHaveBeenCalledTimes(1)
+    } finally {
+      connect.mockRestore()
+      clock.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  test.each([
+    'EADDRNOTAVAIL',
+    'EADDRINUSE',
+  ])('classifies local address exhaustion %s as a collector failure', async (code) => {
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {
+      const socket = new net.Socket()
+      queueMicrotask(() => socket.emit('error', Object.assign(new Error(code), { code })))
+      return socket
+    })
+    try {
+      await expect(
+        probeTargetConnect({
+          host: '127.0.0.1',
+          ipVersion: '4',
+          packets: 3,
+          port: 443,
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow(code)
+    } finally {
+      connect.mockRestore()
+    }
+  })
+
   test.each([
     'ENETDOWN',
     'ECONNABORTED',

@@ -971,7 +971,10 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
     )
   })
 
-  test('diagnosis does not overstate TCP connect coverage for partly covered destinations', () => {
+  test.each([
+    undefined,
+    'DNS lookup failed',
+  ])('does not count unmeasured TCP coverage (%s)', (failure) => {
     const sourceOwnedIssue = {
       affectedDestinations: ['s3.us-west-2.amazonaws.com', 'google.com'],
       asn: null,
@@ -1002,6 +1005,15 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
               protocol: 'tcp',
               target: 's3-us-west-2-tcp-connect',
             }),
+            snapshot({
+              collectedAt: '20260420T110000Z',
+              destinationLossPct: null,
+              failure,
+              host: 'google.com',
+              port: 8443,
+              protocol: 'tcp',
+              target: 'google-connect',
+            }),
           ],
           target: 's3-us-west-2-tcp-connect',
         },
@@ -1012,7 +1024,7 @@ describe('summarizeCrossTargetHopIssues + getCrossTargetDiagnosis', () => {
       'TCP/443 connect probes to s3.us-west-2.amazonaws.com stayed healthy',
     )
     expect(diagnosis.summary).toContain(
-      'No TCP connect probe exists for google.com, so application impact is not confirmed for that destination.',
+      'No usable TCP connect measurement exists for google.com, so application impact is not confirmed for that destination.',
     )
     expect(diagnosis.summary).not.toContain('TCP/443 connect probes to 2 affected destinations')
     expect(diagnosis.escalation).toBeNull()

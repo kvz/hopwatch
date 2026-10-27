@@ -11,6 +11,8 @@ export interface ConnectProbeRequest {
   timeoutMs: number
   signal?: AbortSignal
   timeOriginMs?: number
+  // Absolute monotonic deadline, including collector/import setup time.
+  deadlineAtMs?: number
 }
 
 export interface ConnectProbeDependencies {
@@ -50,9 +52,17 @@ async function runConnectAttempt(
       // errors (including interface-down errors) are failed TCP attempts;
       // keep earlier replies in the sample without attributing an owner.
       if (
-        ['EMFILE', 'ENFILE', 'ENOMEM', 'ENOBUFS', 'EACCES', 'EPERM', 'EINVAL'].includes(
-          err.code ?? '',
-        )
+        [
+          'EMFILE',
+          'ENFILE',
+          'ENOMEM',
+          'ENOBUFS',
+          'EACCES',
+          'EPERM',
+          'EINVAL',
+          'EADDRNOTAVAIL',
+          'EADDRINUSE',
+        ].includes(err.code ?? '')
       ) {
         cleanup()
         reject(err)
@@ -72,8 +82,7 @@ export async function probeTargetConnect(
     request.signal == null
       ? controller.signal
       : AbortSignal.any([controller.signal, request.signal])
-  const deadline = setTimeout(() => controller.abort(), request.timeoutMs)
-  const deadlineAt = performance.now() + request.timeoutMs
+  const deadlineAt = request.deadlineAtMs ?? performance.now() + request.timeoutMs
   try {
     // Resolve before recording any sends. A DNS error is a collector failure,
     // not evidence that a destination received and dropped TCP packets.
@@ -81,7 +90,7 @@ export async function probeTargetConnect(
     const address = await new Promise<string>((resolve, reject) => {
       dnsTimer = setTimeout(
         () => reject(new Error('DNS lookup deadline exceeded')),
-        Math.min(2_000, request.timeoutMs),
+        Math.max(0, Math.min(2_000, deadlineAt - performance.now())),
       )
       const abort = (): void => reject(new Error('DNS/probe deadline exceeded'))
       signal.addEventListener('abort', abort, { once: true })
@@ -106,7 +115,13 @@ export async function probeTargetConnect(
     for (let probeId = 0; probeId < request.packets; probeId++) {
       signal.throwIfAborted()
       const budget = Math.floor((deadlineAt - performance.now() - 50) / (request.packets - probeId))
-      if (budget <= 0) throw new Error('TCP connect probe deadline exceeded')
+      // Each awaited operation owns a timeout inside the shared deadline.
+      // A late callback may leave no time for more attempts: retain actual
+      // sends/replies rather than discarding evidence or inventing sends.
+      if (budget <= 0) {
+        if (probeId === 0) throw new Error('TCP connect probe deadline exceeded')
+        break
+      }
       events.push({ hopIndex: 0, kind: 'sent', probeId, offsetMs: offsetMs() })
       const rttUs = await runConnectAttempt(request, address, signal, Math.min(5_000, budget))
       if (rttUs != null)
@@ -114,7 +129,6 @@ export async function probeTargetConnect(
     }
     return events
   } finally {
-    clearTimeout(deadline)
     controller.abort()
   }
 }
